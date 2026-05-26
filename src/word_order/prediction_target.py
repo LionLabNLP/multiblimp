@@ -80,3 +80,10 @@ nmod_noun_target = PredictionTarget(
     head_pos=["NOUN"],
     child_pos=["NOUN"],
 )
+
+# --- < SVA > ---
+nsubj_target = PredictionTarget(
+    child_deprels=["nsubj"],
+    head_pos=["VERB"],
+    child_pos=["NOUN", "PROPN", "PRON"],
+)

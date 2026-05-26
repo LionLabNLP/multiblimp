@@ -457,9 +457,12 @@ def tree2html(
             # Leaf: include all classes with count >= 50% of the majority
             sorted_dist = sorted(zip(dist_i, classes), key=lambda x: x[0], reverse=True)
             top_cnt, top_cls = sorted_dist[0]
+            # print(sorted_dist)
             qualifying = [top_cls] + [
                 cls for cnt, cls in sorted_dist[1:] if cnt > 0 and cnt >= 0.5 * top_cnt
             ]
+            qualifying = [str(x) for x in qualifying if not type(x)==str]
+            # if not all([type(x)==str for x in qualifying])
             leaf_label = f"<b>{' / '.join(qualifying)}</b>"
             label = (
                 f"{leaf_label}<br>"

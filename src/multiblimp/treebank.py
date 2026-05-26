@@ -12,7 +12,7 @@ from .config import UD_PATH
 from .languages import udlang2treebanks, convert_arabic_to_latin_langs
 
 
-def is_malformed(item):
+def has_typo(item):
     is_reparandum = item["deprel"] == "reparandum"
 
     feats = item.get("feats") or {}
@@ -39,7 +39,7 @@ def is_malformed(item):
 
 def tree_is_malformed(tree):
     for item in tree:
-        if is_malformed(item):
+        if has_typo(item):
             return True
 
     if all(item["form"] == "_" for item in tree):
@@ -66,6 +66,7 @@ class Treebank:
 
         if load_from_pickle:
             pickle_path = os.path.join(resource_dir, pickle_path, f"{lang}.pickle")
+            # TODO: if no pickle, run pickle script
             with open(pickle_path, "rb") as f:
                 return pickle.load(f)
 

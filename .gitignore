@@ -1,1 +1,10 @@
 resources/unimorph/*
+!resources/unimorph/*.sh
+
+resources/ud
+!resources/ud/changelog.sh
+!resources/ud/ud_feats.txt
+
+resources/ud_unimorph/*
+
+**/.DS_Store

@@ -16,7 +16,7 @@ from multiblimp.languages import (
 if __name__ == "__main__":
     resource_dir = "../../resources"
     ud_langs = get_ud_langs(resource_dir)
-    ud_langs = ["English"]
+    # ud_langs = ["English"]
 
     for lang in ud_langs:
         for remove_typo in [True, False]:

@@ -272,6 +272,7 @@ def extract_sen_features(tree):
     # Question detection
     feature2val["in_question"] = tree[-1]["form"] == "?"
 
+
     return feature2val
 
 
@@ -406,6 +407,15 @@ def extract_instances(tree, tree_idx, target: PredictionTarget, tree_metadata):
             )
             instance.update(child_features)
 
+            # TDOD add SV agreement variable for: case, definiteness, gender, number
+            # 1. is num annotated on head & target child?, 2. is feature the same? -> TRUE else False
+            # starting with Case, Gender, Number
+            for feat in ["Case", "Gender", "Number", "Person"]:
+                instance[f"head_{deprel}_{feat}_agreement"] = (
+                    True if (head_features[f"head_{feat}"]==child_features[f"{deprel}_{feat}"] 
+                             and head_features[f"head_{feat}"]!=None)
+                    else False)
+
         # Add sentence-level features
         instance.update(sen_features)
 
@@ -416,11 +426,13 @@ def extract_instances(tree, tree_idx, target: PredictionTarget, tree_metadata):
         deprel_order = "_".join(sorted(deprel_ids, key=deprel_ids.get))
         instance["deprel_order"] = shorten_cls(deprel_order, target)
 
-        if "broedcellen" in sen and "voorraadpotje" in sen:
-            print(0, instance["nmod_child-deprel_det"], sen)
 
-        if "bewijzen" in sen and "berusten" in sen:
-            print(1, instance["nmod_child-deprel_det"], sen)
+
+        # if "broedcellen" in sen and "voorraadpotje" in sen:
+        #     print(0, instance["nmod_child-deprel_det"], sen)
+
+        # if "bewijzen" in sen and "berusten" in sen:
+        #     print(1, instance["nmod_child-deprel_det"], sen)
 
         instances.append(instance)
 
@@ -468,7 +480,7 @@ def create_word_order_df(
     Args:
         target: PredictionTarget specifying what word order to predict
         treebank: Treebank for language, can be provided optionally
-        lang: Language code, must be provided is Treebank is not passed
+        lang: Language code, must be provided if Treebank is not passed
         resource_dir: Directory containing treebank resources
         save_to: Directory to save CSV to (optional)
         max_treebank_len: Maximum number of sentences to process
@@ -500,9 +512,12 @@ def create_word_order_df(
 
     all_instances = extract_features(treebank, target)
     df = pd.DataFrame(all_instances)
+    #print("columns:", df.columns)
+   # raise FileExistsError
 
     if drop_singleton_columns and len(df) > 0:
         always_keep = {"deprel_order", "sen", "treebank", "sent_id", "tree_idx"}
+        always_keep.update(set([col for col in df.columns if col.endswith("agreement")]))
         cols_to_check = df.columns.difference(list(always_keep))
         keep = df[cols_to_check].nunique() > 1
         kept_always = [c for c in always_keep if c in df.columns]
