@@ -20,7 +20,7 @@ if __name__=="__main__":
     resource_dir = "../../resources"
 
     pipeline = Pipeline(target=target,
-                        predictor_var="head_nsubj_Number_agreement",
+                        predictor_var="head_nsubj_Person_agreement",
                         langs=args.langs if args.langs else get_ud_langs(resource_dir), 
                         deprel_dir="_".join(target.child_deprels), 
                         resource_dir="../../resources", 
