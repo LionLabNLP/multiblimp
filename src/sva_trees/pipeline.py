@@ -36,6 +36,8 @@ class Pipeline:
         self.max_treebank_len = max_treebank_len
 
     def __call__(self):
+        if not len(self.langs):
+            raise ValueError("No langs specified/found")
 
         for lang in tqdm(sorted(self.langs)):
             raw_df = read_df(lang, word_order_dir=self.word_order_dir) if os.path.exists(f"{self.word_order_dir}/{lang.replace(' ', '_')}.csv") else False
@@ -52,8 +54,11 @@ class Pipeline:
                 )
 
                 print(lang, len(df))
+                if not len(df):
+                    print(f"Skipping {lang}, raw_df has no entries")
+                    continue
             else:
-                print(f"Skipping {lang}, df already found")
+                print(f"Skipping {lang} load_treebank(), df already found")
 
             # langs = [path.split('/')[-1].split('.')[0] for path in glob(word_order_dir+"/*.csv")]
 
@@ -71,9 +76,13 @@ class Pipeline:
             if not os.path.exists(html_file):
                 print(lang)
 
-                treebank = load_treebank(lang, self.resource_dir, max_treebank_len=self.max_treebank_len)
-                raw_df = read_df(lang, word_order_dir=self.word_order_dir)
-                full_df = raw_df[raw_df[self.predictor_var].notnull()]
+                #treebank = load_treebank(lang, self.resource_dir, max_treebank_len=self.max_treebank_len)
+                try:
+                    raw_df = read_df(lang, word_order_dir=self.word_order_dir)
+                    full_df = raw_df[raw_df[self.predictor_var].notnull()]
+                except FileNotFoundError:
+                    print(f"Skipping {lang}, '../../treebank_features/nsubj/{lang}.csv' could'nt be found or df was 0")
+                    continue
 
                 # full_df = full_df[full_df[predictor_var].str.len() == 3] # specific vor svo?
                 # full_df = full_df[full_df['head_deprel'] == 'root'] # svo specific?
@@ -89,37 +98,41 @@ class Pipeline:
 
                 for deprel in deprels:
                     if not os.path.exists(f"../../decision_trees/{targetfeat}/{targetfeat}_{deprel}/{lang}"):
+                        try:
+                            model, dt_df, predictor_df = fit_dt(
+                                full_df, 
+                                self.target, 
+                                verbose=1, 
+                                predictor_var=self.predictor_var,
+                                min_impurity_decrease=min_impurity_decrease,
+                                min_samples_leaf=10,
+                                save_to=f"../../decision_trees/{targetfeat}/{targetfeat}_{deprel}/{lang}",
+                                omit_feats=omit_feats,
+                            )
 
-                        model, dt_df, predictor_df = fit_dt(
-                            full_df, 
-                            self.target, 
-                            verbose=1, 
-                            predictor_var=self.predictor_var,
-                            min_impurity_decrease=min_impurity_decrease,
-                            min_samples_leaf=10,
-                            save_to=f"../../decision_trees/{targetfeat}/{targetfeat}_{deprel}/{lang}",
-                            omit_feats=omit_feats,
-                        )
+                            if model is None:
+                                raise TypeError(f"no model returned for {lang, deprel}")
+                        except TypeError:
+                            continue
 
-                        if model is None:
-                            print("no model returnedfor {deprel}")
-                    
+
+                        
                     else: 
                         print(f"Skipping {lang}, decision tree already found")
-                
-                    # ????
-                    # swap_df = create_pairs(
-                    #     model, 
-                    #     dt_df,
-                    #     full_df, 
-                    #     treebank, 
-                    #     predictor_var,
-                    #     swap_type="core_arg",
-                    #     # save_to_tight_keep=f"word_order/pairs/tight/{deprel}/{lang}.csv",
-                    #     # save_to_full_keep=f"word_order/pairs/full/{deprel}/{lang}.csv",
-                    #     save_to=os.path.join(dt_df_dir, f"{lang}.csv"),
-                    # )
-                    #tree2html(model, dt_df, full_df, predictor_var, html_file, max_rows=15)
+                    
+                        # ????
+                        # swap_df = create_pairs(
+                        #     model, 
+                        #     dt_df,
+                        #     full_df, 
+                        #     treebank, 
+                        #     predictor_var,
+                        #     swap_type="core_arg",
+                        #     # save_to_tight_keep=f"word_order/pairs/tight/{deprel}/{lang}.csv",
+                        #     # save_to_full_keep=f"word_order/pairs/full/{deprel}/{lang}.csv",
+                        #     save_to=os.path.join(dt_df_dir, f"{lang}.csv"),
+                        # )
+                        #tree2html(model, dt_df, full_df, predictor_var, html_file, max_rows=15)
 
                     tree2html(
                         model, 
@@ -137,4 +150,4 @@ class Pipeline:
             else:
                 print(f"Skipping {lang}, HTML file found")
 
-        # generate_html_index('word_order/decision_trees/html/')
+            # generate_html_index('word_order/decision_trees/html/')

@@ -412,8 +412,8 @@ def extract_instances(tree, tree_idx, target: PredictionTarget, tree_metadata):
             # starting with Case, Gender, Number
             for feat in ["Case", "Gender", "Number", "Person"]:
                 instance[f"head_{deprel}_{feat}_agreement"] = (
-                    True if (head_features[f"head_{feat}"]==child_features[f"{deprel}_{feat}"] 
-                             and head_features[f"head_{feat}"]!=None)
+                    True if (head_features.get(f"head_{feat}", None)!=None
+                    and head_features[f"head_{feat}"]==child_features[f"{deprel}_{feat}"])
                     else False)
 
         # Add sentence-level features
