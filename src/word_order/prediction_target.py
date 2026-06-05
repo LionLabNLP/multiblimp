@@ -22,6 +22,9 @@ class PredictionTarget:
     # Optional: filter by child's POS (either all children same POS or mapping deprel->POS)
     child_pos: list[str] | dict[str, list[str]] | None = None
 
+    # Optional: filter by head's specific feature annotation
+    head_feats: dict[str: str] | None = None
+
     def __post_init__(self):
         if not self.child_deprels:
             raise ValueError("child_deprels must be non-empty")

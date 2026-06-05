@@ -13,6 +13,7 @@ import numpy as np
 
 from multiblimp.treebank import Treebank
 from multiblimp.languages import remove_diacritics_langs, gblang2udlang
+from multiblimp.unimorph import UM2UD, UnimorphInflector
 
 from .prediction_target import PredictionTarget
 from .utils import shorten_cls
@@ -99,12 +100,14 @@ def extract_node_features(
     all_deprel: set,
     all_pos: set,
     target: PredictionTarget,
+    inflector: UnimorphInflector
 ):
     """
     Extract all features for a specific node (whether it's a child, head, or co-child).
     This ensures consistent feature extraction across all node types.
     """
     features = {}
+    morph_feats = dict()
 
     # Basic node features
     features[f"{prefix}_deprel"] = node["deprel"]
@@ -116,6 +119,32 @@ def extract_node_features(
     # Morphological features
     for feat in all_feats:
         features[f"{prefix}_{feat}"] = (node["feats"] or {}).get(feat)
+        if (node["feats"] or {}).get(feat, None):
+            morph_feats[feat] = node["feats"].get(feat, None)
+
+    # Further optional filters for head from PredictionTarget; filter is (lamnda x: condition)
+    if prefix=="head" and target.head_feats is not None:
+        if not all(
+            [val_filter(features[f"{prefix}_{feat}"]) 
+             for feat, val_filter in target.head_feats.items()]
+             ):
+            return None # item does not fulfil PredictionTarget feature filters, drop instance
+
+    # use and load inflector to add missing features
+    # TODO?: modify inflector to fetch all possible feature values, and not
+    # just for current swap type?
+    if inflector and morph_feats.get(inflector.ufeat, None)==None:
+        inflect_feats = morph_feats
+        # allows for soft matching if no lemma was specified in UD
+        if node["lemma"]: inflect_feats["lemma"] = node["lemma"]
+
+        um_feats = inflector.get_form_features(node["form"],
+                                               features = inflect_feats,
+                                               only_try_ud_if_no_um=True,
+                                               prefer_tight_match=True)
+        um_feats.discard("UNDEFINED")
+        # if um_feats: node[inflector.ufeat] = um_feats
+        # if um_feats: print(node, inflect_feats, "-->", um_feats)
 
     # Features about this node's relationship to its head
     if node["head"] != 0:
@@ -276,7 +305,7 @@ def extract_sen_features(tree):
     return feature2val
 
 
-def extract_instances(tree, tree_idx, target: PredictionTarget, tree_metadata):
+def extract_instances(tree, tree_idx, target: PredictionTarget, tree_metadata, inflector):
     """
     Extract training instances from a tree based on the prediction target.
 
@@ -380,7 +409,10 @@ def extract_instances(tree, tree_idx, target: PredictionTarget, tree_metadata):
             all_deprel,
             all_pos,
             target,
+            inflector
         )
+        if head_features == None: # item failed PredictionTarget filters
+            continue
         instance.update(head_features)
 
         # Extract features for each child type; use deprel as prefix (e.g. "nsubj_pos", "amod_pos")
@@ -404,12 +436,12 @@ def extract_instances(tree, tree_idx, target: PredictionTarget, tree_metadata):
                 all_deprel,
                 all_pos,
                 target,
+                inflector
             )
             instance.update(child_features)
 
-            # TDOD add SV agreement variable for: case, definiteness, gender, number
-            # 1. is num annotated on head & target child?, 2. is feature the same? -> TRUE else False
-            # starting with Case, Gender, Number
+            # add SV agreement variable for: case, gender, number, person, ...?
+            # 1. is feature annotated on head & target child?, 2. is value the same? -> TRUE else False
             for feat in ["Case", "Gender", "Number", "Person"]:
                 instance[f"head_{deprel}_{feat}_agreement"] = (
                     True if (head_features.get(f"head_{feat}", None)!=None
@@ -426,20 +458,12 @@ def extract_instances(tree, tree_idx, target: PredictionTarget, tree_metadata):
         deprel_order = "_".join(sorted(deprel_ids, key=deprel_ids.get))
         instance["deprel_order"] = shorten_cls(deprel_order, target)
 
-
-
-        # if "broedcellen" in sen and "voorraadpotje" in sen:
-        #     print(0, instance["nmod_child-deprel_det"], sen)
-
-        # if "bewijzen" in sen and "berusten" in sen:
-        #     print(1, instance["nmod_child-deprel_det"], sen)
-
         instances.append(instance)
 
     return instances
 
 
-def extract_features(treebank, target: PredictionTarget):
+def extract_features(treebank, target: PredictionTarget, inflector):
     """
     Extract features from treebank based on prediction target.
 
@@ -456,7 +480,7 @@ def extract_features(treebank, target: PredictionTarget):
     all_instances = []
 
     for tree_idx, tree in tqdm(enumerate(treebank), total=len(treebank)):
-        instances = extract_instances(tree, tree_idx, target, tree_metadata)
+        instances = extract_instances(tree, tree_idx, target, tree_metadata, inflector)
         all_instances.extend(instances)
 
         if len(instances) > 0 and len(instances) % 100 == 0:
@@ -473,6 +497,7 @@ def create_word_order_df(
     save_to: str | None = None,
     max_treebank_len: int | None = None,
     drop_singleton_columns: bool = False,
+    inflector = None
 ) -> pd.DataFrame:
     """
     Create a DataFrame with word order features for a given language and prediction target.
@@ -510,7 +535,7 @@ def create_word_order_df(
         assert lang is not None
         treebank = load_treebank(lang, resource_dir, max_treebank_len=max_treebank_len)
 
-    all_instances = extract_features(treebank, target)
+    all_instances = extract_features(treebank, target, inflector)
     df = pd.DataFrame(all_instances)
     #print("columns:", df.columns)
    # raise FileExistsError

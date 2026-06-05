@@ -91,7 +91,7 @@ class Treebank:
 
         treebank = []
         for filename in treebank_paths:
-            with open(filename) as f:
+            with open(filename, encoding='utf-8') as f:
                 for tree in parse_incr(f):
                     tree.metadata["treebank"] = "/".join(filename.split("/")[-2:])
                     treebank.append(tree)

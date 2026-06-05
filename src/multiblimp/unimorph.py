@@ -852,6 +852,8 @@ class UnimorphInflector:
         features: Dict[str, str],
         ufeat: Optional[str] = None,
         only_try_ud_if_no_um: bool = False,
+        prefer_tight_match: bool = False,
+        fetch_all = False
     ) -> Set[str]:
         um_features = self.ud2um_features(features, set_defaults=False)
         if ufeat in um_features:
@@ -863,7 +865,8 @@ class UnimorphInflector:
             df_ufeat = self.ufeat if ufeat is None else ufeat
             if df_ufeat is not None:
                 form_rows = self.partial_df_match(
-                    self.form_groups, form, um_features, prefer_tight_match=False
+                    self.form_groups, form, um_features,
+                    prefer_tight_match=prefer_tight_match
                 )
                 if self.verbose:
                     print(form_rows)
@@ -875,6 +878,15 @@ class UnimorphInflector:
                             if isinstance(val, str)
                         }
                     )
+            elif fetch_all:
+                # extract as many as possible? majority rules?
+                pass
+                # form_rows = self.partial_df_match(
+                #     self.form_groups, form, um_features,
+                #     prefer_tight_match=prefer_tight_match
+                # )
+                # if (len(form_rows) > 0):
+                #     
 
         if self.ud_inflector is not None:
             if only_try_ud_if_no_um and len(form_features) > 0:

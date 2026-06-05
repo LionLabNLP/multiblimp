@@ -19,7 +19,7 @@ if __name__=="__main__":
     args = parser.parse_args()
 
     target = nsubj_target
-    target.head_feats = {"VerbForm": (lambda x: x!="Part")}
+    target.head_feats = {"VerbForm": (lambda x: x=="Part")}
     # TODO also separate from cop items
     # target.child_feats = {}
     deprel_dir = "_".join(target.child_deprels)
