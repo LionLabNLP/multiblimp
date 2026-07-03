@@ -25,7 +25,7 @@ if __name__=="__main__":
     resource_dir = "../../resources"
 
     pipeline = Pipeline(target=target,
-                        predictor_var="head_nsubj_Person_agreement",
+                        predictor_var="head_nsubj_Number_agreement",
                         langs=(args.langs if args.langs else get_ud_langs(resource_dir)), 
                         inflection_map=swap_number_subj_any,
                         unimorph_args = {

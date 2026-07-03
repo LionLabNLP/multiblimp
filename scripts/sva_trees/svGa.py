@@ -20,7 +20,6 @@ if __name__=="__main__":
 
     target = nsubj_target
     target.head_feats = {"VerbForm": (lambda x: x!="Part")}
-    # TODO also separate from cop items
     # target.child_feats = {}
     deprel_dir = "_".join(target.child_deprels)
     resource_dir = "../../resources"
@@ -42,6 +41,8 @@ if __name__=="__main__":
                         max_treebank_len=30_000,
                         never_skip=args.never_skip,
                         rm_columns=["nsubj_child-deprel_conj",
-                                     "head_child-deprel_cop"],
+                                    #"head_child-deprel_cop",
+                                    #"head_child-deprel_aux"
+                                    ],
                         target_id=sys.argv[0][:-3])
     pipeline()

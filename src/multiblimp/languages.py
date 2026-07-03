@@ -1,7 +1,10 @@
 import os
 import re
 import unicodedata
+import urllib.request
+
 from glob import glob
+from bs4 import BeautifulSoup
 
 from iso639 import Lang
 from iso639.exceptions import InvalidLanguageValue
@@ -83,7 +86,7 @@ udlang2treebanks = {
     "Vietnamese": ["VTB"],
     "Hebrew": ["HTB"],
     "Latvian": ["LVTB"],
-    "German": ["GSD", "PUD"],
+    "German": ["GSD", "PUD", "HDT"],
     "Czech": ["CAC", "CLTT", "FicTree", "PDT", "PUD"],
     "Russian": ["GSD", "PUD", "SynTagRus", "Taiga"],
     "Slovenian": ["SSJ"],
@@ -293,3 +296,39 @@ def get_ud_langs(resource_dir, ud_dir=None, do_skip_langs=True):
         treebank_langs = [lang for lang in treebank_langs if lang not in skip_langs]
 
     return treebank_langs
+
+def flag_treebanks(tb_tag=""):
+    fp = urllib.request.urlopen("https://universaldependencies.org")
+    html_str = fp.read().decode("utf8")
+    fp.close()
+
+    soup = BeautifulSoup(html_str)
+    results = {}
+
+    for treebank_header in soup.select("div.ui-accordion-header"):
+        marker = treebank_header.select_one(tb_tag)
+        if marker is None:
+            continue
+
+        treebank_name_span = treebank_header.select_one("span.doublewidespan")
+        treebank_name = treebank_name_span.get_text(strip=True) if treebank_name_span else "UNKNOWN"
+
+        # Find the enclosing accordion-content (the treebank list container),
+        # then its preceding sibling is the language-level header.
+        content_ancestor = treebank_header.find_parent(
+            "div", class_="ui-accordion-content"
+        )
+        language_name = None
+        if content_ancestor is not None:
+            lang_header = content_ancestor.find_previous_sibling(
+                "div", class_="ui-accordion-header"
+            )
+            if lang_header is not None:
+                lang_name_span = lang_header.select_one("span.doublewidespan")
+                if lang_name_span:
+                    language_name = lang_name_span.get_text(strip=True)
+
+        results[language_name] = results.get(language_name, list())
+        results[language_name].append(treebank_name)
+    return results
+

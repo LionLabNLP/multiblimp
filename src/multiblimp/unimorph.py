@@ -863,7 +863,7 @@ class UnimorphInflector:
 
         if self.has_unimorph_df:
             df_ufeat = self.ufeat if ufeat is None else ufeat
-            if df_ufeat is not None:
+            if df_ufeat is not None and fetch_all==False:
                 form_rows = self.partial_df_match(
                     self.form_groups, form, um_features,
                     prefer_tight_match=prefer_tight_match
@@ -878,22 +878,51 @@ class UnimorphInflector:
                             if isinstance(val, str)
                         }
                     )
+                if self.ud_inflector is not None:
+                    if only_try_ud_if_no_um and len(form_features) > 0:
+                        return form_features
+                    ud_form_features = self.ud_inflector.get_form_features(
+                        form, features, ufeat
+                    )
+                    form_features.update(ud_form_features)
+
             elif fetch_all:
                 # extract as many as possible? majority rules?
-                pass
-                # form_rows = self.partial_df_match(
-                #     self.form_groups, form, um_features,
-                #     prefer_tight_match=prefer_tight_match
-                # )
-                # if (len(form_rows) > 0):
-                #     
+                form_rows = self.partial_df_match(
+                    self.form_groups, form, um_features,
+                    prefer_tight_match=prefer_tight_match
+                )
+                if (len(form_rows) == 1): # easy case, we only get one good candidate
+                   ## thresholding?
+                    with open("rivals.txt", "a", encoding="utf-8") as f:
+                        matchrow = form_rows.filter(regex='^(?![ufeat])')
+                        matchfeats = {col: matchrow[col][matchrow.index[0]] for col in matchrow
+                                      if col not in um_features and str( matchrow[col][matchrow.index[0]])!="nan"}
+                        if matchfeats:
+                            print(form, um_features, file=f)
+                            print(matchfeats, file=f)
+                          #  print(UM2UD, file=f)
 
-        if self.ud_inflector is not None:
-            if only_try_ud_if_no_um and len(form_features) > 0:
-                return form_features
-            ud_form_features = self.ud_inflector.get_form_features(
-                form, features, ufeat
-            )
-            form_features.update(ud_form_features)
+                            for feat,v in matchfeats.items():
+                                if v!="NFIN":
+                                    print(self.val2feat, file=f)
+                                    print(f"{feat}: {v} -> {self.val2ud_um(feat, v)}", file=f)
+                                # map from UM feat, val to UD feat,val
+                                    raise ValueError
+       
+
+                        print("-"*50, file=f)
+               
+               
+               
+                # if self.ud_inflector is not None:
+                #     if only_try_ud_if_no_um and len(form_features) > 0:
+                #         return form_features
+                #     ud_form_features = self.ud_inflector.get_form_features(
+                #         form, features, ufeat=None
+                #     )
+                #     form_features.update(ud_form_features)
+
+       
 
         return form_features

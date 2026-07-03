@@ -2,11 +2,13 @@ import os
 import pickle
 import re
 from glob import glob
+import urllib.request
 
 from arabic2latin import arabic_to_latin
 from conllu import parse_incr
 from indic_transliteration.sanscript import IAST, DEVANAGARI, transliterate
 from unidecode import unidecode
+from bs4 import BeautifulSoup
 
 from .config import UD_PATH
 from .languages import udlang2treebanks, convert_arabic_to_latin_langs
@@ -47,6 +49,44 @@ def tree_is_malformed(tree):
 
     return False
 
+def flag_treebanks(marker: str) -> dict[str, list[str]]:
+    """
+    Scrape UD and flag treebanks matching a given CSS marker selector.
+
+    Args:
+        marker: CSS selector for the marker span, e.g.
+            'span[data-hint="Underlying text not included"]'
+
+    Returns:
+        Dict mapping language_name -> [treebank_names]
+    """
+    fp = urllib.request.urlopen("https://universaldependencies.org")
+    html_str = fp.read().decode("utf8")
+    fp.close()
+
+    soup = BeautifulSoup(html_str)
+    results = {}
+
+    for treebank_header in soup.select("div.ui-accordion-header"):
+        if treebank_header.select_one(marker) is None:
+            continue
+
+        treebank_name_span = treebank_header.select_one("span.doublewidespan")
+        treebank_name = treebank_name_span.get_text(strip=True) if treebank_name_span else "UNKNOWN"
+
+        language_name = None
+        content_ancestor = treebank_header.find_parent("div", class_="ui-accordion-content")
+        if content_ancestor is not None:
+            lang_header = content_ancestor.find_previous_sibling("div", class_="ui-accordion-header")
+            if lang_header is not None:
+                lang_name_span = lang_header.select_one("span.doublewidespan")
+                if lang_name_span:
+                    language_name = lang_name_span.get_text(strip=True)
+
+        results.setdefault(language_name, []).append(treebank_name)
+
+    return results
+
 
 class Treebank:
     def __new__(
@@ -77,7 +117,7 @@ class Treebank:
         treebank_glob = os.path.join(resource_dir, treebank_glob)
         treebank_paths = glob(treebank_glob)
 
-        selected_treebanks = udlang2treebanks.get(lang)
+        selected_treebanks = udlang2treebanks.get(lang) #!
         if use_selected_treebanks and selected_treebanks is not None:
             selected_paths = []
             for path in treebank_paths:

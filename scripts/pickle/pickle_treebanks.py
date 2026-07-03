@@ -13,6 +13,7 @@ from multiblimp.languages import (
 )
 
 
+
 if __name__ == "__main__":
     resource_dir = "../../resources"
     ud_langs = get_ud_langs(resource_dir)

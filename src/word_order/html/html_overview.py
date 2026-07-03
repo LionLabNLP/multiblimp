@@ -3,7 +3,7 @@ def create_html(panels_html, all_data_json):
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>MultiBLiMP v2 - Word Order Overview</title>
+    <title>MultiBLiMP v2 - Subject-Verb Agreement Overview</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
@@ -130,9 +130,9 @@ def create_html(panels_html, all_data_json):
     <div class="container">
         <div class="header">
             <div class="title-section">
-                <h1>MultiBLiMP v2 &mdash; Word Order Overview</h1>
+                <h1>MultiBLiMP v2 &mdash; Subject-Verb Agreement Overview</h1>
                 <p class="description">
-                    This page gives an overview of word order predictability across dependency relations and languages.
+                    This page gives an overview of Subject-Verb agreement predictability across dependency relations and languages.
                     Each panel shows the base entropy vs. reduced entropy (after fitting a decision tree) for a specific
                     dependency relation across all available languages. Click a panel to explore a dependency relation
                     in detail, or click a point to go directly to a specific language.
@@ -189,10 +189,12 @@ def create_html(panels_html, all_data_json):
                     sizemode: 'area',
                     sizeref: 2 * Math.max(...points.map(d => d.n_items)) / (20 ** 2),
                     sizemin: 3,
-                    color: '#2563eb',
+                    color: points.map(d => d.color ?? '#2563eb'),      // ← was '#2563eb'
                     opacity: 0.75,
-                    line: {{ color: '#1e40af', width: 0.5 }}
-                }},
+                    line: {{ 
+                        color: points.map(d => d.color ?? '#2563eb'),  // ← was '#1e40af'
+                        width: 0.5 
+                    }}                }},
                 showlegend: false,
             }};
 

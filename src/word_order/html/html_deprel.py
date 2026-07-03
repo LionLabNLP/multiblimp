@@ -1,4 +1,4 @@
-def create_html(rows_six, rows_binary, plot_data_six_json, plot_data_binary_json):
+def create_html(rows_six, rows_binary, plot_data_six_json, plot_data_binary_json, trivial_note=""):
     return f"""<!DOCTYPE html>
     <html lang="en">
     <head>
@@ -182,6 +182,15 @@ def create_html(rows_six, rows_binary, plot_data_six_json, plot_data_binary_json
                 border-radius: 8px;
                 background: white;
             }}
+            .trivial-note {{
+                font-size: 0.85rem;
+                color: #78716c;
+                margin-bottom: 1rem;
+                padding: 0.6rem 0.875rem;
+                background: #fafaf9;
+                border: 1px solid var(--border);
+                border-radius: 6px;
+            }}
         </style>
     </head>
     <body>
@@ -189,7 +198,7 @@ def create_html(rows_six, rows_binary, plot_data_six_json, plot_data_binary_json
             <div class="header">
                 <div class="title-section">
                     <h1>MultiBLiMP v2 - Language Overview</h1>
-                    <div class="subtitle">Word order prediction through decision trees</div>
+                    <div class="subtitle">Subject-Verb agreement prediction through decision trees</div>
                 </div>
                 <div class="controls">
                     <a href="../" class="back-btn">
@@ -207,6 +216,8 @@ def create_html(rows_six, rows_binary, plot_data_six_json, plot_data_binary_json
             </div>
 
             <div id="scatterPlot"></div>
+
+            {trivial_note}
 
             <table id="dataTable">
                 <thead>
@@ -284,7 +295,7 @@ def create_html(rows_six, rows_binary, plot_data_six_json, plot_data_binary_json
                         sizemode: 'area',
                         sizeref: 2 * Math.max(...data.map(d => d.n_items)) / (40 ** 2),
                         sizemin: 4,
-                        color: '#2563eb',
+                        color: data.map(d => d.color),
                         opacity: 0.6,
                         line: {{
                             color: '#1e40af',

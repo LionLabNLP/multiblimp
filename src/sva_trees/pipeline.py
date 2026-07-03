@@ -2,14 +2,18 @@ import os
 import sys
 import random
 import math
+import io
 
 from tqdm import tqdm
 
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 sys.path.append("../")
 
 from word_order.process_treebank import load_treebank, create_word_order_df, read_df
 from word_order.decision_tree import fit_dt
 from word_order.viz_tree import tree2html
+from word_order.viz_deprel import generate_html_deprel_index
+from word_order.viz_overview import generate_html_overview_index
 from multiblimp.languages import remove_diacritics_langs, remove_multiples_langs, lang2langcode
 from multiblimp.unimorph import UnimorphInflector
 
@@ -77,17 +81,30 @@ class Pipeline:
     def __call__(self):
         if not len(self.langs):
             raise ValueError("No langs specified/found")
+        # with open("rivals.txt", "w", encoding="utf-8") as f :
+        #     print(self.target_id, file=f)
 
-        for lang in tqdm(sorted(self.langs)):
-            raw_df = read_df(lang, word_order_dir=self.word_order_dir) if os.path.exists(f"{self.word_order_dir}/{lang.replace(' ', '_')}.csv") else False
-            if self.never_skip or type(raw_df)==bool or not self.predictor_var in raw_df.columns:
+        trivial_langs = dict()
+        for lang in (sorted(self.langs)):
+            print(lang)
+            html_file = f"../../decision_trees/{self.target_id}/{lang}.html"
+            if self.never_skip==False and os.path.exists(html_file):
+                print(f"Skipping {lang}, -ns==False and html found.")
+                continue
+
+            df = read_df(lang, word_order_dir=self.word_order_dir) if os.path.exists(f"{self.word_order_dir}/{lang.replace(' ', '_')}.csv") else False
+            if self.never_skip or type(df)==bool or not self.predictor_var in df.columns:
                 treebank = load_treebank(lang, self.resource_dir, max_treebank_len=self.max_treebank_len)
                 # TODO
-                inflector, skip_lang, num_lemma, num_form = load_inflector(lang=lang, langcode=lang2langcode(lang),
+               # with open("rivals.txt", "a", encoding="utf-8") as f :
+                #   print(lang, file=f)
+
+                inflector, skip_lang, num_lemma, num_form = load_inflector(
+                    lang=lang, langcode=lang2langcode(lang),
                                unimorph_args=self.unimorph_args,
                                 inflection_map=self.inflection_map,
                                 resource_dir=self.resource_dir)
-                
+
                 df = create_word_order_df(
                     lang=lang, 
                     treebank=treebank,
@@ -96,48 +113,51 @@ class Pipeline:
                     save_to=self.word_order_dir,
                     max_treebank_len=self.max_treebank_len,
                     drop_singleton_columns=True,
-                    inflector=inflector
+                    inflector=inflector,
+                    predictor_var=self.predictor_var
                 )
+
+                #with open("rivals.txt", "a", encoding="utf-8") as f:
+                 #   print("="*50, file=f)
+                #raise FileExistsError
 
                 print(lang, len(df))
                 if not len(df):
-                    print(f"Skipping {lang}, raw_df has no entries")
+                    print(f"Skipping {lang}, raw_df has no entries") # TODO still create dummy html?
                     continue
             else:
                 print(f"Skipping {lang} load_treebank(), df already found")
 
             # langs = [path.split('/')[-1].split('.')[0] for path in glob(word_order_dir+"/*.csv")]
 
-            deprels = ['nsubj']
-            html_file = f"../../decision_trees/{self.target_id}/html/{lang}.html"
             if self.never_skip or not os.path.exists(html_file):
-                print(lang)
-
+                print("Generating HTML file for", lang)
                 #treebank = load_treebank(lang, self.resource_dir, max_treebank_len=self.max_treebank_len)
                 try:
-                    raw_df = read_df(lang, word_order_dir=self.word_order_dir)
-                    full_df = raw_df[raw_df[self.predictor_var].notnull()]
+                    #raw_df = read_df(lang, word_order_dir=self.word_order_dir)
+                    full_df = df[df[self.predictor_var].notnull()]
                 except FileNotFoundError:
                     print(f"Skipping {lang}, '../../treebank_features/nsubj/{lang}.csv' could'nt be found or df was 0")
                     continue
 
-                # remove samples ; TODO must be head_ prefix for nsubj
-                # if 'child_sibling-deprel_aux' in full_df.columns:
-                #     full_df = full_df[~full_df['child_sibling-deprel_aux']]
-                # if 'child_sibling-deprel_cop' in full_df.columns:
-                #     full_df = full_df[~full_df['child_sibling-deprel_cop']]
-
-                # drop all instances with a specific column=True value
-                for col in self.rm_columns:
-                    if col in full_df.columns:
+                # drop all instances with a specific column=True value; greedily
+                # match col name to also rm :pass or :tense items
+                for col in full_df:
+                    if (lambda x: any([x.startswith(y) for y in self.rm_columns]))(col):
                         full_df = full_df[~full_df[col]]
 
                 omit_feats = None #{col for col in full_df.columns if ('nsubj' in col) or ('obj' in col) or ('form' in col) or ('lemma' in col)}
                 min_impurity_decrease = get_impurity(len(full_df))
 
-                for deprel in deprels:
+                for deprel in self.target.child_deprels:
+                    trivial_langs[deprel] = trivial_langs.get(deprel, dict())
                     if self.never_skip or not os.path.exists(f"../../decision_trees/{self.target_id}/{self.target_id}_{deprel}/{lang}"):
-                        try:
+                        learn_dt=False
+                        #try:
+                        pfeat = self.predictor_var.split("_")[2]
+                        pred_values = set(full_df[self.predictor_var].values)
+                        
+                        if len(pred_values)>1: # TODO or label is ==yess
                             model, dt_df, predictor_df = fit_dt(
                                 full_df, 
                                 self.target, 
@@ -146,31 +166,38 @@ class Pipeline:
                                 min_impurity_decrease=min_impurity_decrease,
                                 min_samples_leaf=10,
                                 save_to=f"../../decision_trees/{self.target_id}/{self.target_id}_{deprel}/{lang}",
-                                omit_feats=omit_feats,
-                            )
+                                omit_feats={f"{"head"}_{pfeat}",
+                                            f"{deprel}_{pfeat}"}
+                                            )
+                            if model: 
+                                learn_dt=True
+                        if len(pred_values)<=1 or learn_dt==False: # no decision to learn
+                            model, predictor_df = None, None
+                            dt_df = full_df
+                            learn_dt = False
+                            trivial_langs[deprel][lang] = trivial_langs[deprel].get(lang, list(pred_values)[0])
 
-                            if model is None:
-                                raise TypeError(f"no model returned for {lang, deprel}")
-                        except TypeError:
-                            continue
+                            #if model is None:
+                             #   raise TypeError(f"no model returned for {lang, deprel}")
+                       # except TypeError:
+                        #    continue
                         
                     else: 
                         print(f"Skipping {lang}, decision tree already found")
                     
-                        # ????
-                        # swap_df = create_pairs(
-                        #     model, 
-                        #     dt_df,
-                        #     full_df, 
-                        #     treebank, 
-                        #     predictor_var,
-                        #     swap_type="core_arg",
-                        #     # save_to_tight_keep=f"word_order/pairs/tight/{deprel}/{lang}.csv",
-                        #     # save_to_full_keep=f"word_order/pairs/full/{deprel}/{lang}.csv",
-                        #     save_to=os.path.join(dt_df_dir, f"{lang}.csv"),
-                        # )
-                        #tree2html(model, dt_df, full_df, predictor_var, html_file, max_rows=15)
-
+                    # ????
+                    # swap_df = create_pairs(
+                    #     model, 
+                    #     dt_df,
+                    #     full_df, 
+                    #     treebank, 
+                    #     predictor_var,
+                    #     swap_type="core_arg",
+                    #     # save_to_tight_keep=f"word_order/pairs/tight/{deprel}/{lang}.csv",
+                    #     # save_to_full_keep=f"word_order/pairs/full/{deprel}/{lang}.csv",
+                    #     save_to=os.path.join(dt_df_dir, f"{lang}.csv"),
+                    # )
+                    #tree2html(model, dt_df, full_df, predictor_var, html_file, max_rows=15)
                     tree2html(
                         model, 
                         dt_df, 
@@ -182,10 +209,19 @@ class Pipeline:
                         meta={"Language": lang},
                         only_show_real_orders=True,
                         correlate_features=True,
-                        show_features=True
+                        show_features=True,
+                        full_tree_html=learn_dt,
+                        palette_map = {"Yes": "#31cb9f", "No": "#f16393",
+                                        "+-": "#e5c64d","--": "#b893de",}
                     )
-
+ 
             else:
                 print(f"Skipping {lang}, HTML file found")
 
-            # generate_html_index('word_order/decision_trees/html/')
+        generate_html_deprel_index(f"../../decision_trees/{self.target_id}/{self.target_id}_nsubj",
+                                    f"../../decision_trees/{self.target_id}",
+                                    target_col=self.predictor_var,
+                                    exclude_labels={"--", "+-"}
+                                    #trivial_langs=trivial_langs[deprel]
+                                    )
+        generate_html_overview_index(html_directory=f"../../decision_trees/")

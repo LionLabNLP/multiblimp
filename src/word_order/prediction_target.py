@@ -88,5 +88,5 @@ nmod_noun_target = PredictionTarget(
 nsubj_target = PredictionTarget(
     child_deprels=["nsubj"],
     head_pos=["VERB"],
-    child_pos=["NOUN", "PROPN", "PRON"],
+    child_pos=["NOUN", "PROPN", "PRON"]
 )
