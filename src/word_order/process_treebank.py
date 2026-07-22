@@ -148,6 +148,14 @@ def extract_node_features(
         if um_feats: 
            node[inflector.ufeat] = um_feats
 
+    # Further optional filters for head from PredictionTarget; filter is (lamnda x: condition)
+    if prefix=="head" and target.head_feats is not None:
+        if not all(
+            [val_filter(features.get(f"{prefix}_{feat}", None)) 
+             for feat, val_filter in target.head_feats.items()]
+             ):
+            return None # item does not fulfil PredictionTarget feature filters, drop instance
+    
     # Features about this node's relationship to its head
     if node["head"] != 0:
         head = tree[node["head"] - 1]
@@ -307,7 +315,8 @@ def extract_sen_features(tree):
     return feature2val
 
 
-def extract_instances(tree, tree_idx, target: PredictionTarget, tree_metadata, inflector, predictor_var):
+def extract_instances(tree, tree_idx, target: PredictionTarget, tree_metadata,
+                      inflector, predictor_var):
     """
     Extract training instances from a tree based on the prediction target.
 
@@ -416,6 +425,9 @@ def extract_instances(tree, tree_idx, target: PredictionTarget, tree_metadata, i
         if head_features == None: # item failed PredictionTarget filters
             continue
         instance.update(head_features)
+        
+        if head_features == None: # item failed PredictionTarget filters
+            continue
 
         # Extract features for each child type; use deprel as prefix (e.g. "nsubj_pos", "amod_pos")
         for deprel in target.child_deprels:
@@ -559,6 +571,7 @@ def create_word_order_df(
     if drop_singleton_columns and len(df) > 0:
         always_keep = {"deprel_order", "sen", "treebank", "sent_id", "tree_idx"}
         always_keep.update(set([col for col in df.columns if col.endswith("agreement")]))
+        always_keep.update(set([col for col in df.columns if col.endswith("_idx")]))
         cols_to_check = df.columns.difference(list(always_keep))
         keep = df[cols_to_check].nunique() > 1
         kept_always = [c for c in always_keep if c in df.columns]
