@@ -96,3 +96,6 @@ sed "s/MASV/MASC/" gle/gle > gle/gle2; mv gle/gle2 gle/gle
 # Chuckchi
 sed "s/ARBAB1S/ARGAB1S/" ckt/ckt > ckt/ckt2; mv ckt/ckt2 ckt/ckt
 sed "s/ARBAB3S/ARGAB3S/" ckt/ckt > ckt/ckt2; mv ckt/ckt2 ckt/ckt
+
+# Afrikaans
+sed "s/SUP/SPRL/" afr/afr > afr/afr2; mv afr/afr2 afr/afr

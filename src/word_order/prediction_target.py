@@ -25,6 +25,9 @@ class PredictionTarget:
     # Optional: filter by head's specific feature annotation
     head_feats: dict[str: str] | None = None
 
+    # Feature to swap inflection for
+    swap_feat: str | None = None
+
     def __post_init__(self):
         if not self.child_deprels:
             raise ValueError("child_deprels must be non-empty")
@@ -66,6 +69,12 @@ obl_target = PredictionTarget(
     child_pos=["NOUN", "PROPN", "PRON"],
 )
 
+obl_noun_target = PredictionTarget(
+    child_deprels=["obl"],
+    head_pos=["VERB"],
+    child_pos=["NOUN", "PROPN", "PRON"],
+)
+
 case_target = PredictionTarget(
     child_deprels=["case"],
     head_pos=["NOUN"],
@@ -81,6 +90,12 @@ advmod_target = PredictionTarget(
 nmod_noun_target = PredictionTarget(
     child_deprels=["nmod"],
     head_pos=["NOUN"],
+    child_pos=["NOUN"],
+)
+
+advcl_noun_verb_target = PredictionTarget(
+    child_deprels=["advcl"],
+    head_pos=["VERB"],
     child_pos=["NOUN"],
 )
 

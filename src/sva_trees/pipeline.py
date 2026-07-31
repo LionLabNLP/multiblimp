@@ -5,6 +5,7 @@ import math
 import io
 
 from tqdm import tqdm
+from pandas import DataFrame
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 sys.path.append("../")
@@ -92,7 +93,12 @@ class Pipeline:
                 print(f"Skipping {lang}, -ns==False and html found.")
                 continue
 
-            df = read_df(lang, word_order_dir=self.word_order_dir) if os.path.exists(f"{self.word_order_dir}/{lang.replace(' ', '_')}.csv") else False
+            df = read_df(lang, word_order_dir=self.word_order_dir) if (
+                os.path.exists(f"{self.word_order_dir}/{lang.replace(' ', '_')}.parquet")
+                ) else False
+            #  os.path.join(word_order_dir or "", f"{lang}{deprel_suffix}.parquet")
+            #  os.path.exists(f"{self.word_order_dir}/{lang.replace(' ', '_')}.csv")
+            
             if self.never_skip or type(df)==bool or not self.predictor_var in df.columns:
                 treebank = load_treebank(lang, self.resource_dir, max_treebank_len=self.max_treebank_len)
                 # TODO
@@ -105,6 +111,14 @@ class Pipeline:
                                 inflection_map=self.inflection_map,
                                 resource_dir=self.resource_dir)
 
+                um_df = inflector.load_unimorph_pickle("unimorph/um_pickles", filter={}) # default load without pickle
+                if type(um_df)==DataFrame:
+                    um_data = {pos: um_df[um_df["upos"]==pos].dropna(axis=1, how="all") 
+                               for pos in um_df["upos"].unique()}
+                    um_data["full"] = um_df
+                else:
+                    um_data = None
+
                 df = create_word_order_df(
                     lang=lang, 
                     treebank=treebank,
@@ -113,8 +127,10 @@ class Pipeline:
                     save_to=self.word_order_dir,
                     max_treebank_len=self.max_treebank_len,
                     drop_singleton_columns=True,
-                    inflector=inflector,
-                    predictor_var=self.predictor_var
+                    predictor_var=self.predictor_var,
+                    lexicalize=True,
+                    um_data=um_data,
+                    fetch_all=False,
                 )
 
                 #with open("rivals.txt", "a", encoding="utf-8") as f:
@@ -159,9 +175,10 @@ class Pipeline:
                         
                         if len(pred_values)>1: # TODO or label is ==yess
                             model, dt_df, predictor_df = fit_dt(
-                                full_df, 
-                                self.target, 
-                                verbose=1, 
+                                full_df=full_df,
+                                model_type="decision_tree",
+                                target=self.target,
+                                verbose=1,
                                 predictor_var=self.predictor_var,
                                 min_impurity_decrease=min_impurity_decrease,
                                 min_samples_leaf=10,
@@ -199,12 +216,12 @@ class Pipeline:
                     # )
                     #tree2html(model, dt_df, full_df, predictor_var, html_file, max_rows=15)
                     tree2html(
-                        model, 
-                        dt_df, 
-                        full_df, 
-                        self.predictor_var,
-                        self.target,
-                        html_file, 
+                        pipeline_model=model, 
+                        dt_df=dt_df, 
+                        full_df=full_df, 
+                        predictor_var=self.predictor_var,
+                        target=self.target,
+                        out_file=html_file, 
                         max_rows=15,
                         meta={"Language": lang},
                         only_show_real_orders=True,
@@ -218,8 +235,8 @@ class Pipeline:
             else:
                 print(f"Skipping {lang}, HTML file found")
 
-        generate_html_deprel_index(f"../../decision_trees/{self.target_id}/{self.target_id}_nsubj",
-                                    f"../../decision_trees/{self.target_id}",
+        generate_html_deprel_index(data_dir=f"../../decision_trees/{self.target_id}/{self.target_id}_nsubj",
+                                    html_directory=f"../../decision_trees/{self.target_id}",
                                     target_col=self.predictor_var,
                                     exclude_labels={"--", "+-"}
                                     #trivial_langs=trivial_langs[deprel]

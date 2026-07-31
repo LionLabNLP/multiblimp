@@ -20,6 +20,7 @@ if __name__=="__main__":
 
     target = nsubj_target
     target.head_feats = {"VerbForm": (lambda x: x!="Part")}
+    target.swap_feat = "Number"
     # target.child_feats = {}
     deprel_dir = "_".join(target.child_deprels)
     resource_dir = "../../resources"
