@@ -68,7 +68,6 @@ def lang2langcode(name: str):
                 "Western_Sierra_Puebla_Nahuatl": name,
                 }.get(name, name)
 
-
 udlang2iso639 = {
     "Abkhaz": "Abkhazian",
     "Ancient Greek": "Ancient Greek (to 1453)",
@@ -189,13 +188,11 @@ convert_arabic_to_latin_langs = {
 }
 
 skip_langs = {
-    # "Frisian Dutch",
-    # "Turkish German",
-    # "Maghrebi Arabic French",
-    # "Telugu English",
-    # "Turkish English",
-    # "Cappadocian",
-    # "Pomak",
+    "Frisian Dutch",
+    "Turkish German",
+    "Maghrebi Arabic French",
+    "Telugu English",
+    "Turkish English",
     "Spanish Sign Language",
     "Swedish Sign Language",
 }

@@ -1,11 +1,12 @@
 from pyexpat import features
 import sys
-import ast
 import os
 import random
 import re
+import gc
 
 from collections import defaultdict, Counter
+from dataclasses import dataclass
 
 sys.path.append("src")
 
@@ -23,7 +24,19 @@ from .prediction_target import PredictionTarget
 from .utils import shorten_cls
 
 
-META_FEATURES = ["sen", "treebank", "sent_id", "tree_idx"]
+META_FEATURES = ["sen", "treebank", "sent_id", "tree_idx", "treebank_link", "sen_str"]
+
+
+@dataclass
+class TreeMaps:
+    child2root: dict
+    head2child_ids: dict
+    head2child_deprels: dict
+    head2child_lemmas: dict
+    head2left_deprels: dict
+    head2right_deprels: dict
+    head2child_pos: dict
+    head2child_feats: dict
 
 
 def load_treebank(
@@ -50,13 +63,9 @@ def read_df(lang, word_order_dir=None, deprels=None) -> pd.DataFrame:
 
     deprel_suffix = "" if deprels is None else "_" + "_".join(deprels)
 
-    df = pd.read_csv(
-        os.path.join(word_order_dir or "", f"{lang}{deprel_suffix}.csv"),
-        low_memory=False,
-        converters={"sen": ast.literal_eval},
+    df = pd.read_parquet(
+        os.path.join(word_order_dir or "", f"{lang}{deprel_suffix}.parquet"),
     )
-    df = df.loc[:, ~df.columns.str.contains("^Unnamed")]
-    df = df.replace([np.inf, -np.inf], "inf")
 
     return df
 
@@ -231,71 +240,197 @@ def expand_anno(node, morph_feats, target, um_split):
     #print("morph_feats", morph_feats)
     return morph_feats
 
+UNDEFINED = "UNDEFINED"
+
+def partial_df_match(
+        um_data,
+        match_feats : dict,
+        ufeat,
+        features: Dict[str, str],
+        prefer_tight_match: Optional[bool] = None,
+    ):
+        """Find all rows in the morphology dataframe that match the
+        group_index (lemma or form) and the features in the provided
+        `features` dictionary.
+        """
+
+        for filter_type, filter_value in match_feats.items():
+            #print("filtering", filter_type, filter_value)
+            if filter_value not in [None, "_"]:
+                um_data = um_data[um_data[filter_type] == filter_value]
+            if len(um_data) == 0:
+                return um_data.iloc[0:0]
+        sub_df = um_data
+
+        # print(sub_df)
+        # print(match_feats)
+        # print(features)
+        # if len(groups.indices.get(group_index, [])) == 0:
+        #     empty_df = um_data.iloc[0:0]
+        #     return empty_df
+
+        # sub_df = groups.get_group(group_index)
+
+        # if len(sub_df) == 0:
+        #     return sub_df
+        # elif len(sub_df)>1:
+        #     sub_df = sub_df[sub_df["lemma"] == node["lemma"]]
+        #     if len(sub_df)==0:
+
+        #         return um_data.iloc[0:0]
+
+        mask = np.ones(len(sub_df), dtype=bool)
+
+        for col, val in features.items():
+            if isinstance(val, list):
+                sub_mask = np.zeros_like(mask)
+                for subval in val:
+                    sub_mask |= sub_df[col] == subval
+                mask &= sub_mask
+            elif (val is not None) and (pd.notna(val)):
+                if val.startswith("-"):
+                    mask &= (sub_df[col] != val[1:]) & (sub_df[col] != UNDEFINED)
+                elif col == ufeat:
+                    mask &= sub_df[col] == val
+                else:
+                    try:
+                        mask &= (
+                            (sub_df[col] == val)
+                            | (sub_df[col] == UNDEFINED)
+                            | pd.isna(sub_df[col])
+                        )
+                    except:
+                        pass
+                        #print("???SOS", match_feats, features)
+
+        candidate_rows = sub_df[mask]
+       # print(candidate_rows)
+       # print()
+
+
+        if (not prefer_tight_match) or (len(candidate_rows) < 2):
+            return candidate_rows
+
+        features_added = np.zeros(len(candidate_rows))
+        for idx, (_, row) in enumerate(candidate_rows.iterrows()):
+            for ufeat, val in row.items():
+                if (not pd.isna(val)) or (val == UNDEFINED):
+                    # If it is a not-nan feature that is not present in the matching row, +1
+                    features_added[idx] += ufeat not in features
+                elif (not pd.isna(features.get(ufeat))) and (
+                    pd.isna(val) or (val == UNDEFINED)
+                ):
+                    # If it is a nan feature that *is* present in the matching row, +1
+                    features_added[idx] += 1
+
+        min_features_added = min(features_added)
+        min_features_added_mask = features_added == min_features_added
+
+        return candidate_rows[min_features_added_mask]
+
+
+def expand_anno(node, morph_feats, target, um_split):
+    # make copy to keep upos/lemma separate from conllu Token's feats
+    inflect_feats = morph_feats
+    inflect_feats["upos"] = node["upos"]
+    # allows for soft matching if no lemma was specified in UD
+    inflect_feats["lemma"] = node.get("lemma", None) if node.get("lemma", None) != "_" else None
+
+    um_feats = {f: (UD2UM.get((f,v), None) if f!="lemma" else v) for f, v in inflect_feats.items()}
+
+    form_rows = partial_df_match(
+        um_split,
+        {"form": node["form"], "lemma":inflect_feats["lemma"]},
+        target,
+        um_feats,
+        prefer_tight_match=True
+    )
+    add_feats=False
+    if len(form_rows):
+        unified = dict()
+        for i, row in form_rows.iterrows():
+            transformed =  map_um_value_to_ud(row["ufeat"])
+            for k, v in transformed["morpho"].items():
+                unified[k] = unified.get(k, list()) + [v]
+            unified["upos"] = unified.get("upos", list()) + [transformed["upos"]]
+
+        unified = {k: list(set(v))[0] for k, v in unified.items() if len(list(set(v)))==1}
+
+        if( not any(
+                    [1 if (inflect_feats.get(k, False) and 
+                            inflect_feats.get(k, False)!=v and
+                            inflect_feats.get(k, False)!="UNDEFINED"
+                            ) else 0 for k, v in unified.items()]
+                )):
+                    #unanimous feat matches
+                    #check for conflict with og data stil
+                    for k,v in unified.items():
+                        if not k in um_feats:#s and len(set(v))==1:
+                            if add_feats==False: add_feats = dict()
+                            add_feats[k] = v
+
+        if add_feats:
+            with open ("debug_mapping.txt", "a", encoding="utf-8") as f:
+                print("node prev", node.items(), file=f)
+                for feat, val in add_feats.items():
+                    morph_feats[feat] = val
+                print("form rows", form_rows, file=f)
+                print("unified:", unified, file=f)
+                print("add:", add_feats, file=f)
+                print("node post", node.items(), file=f)
+                print("-"*50, file=f)
+
+    #print("morph_feats", morph_feats)
+    return morph_feats
+
+
 def extract_node_features(
     node,
     tree,
-    child2root,
-    head2child_deprels,
-    head2child_lemmas,
-    head2left_deprels,
-    head2right_deprels,
-    head2child_pos,
-    head2child_feat,
+    tree_maps: TreeMaps,
     prefix: str,
     all_feats: set,
     all_deprel: set,
     all_pos: set,
     target: PredictionTarget,
+    excluded_deprels: set | None = None,
+    lexicalize: bool = False,
+    encode_positional_features: bool = False,
     um_data: pd.DataFrame=None,
     fetch_all=False
-):
+) -> dict[str, str | bool | int]:
     """
     Extract all features for a specific node (whether it's a child, head, or co-child).
     This ensures consistent feature extraction across all node types.
     """
     features = {}
     if type(node.get("feats", None))!=dict: node["feats"] = dict()
+    excluded_deprels = excluded_deprels or set()
 
     # Basic node features
     features[f"{prefix}_deprel"] = node["deprel"]
     features[f"{prefix}_pos"] = node["upos"]
-    features[f"{prefix}_form"] = node["form"].lower() if node["upos"]!="PROPN" else node["form"]
-    features[f"{prefix}_lemma"] = node["lemma"]
     features[f"{prefix}_idx"] = node["id"]
 
+    if lexicalize:
+        features[f"{prefix}_form"] = (
+            node["form"].lower() if node["upos"] != "PROPN" else node["form"]
+        )
+        features[f"{prefix}_lemma"] = node["lemma"]
+
     # Morphological features
-    prev = dict()
-    prev[f"{prefix}_deprel"] = node["deprel"]
-    prev[f"{prefix}_pos"] = node["upos"]
-    prev[f"{prefix}_form"] = node["form"].lower() if node["upos"]!="PROPN" else node["form"]
-    prev[f"{prefix}_lemma"] = node["lemma"]
-    prev[f"{prefix}_idx"] = node["id"]
-
-
-    for feat in all_feats:
-        prev[f"{prefix}_{feat}"] = (node["feats"] or {}).get(feat)
-
+    # First: Try to get missing anno from Unimorph
     if type(um_data)==dict and fetch_all:
         # first check if we could even get any more anno from UM for this upos
         um_split = um_data.get(UD2UM["upos", node["upos"]], None)
         if type(um_split)==pd.DataFrame and (
             not all([node["feats"].get(k, False) for k in [x for x in um_split.columns if x[0].isupper()]])):
             node["feats"] = expand_anno(node, node["feats"], target, um_split)
-    # Create morphological df features
-    #print("all_feats", all_feats)
-    #print("node feats", node.items(), node.get("feats", {}))
+
     all_feats.update(set(node.get("feats", {}).keys()))
-    #print("all_feats", all_feats)
 
     for feat in all_feats:
         features[f"{prefix}_{feat}"] = (node["feats"] or {}).get(feat)
-
-    # if sorted(prev.items()) != sorted(features.items()):
-    #     with open ("debug_mapping.txt", "a", encoding="utf-8") as f:
-    #         print("prev", prev, file=f)
-    #         print("new", features, file=f)
-    #         print("node", node, file=f)
-    #         print("-"*50, file=f)
 
     # Further optional filters for head from PredictionTarget; filter is (lamnda x: condition)
     if prefix=="head" and target.head_feats is not None:
@@ -318,7 +453,9 @@ def extract_node_features(
 
     # Path to root features
     for deprel in all_deprel:
-        features[f"{prefix}_under_{deprel}"] = deprel in child2root[node["id"]]
+        features[f"{prefix}_under_{deprel}"] = (
+            deprel in tree_maps.child2root[node["id"]]
+        )
 
     # Sibling features (if node has siblings)
     if node["head"] != 0:
@@ -334,49 +471,84 @@ def extract_node_features(
             return result
 
         sibling_deprels = remove_first_occurrence(
-            head2child_deprels[node["head"]], node["deprel"]
+            tree_maps.head2child_deprels[node["head"]], node["deprel"]
         )
-        sibling_pos = head2child_pos[node["head"]].copy()
+        sibling_pos = tree_maps.head2child_pos[node["head"]].copy()
 
-        sibling_deprel_candidates = set(all_deprel) - set(target.child_deprels or [])
+        sibling_deprel_candidates = set(all_deprel)
 
-        # Sibling deprel presence
+        # # Sibling deprel presence
         for deprel in sibling_deprel_candidates:
             features[f"{prefix}_sibling-deprel_{deprel}"] = deprel in sibling_deprels
 
-        # Directional sibling deprels
-        for sibling_dir in ["L", "R"]:
-            if sibling_dir == "L":
-                dir_sibling_deprels = head2left_deprels[node["head"]]
-                if node["id"] < node["head"]:
-                    dir_sibling_deprels = remove_first_occurrence(
-                        dir_sibling_deprels, node["deprel"]
-                    )
-            else:
-                dir_sibling_deprels = head2right_deprels[node["head"]]
-                if node["id"] > node["head"]:
-                    dir_sibling_deprels = remove_first_occurrence(
-                        dir_sibling_deprels, node["deprel"]
-                    )
-
-            for deprel in sibling_deprel_candidates:
-                features[f"{prefix}_sibling-deprel-{sibling_dir}_{deprel}"] = (
-                    deprel in dir_sibling_deprels
-                )
-
-        # Sibling POS presence
+        # # Sibling POS presence
         for pos in all_pos:
             features[f"{prefix}_sibling-pos_{pos}"] = pos in sibling_pos
 
+        # Directional sibling deprels
+        if encode_positional_features:
+            features["child_head_distance"] = abs(node["head"] - node["id"])
+
+            sibling_ids = tree_maps.head2child_ids[node["head"]]
+            for idx in sibling_ids:
+                sibling_deprel = tree[idx - 1]["deprel"]
+                sibling_pos = tree[idx - 1]["upos"]
+
+                if idx != node["id"]:
+                    if idx < node["id"] < node["head"]:
+                        features[f"{prefix}_sibling-deprel-sCH_{sibling_deprel}"] = True
+                        features[f"{prefix}_sibling-pos-sCH_{sibling_pos}"] = True
+                    elif node["id"] < idx < node["head"]:
+                        features[f"{prefix}_sibling-deprel-CsH_{sibling_deprel}"] = True
+                        features[f"{prefix}_sibling-pos-CsH_{sibling_pos}"] = True
+                    elif node["id"] < node["head"] < idx:
+                        features[f"{prefix}_sibling-deprel-CHs_{sibling_deprel}"] = True
+                        features[f"{prefix}_sibling-pos-CHs_{sibling_pos}"] = True
+                    elif idx < node["head"] < node["id"]:
+                        features[f"{prefix}_sibling-deprel-sHC_{sibling_deprel}"] = True
+                        features[f"{prefix}_sibling-pos-sHC_{sibling_pos}"] = True
+                    elif node["head"] < idx < node["id"]:
+                        features[f"{prefix}_sibling-deprel-HsC_{sibling_deprel}"] = True
+                        features[f"{prefix}_sibling-pos-HsC_{sibling_pos}"] = True
+                    elif node["head"] < node["id"] < idx:
+                        features[f"{prefix}_sibling-deprel-HCs_{sibling_deprel}"] = True
+                        features[f"{prefix}_sibling-pos-HCs_{sibling_pos}"] = True
+        else:
+            for sibling_dir in ["L", "R"]:
+                if sibling_dir == "L":
+                    dir_sibling_deprels = list(
+                        tree_maps.head2left_deprels[node["head"]]
+                    )
+                    if node["id"] < node["head"]:
+                        dir_sibling_deprels = remove_first_occurrence(
+                            dir_sibling_deprels, node["deprel"]
+                        )
+                else:
+                    dir_sibling_deprels = list(
+                        tree_maps.head2right_deprels[node["head"]]
+                    )
+                    if node["id"] > node["head"]:
+                        dir_sibling_deprels = remove_first_occurrence(
+                            dir_sibling_deprels, node["deprel"]
+                        )
+
+                for deprel in sibling_deprel_candidates:
+                    features[f"{prefix}_sibling-deprel-{sibling_dir}_{deprel}"] = (
+                        deprel in dir_sibling_deprels
+                    )
+
         # Sibling lemma for specific deprels
-        sibling_lemmas = head2child_lemmas[node["head"]]
-        for deprel in sibling_deprel_candidates:
-            lemma_val = "None"
-            for dep, lem in zip(head2child_deprels[node["head"]], sibling_lemmas):
-                if dep == deprel and dep != node["deprel"]:
-                    lemma_val = lem
-                    break
-            features[f"{prefix}_sibling-lemma_{deprel}"] = lemma_val
+        if lexicalize:
+            sibling_lemmas = tree_maps.head2child_lemmas[node["head"]]
+            for deprel in sibling_deprel_candidates:
+                lemma_val = "None"
+                for dep, lem in zip(
+                    tree_maps.head2child_deprels[node["head"]], sibling_lemmas
+                ):
+                    if dep == deprel and dep != node["deprel"]:
+                        lemma_val = lem
+                        break
+                features[f"{prefix}_sibling-lemma_{deprel}"] = lemma_val
 
         # Sibling morphological features
         for feat in all_feats:
@@ -385,14 +557,15 @@ def extract_node_features(
                     features[f"{prefix}_sibling-feat_{deprel}_{feat}"] = None
                 else:
                     features[f"{prefix}_sibling-feat_{deprel}_{feat}"] = (
-                        head2child_feat[node["head"]].get(deprel, {}).get(feat)
+                        tree_maps.head2child_feats[node["head"]]
+                        .get(deprel, {})
+                        .get(feat)
                     )
 
     # Child features (node's own dependents)
-    child_deprel_candidates = set(all_deprel) - set(target.child_deprels or [])
-    child_deprels = head2child_deprels[node["id"]]
-    child_pos = head2child_pos[node["id"]]
-    child_lemmas = head2child_lemmas[node["id"]]
+    child_deprel_candidates = set(all_deprel) - excluded_deprels
+    child_deprels = tree_maps.head2child_deprels[node["id"]]
+    child_pos = tree_maps.head2child_pos[node["id"]]
 
     for deprel in child_deprel_candidates:
         features[f"{prefix}_child-deprel_{deprel}"] = deprel in child_deprels
@@ -400,18 +573,20 @@ def extract_node_features(
     for pos in all_pos:
         features[f"{prefix}_child-pos_{pos}"] = pos in child_pos
 
-    for deprel in child_deprel_candidates:
-        lemma_val = "None"
-        for dep, lem in zip(child_deprels, child_lemmas):
-            if dep == deprel:
-                lemma_val = lem
-                break
-        features[f"{prefix}_child-lemma_{deprel}"] = lemma_val
+    if lexicalize:
+        child_lemmas = tree_maps.head2child_lemmas[node["id"]]
+        for deprel in child_deprel_candidates:
+            lemma_val = "None"
+            for dep, lem in zip(child_deprels, child_lemmas):
+                if dep == deprel:
+                    lemma_val = lem
+                    break
+            features[f"{prefix}_child-lemma_{deprel}"] = lemma_val
 
     for feat in all_feats:
         for deprel in child_deprel_candidates:
             features[f"{prefix}_child-feat_{deprel}_{feat}"] = (
-                head2child_feat[node["id"]].get(deprel, {}).get(feat)
+                tree_maps.head2child_feats[node["id"]].get(deprel, {}).get(feat)
             )
 
     return features
@@ -464,19 +639,11 @@ def extract_sen_features(tree):
     return feature2val
 
 
-def extract_instances(tree, tree_idx, target: PredictionTarget, tree_metadata,
-                      um_data, predictor_var, fetch_all=False):
-    """
-    Extract training instances from a tree based on the prediction target.
-
-    Returns:
-        list of dicts, where each dict contains features for one instance
-    """
-    instances = []
-
-    # Build tree structure metadata
+def _build_tree_maps(tree) -> TreeMaps:
+    """Build per-tree index structures needed by extract_node_features."""
     child2head = {}
     child2root = defaultdict(set)
+    head2child_ids = defaultdict(list)
     head2child_deprels = defaultdict(list)
     head2child_pos = defaultdict(set)
     head2child_lemmas = defaultdict(list)
@@ -486,6 +653,7 @@ def extract_instances(tree, tree_idx, target: PredictionTarget, tree_metadata,
 
     for child in tree:
         child2head[child["id"]] = child["head"]
+        head2child_ids[child["head"]].append(child["id"])
         head2child_deprels[child["head"]].append(child["deprel"])
         head2child_pos[child["head"]].add(child["upos"])
         head2child_lemmas[child["head"]].append(child["lemma"])
@@ -504,6 +672,42 @@ def extract_instances(tree, tree_idx, target: PredictionTarget, tree_metadata,
         while head != 0:
             child2root[child].add(tree[head - 1]["deprel"])
             head = child2head[head]
+
+    return TreeMaps(
+        child2root=child2root,
+        head2child_ids=head2child_ids,
+        head2child_deprels=head2child_deprels,
+        head2child_lemmas=head2child_lemmas,
+        head2left_deprels=head2left_deprels,
+        head2right_deprels=head2right_deprels,
+        head2child_pos=head2child_pos,
+        head2child_feats=head2child_feats,
+    )
+
+
+def extract_instances(
+    tree,
+    tree_idx,
+    target: PredictionTarget,
+    tree_metadata,
+    predictor_var: str | None = None,
+    lexicalize: bool = False,
+    um_data: pd.DataFrame | None = None,
+    fetch_all: bool = False,
+):
+    """
+    Extract training instances from a tree.
+
+    When target is None, returns one instance per (head, child) pair across all
+    non-root tokens, using prefix 'head' and 'child'. When target is provided,
+    filters to matching head-child groups and uses the deprel as the child prefix.
+
+    Returns:
+        list of dicts, where each dict contains features for one instance
+    """
+    instances = []
+
+    tree_maps = _build_tree_maps(tree)
 
     all_feats, _, all_deprel, all_pos = tree_metadata
 
@@ -553,28 +757,29 @@ def extract_instances(tree, tree_idx, target: PredictionTarget, tree_metadata,
             "tree_idx": tree_idx,
         }
 
+        excluded_deprels = set(target.child_deprels)
+
         # Extract features for the head
         head_features = extract_node_features(
             head,
             tree,
-            child2root,
-            head2child_deprels,
-            head2child_lemmas,
-            head2left_deprels,
-            head2right_deprels,
-            head2child_pos,
-            head2child_feats,
+            tree_maps,
             "head",
             all_feats,
             all_deprel,
             all_pos,
             target,
-            um_data,
-            fetch_all,
+            lexicalize=lexicalize,
+            excluded_deprels=excluded_deprels,
+            um_data=um_data,
+            fetch_all=fetch_all
         )
         if head_features == None: # item failed PredictionTarget filters
             continue
         instance.update(head_features)
+
+        if len(head_features) == 0:  # item failed PredictionTarget filters
+            continue
 
         # Extract features for each child type; use deprel as prefix (e.g. "nsubj_pos", "amod_pos")
         for deprel in target.child_deprels:
@@ -585,43 +790,40 @@ def extract_instances(tree, tree_idx, target: PredictionTarget, tree_metadata,
             child_features = extract_node_features(
                 child,
                 tree,
-                child2root,
-                head2child_deprels,
-                head2child_lemmas,
-                head2left_deprels,
-                head2right_deprels,
-                head2child_pos,
-                head2child_feats,
+                tree_maps,
                 deprel,
                 all_feats,
                 all_deprel,
                 all_pos,
                 target,
-                um_data,
-                fetch_all,
+                lexicalize=lexicalize,
             )
             instance.update(child_features)
 
             # add SV agreement variable for predictor_var (e.g. "head_nsubj_Number_agreement")
             # 1. is feature annotated on head & target child?, 2. is value the same? -> TRUE else False
             if predictor_var and "agreement" in predictor_var:
-                target_feature = re.match(r".*_([A-Z][a-z]+)_.*", predictor_var).group(1)
+                target_feature = re.match(r".*_([A-Z][a-z]+)_.*", predictor_var).group(
+                    1
+                )
                 head_val = head_features.get(f"head_{target_feature}", None)
                 child_val = child_features.get(f"{deprel}_{target_feature}", None)
                 if head_val == child_val:
-                    if head_val!=None:
-                        agreement_label = "Yes" # both set and agreeing
+                    if head_val != None:
+                        agreement_label = "Yes"  # both set and agreeing
                     else:
-                        agreement_label = "--" # both undefined
-                elif head_val!=None:
-                    if child_val!=None:
-                        agreement_label = "No" # both set but disagreement
+                        agreement_label = "--"  # both undefined
+                elif head_val != None:
+                    if child_val != None:
+                        agreement_label = "No"  # both set but disagreement
                     else:
-                        agreement_label = "+-" # child feat not set
-                elif head_val==None:
-                    agreement_label = "+-" # head feat notset
+                        agreement_label = "+-"  # child feat not set
+                elif head_val == None:
+                    agreement_label = "+-"  # head feat notset
                 else:
-                    raise ValueError("Value combination inadmissable") # should not occur
+                    raise ValueError(
+                        "Value combination inadmissable"
+                    )  # should not occur
 
                 instance[f"head_{deprel}_{target_feature}_agreement"] = agreement_label
 
@@ -640,45 +842,91 @@ def extract_instances(tree, tree_idx, target: PredictionTarget, tree_metadata,
     return instances
 
 
-def extract_features(treebank, target: PredictionTarget, um_data, predictor_var,
-                     fetch_all=False):
+def _categorize(df: pd.DataFrame) -> pd.DataFrame:
+    """Convert object-dtype columns to categorical, skipping columns with unhashable values."""
+    for col in df.select_dtypes(include="object").columns:
+        if df[col].isna().all():
+            continue
+        try:
+            non_null = df[col].dropna().unique()
+            if len(non_null) == 1 and non_null[0] is True:
+                df.loc[df[col].isna(), col] = False
+
+            df[col] = df[col].astype("category")
+        except TypeError:
+            # some columns are lists of strings, we leave those as is
+            pass
+
+    return df
+
+
+def records_to_df(records: list[dict]) -> pd.DataFrame:
+    """Create a DataFrame from feature records with object columns as categorical."""
+    return _categorize(pd.DataFrame(records))
+
+
+def extract_features(
+    treebank,
+    target: PredictionTarget | None = None,
+    predictor_var: str | None = None,
+    lexicalize: bool = False,
+    batch_size: int = 500,
+    um_data: pd.DataFrame | None = None,
+    fetch_all: bool = False
+):
     """
     Extract features from treebank based on prediction target.
 
-    Args:
-        treebank: Loaded treebank
-        target: PredictionTarget specifying what to predict
-
-    Returns:
-        list of dicts, where each dict is one training instance
+    Flushes instance dicts to a plain DataFrame every batch_size trees to
+    avoid holding the full list of dicts in memory at once. Returns a list
+    of partial DataFrames; the caller is responsible for concatenating and
+    categorizing them (see create_word_order_df).
     """
     all_feats, all_lemma_freqs, all_deprel, all_pos = get_all_feats(treebank)
     tree_metadata = (all_feats, all_lemma_freqs, all_deprel, all_pos)
 
-    all_instances = []
+    dfs = []
+    batch = []
 
     for tree_idx, tree in tqdm(enumerate(treebank), total=len(treebank)):
-        instances = extract_instances(tree, tree_idx, target, tree_metadata,
-                                      um_data, predictor_var, fetch_all=fetch_all)
-        all_instances.extend(instances)
+        batch.extend(
+            extract_instances(
+                tree,
+                tree_idx,
+                target,
+                tree_metadata,
+                lexicalize=lexicalize,
+                predictor_var=predictor_var,
+                um_data=um_data,
+                fetch_all=fetch_all
+            )
+        )
 
-        if len(instances) > 0 and len(instances) % 100 == 0:
-            print(len(instances))
+        if (tree_idx + 1) % batch_size == 0 and batch:
+            batch_df = _categorize(pd.DataFrame(batch))
+            dfs.append(batch_df.dropna(axis=1, how="all"))
+            batch.clear()
 
-    return all_instances
+    if batch:
+        batch_df = _categorize(pd.DataFrame(batch))
+        dfs.append(batch_df.dropna(axis=1, how="all"))
+
+    return dfs
 
 
 def create_word_order_df(
-    target: PredictionTarget,
+    target: PredictionTarget | None = None,
     treebank: Treebank | None = None,
     lang: str | None = None,
     resource_dir: str | None = None,
     save_to: str | None = None,
     max_treebank_len: int | None = None,
     drop_singleton_columns: bool = False,
-    um_data = None,
     predictor_var = None,
-    fetch_all = False,
+    lexicalize: bool = False,
+    batch_size: int = 500,
+    um_data: pd.DataFrame | None = None,
+    fetch_all: bool = False,
 ) -> pd.DataFrame:
     """
     Create a DataFrame with word order features for a given language and prediction target.
@@ -697,31 +945,29 @@ def create_word_order_df(
 
     Returns:
         DataFrame with extracted features
-
-    Examples:
-        # Predict adjective-noun order
-        df = create_word_order_df(
-            "en",
-            PredictionTarget(mode="child_head", child_deprel="amod")
-        )
-
-        # Predict SVO order
-        df = create_word_order_df(
-            "en",
-            PredictionTarget(
-                mode="multi_child",
-                child_deprels=["nsubj", "obj"],
-                head_deprel="root"
-            )
-        )
     """
+    if save_to is not None:
+        assert lang is not None, "lang must be provided for saving"
+
     if treebank is None:
-        assert lang is not None
+        assert lang is not None, "lang must be provided for loading treebank"
         treebank = load_treebank(lang, resource_dir, max_treebank_len=max_treebank_len)
 
-    all_instances = extract_features(treebank, target, um_data, predictor_var,
-                                     fetch_all=fetch_all)
-    df = pd.DataFrame(all_instances)
+    dfs = extract_features(
+        treebank,
+        target,
+        predictor_var=predictor_var,
+        lexicalize=lexicalize,
+        batch_size=batch_size,
+        um_data=um_data,
+        fetch_all=fetch_all
+    )
+    df = pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
+
+    del dfs
+    gc.collect()
+
+    df = _categorize(df)
 
     if drop_singleton_columns and len(df) > 0:
         always_keep = {"deprel_order", "sen", "treebank", "sent_id", "tree_idx"}
@@ -733,8 +979,66 @@ def create_word_order_df(
         df = df[[*kept_always, *keep.index[keep]]].copy()
 
     if save_to is not None and len(df) > 0:
-        output_path = os.path.join(save_to, f"{lang.replace(' ', '_')}.csv")
+        output_path = os.path.join(save_to, f"{lang.replace(' ', '_')}.parquet")
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
-        df.to_csv(output_path, index=False)
+        df.to_parquet(output_path, index=False)
 
     return df
+
+
+def split_node_dfs(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Split a combined (head, child) DataFrame — as produced by create_word_order_df(target=None)
+    — into the head_df and child_df expected by fit_reattachment_classifiers.
+
+    head_df: head_* columns, deduplicated by (tree_idx, head_idx), with a child_deprels
+             column listing every child deprel observed for that head in df, and a
+             deprel_directions column mapping each unambiguously-directed deprel to "L" or "R".
+    child_df: child_* columns + deprel label (= child_deprel) + metadata.
+              child_deprel is kept as a feature column; the separate 'deprel' column
+              is used as the classification label in build_training_data.
+    """
+    meta = ["tree_idx", "sent_id"]
+
+    head_cols = meta + [c for c in df.columns if c.startswith("head_")]
+    child_cols = meta + [c for c in df.columns if c.startswith("child_")]
+
+    child_deprels_per_head = (
+        df.groupby(["tree_idx", "head_idx"])["child_deprel"]
+        .apply(list)
+        .reset_index()
+        .rename(columns={"child_deprel": "child_deprels"})
+    )
+
+    # Build deprel_directions: {deprel: "L"/"R"} per head.
+    # child_dir (0=left, 1=right) is set by extract_node_features.
+    # Deprels where children appear on both sides are excluded (ambiguous).
+    dir_agg = (
+        df.groupby(["tree_idx", "head_idx", "child_deprel"])["child_dir"]
+        .agg(["first", "nunique"])
+        .reset_index()
+    )
+    unambiguous = dir_agg[dir_agg["nunique"] == 1].copy()
+    unambiguous["_dir"] = unambiguous["first"].map({0: "L", 1: "R"})
+    deprel_directions_per_head = (
+        unambiguous.groupby(["tree_idx", "head_idx"])
+        .apply(lambda g: dict(zip(g["child_deprel"], g["_dir"])))
+        .reset_index(name="deprel_directions")
+    )
+
+    head_df = (
+        df[head_cols]
+        .drop_duplicates(subset=["tree_idx", "head_idx"])
+        .merge(child_deprels_per_head, on=["tree_idx", "head_idx"])
+        .merge(deprel_directions_per_head, on=["tree_idx", "head_idx"], how="left")
+        .reset_index(drop=True)
+    )
+    # Heads with no unambiguous-direction children get an empty dict
+    head_df["deprel_directions"] = head_df["deprel_directions"].apply(
+        lambda x: x if isinstance(x, dict) else {}
+    )
+
+    child_df = df[child_cols].copy()
+    child_df["deprel"] = df["child_deprel"].values
+
+    return head_df, child_df

@@ -5,6 +5,8 @@ from .prediction_target import PredictionTarget
 
 ALL_CORE_ARGS = ["vos", "vso", "ovs", "svo", "osv", "sov"]
 
+MAX_TREEBANK_LEN = 30_000
+
 
 def capitalize_first(word: str) -> str:
     if len(word) == 0:
@@ -44,6 +46,8 @@ def get_all_orders(predictor_var: str, target: PredictionTarget):
     if predictor_var == "core_args":
         all_orders = ALL_CORE_ARGS
     else:
+        #print("target", target, type(target))
+
         deprels = target.child_deprels + ["head"]
         all_orders = [
             shorten_cls("_".join(permutation), target)

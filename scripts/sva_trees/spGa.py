@@ -20,12 +20,13 @@ if __name__=="__main__":
 
     target = nsubj_target
     target.head_feats = {"VerbForm": (lambda x: x=="Part")}
+    target.swap_feat = "Gender"
     # target.child_feats = {}
     deprel_dir = "_".join(target.child_deprels)
     resource_dir = "../../resources"
 
     pipeline = Pipeline(target=target,
-                        predictor_var="head_nsubj_Gender_agreement",
+                        predictor_var=f"head_nsubj_{target.swap_feat}_agreement",
                         langs=(args.langs if args.langs else get_ud_langs(resource_dir)), 
                         inflection_map=swap_number_subj_any,
                         unimorph_args = {
