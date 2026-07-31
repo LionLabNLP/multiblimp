@@ -10,6 +10,12 @@ from .languages import latin_to_cyrillic
 from .ud2um import load_ud_features
 from .unimorph_features import load_um_features
 
+import sys
+sys.path.append("../../")
+from resources.um2ud_morpho.UM2UD_mapper import map_um_value_to_ud, UM2UD_values
+from resources.um2ud_morpho.UM_tagset import UM_feature2values
+
+
 unmarked_features = {
     "Degree",
 }
@@ -38,6 +44,12 @@ UD2UM = {
 }
 UM2UD = {v: k for k, v in UD2UM.items()}
 UM2UD["INDF"] = "Ind"
+# overwrite mapping
+# UM value strings are unique
+UM2UD = {k: list(v.values())[0] if v.values() else None for k, v in UM2UD_values.items()}
+# for UD->UM we must map via feature name first
+UD2UM = {tuple(v.items())[0]: k for k, v in UM2UD_values.items() if v.items()}
+
 
 
 def allval2um(val):
@@ -318,7 +330,7 @@ class UnimorphInflector:
         ufeat_cols = {x: [] for x in self.feat2val}
 
         for ufeat in df.ufeat:
-            row_ufeats = self.ufeats2dict(ufeat)
+            row_ufeats = self.ufeats2dict(ufeat)# map_um_value_to_ud(ufeat)# XCX self.ufeats2dict(ufeat) # to  map_um_value_to_ud(ufeat) #?
             for ufeat_col in self.feat2val:
                 ufeat_cols[ufeat_col].append(row_ufeats.get(ufeat_col))
 
@@ -368,7 +380,7 @@ class UnimorphInflector:
 
         for ufeat, values in filter.items():
             if ufeat in df.columns:
-                values = self.val2ud_um(ufeat, values)
+                values = self.val2ud_um(ufeat, values) # TODO
                 pos_values = [val for val in values if not val.startswith("-")]
                 neg_values = [val[1:] for val in values if val.startswith("-")]
 
@@ -429,7 +441,7 @@ class UnimorphInflector:
                     all_vals = val.split("+")
                     for extra_val in all_vals:
                         extra_row = row.copy()
-                        extra_row[ufeat] = self.val2ud_um(ufeat, extra_val)
+                        extra_row[ufeat] = self.val2ud_um(ufeat, extra_val) #TODO
                         df_rows.append(extra_row)
 
                     # We expand only one ufeat per loop, if multiple ufeats are disjunctions we get to those
@@ -506,7 +518,7 @@ class UnimorphInflector:
                 new_swap_map[new_feat1] = new_feat2
             self.inflection_map = (swap_ufeat, new_swap_map)
 
-    def ufeats2dict(self, ufeats: str) -> Dict[str, str]:
+    def ufeats2dict(self, ufeats: str) -> Dict[str, str]: # replace with um2ud_mapper 
         """Translates the unimorph X;Y;Z format to a dictionary"""
         ufeats = (
             str(ufeats)
@@ -650,7 +662,7 @@ class UnimorphInflector:
             elif ufeat in strategy:
                 um_features[ufeat] = strategy[ufeat]
             else:
-                um_features[ufeat] = self.val2ud_um(ufeat, val)
+                um_features[ufeat] = UD2UM.get((ufeat, val), None)#self.val2ud_um(ufeat, val)
 
         if set_defaults:
             for ufeat, val in DEFAULTS.items():
@@ -830,7 +842,7 @@ class UnimorphInflector:
                         continue
                     else:
                         feature_val = allval2um(val)
-                        row_features[ufeat] = self.val2ud_um(ufeat, swap_map[val])
+                        row_features[ufeat] = self.val2ud_um(ufeat, swap_map[val]) #TODO
                 elif val == UNDEFINED:
                     continue
                 else:
@@ -886,43 +898,64 @@ class UnimorphInflector:
                     )
                     form_features.update(ud_form_features)
 
-            elif fetch_all:
-                # extract as many as possible? majority rules?
-                form_rows = self.partial_df_match(
-                    self.form_groups, form, um_features,
-                    prefer_tight_match=prefer_tight_match
-                )
-                if (len(form_rows) == 1): # easy case, we only get one good candidate
-                   ## thresholding?
-                    with open("rivals.txt", "a", encoding="utf-8") as f:
-                        matchrow = form_rows.filter(regex='^(?![ufeat])')
-                        matchfeats = {col: matchrow[col][matchrow.index[0]] for col in matchrow
-                                      if col not in um_features and str( matchrow[col][matchrow.index[0]])!="nan"}
-                        if matchfeats:
-                            print(form, um_features, file=f)
-                            print(matchfeats, file=f)
-                          #  print(UM2UD, file=f)
+            # elif fetch_all:
+            #     # extract as many as possible? majority rules?
+            #     form_rows = self.partial_df_match(
+            #         self.form_groups, form, um_features,
+            #         prefer_tight_match=prefer_tight_match
+            #     )
+            #     #if len(form_rows):
+            #     if (len(form_rows) == 1): # easy case, we only get one good candidate
+            #         add_feats = False
+            #        ## thresholding?
+            #         with open("debug_mapping.txt", "a", encoding="utf-8") as f:
+            #             #matchrow = form_rows.filter(regex='^(?![ufeat])')
+            #             for i, row in form_rows.iterrows():
+            #                 transfeats = map_um_value_to_ud(row["ufeat"])["morpho"]
+            #             for k,v in transfeats.items():
+            #                 if not k in um_features:
+            #                     if add_feats==False: add_feats = dict()
+            #                     add_feats[k] = v
+            #                   #  print(form_rows)
+            #             if add_feats:
+            #                 print("0",form, features, file=f)
+            #                 print("1", row["ufeat"], file=f)
+            #                 print("3",transfeats, file=f)
+            #                 print("4 add:", add_feats, file=f)
+            #                 print("-"*50, file=f)
 
-                            for feat,v in matchfeats.items():
-                                if v!="NFIN":
-                                    print(self.val2feat, file=f)
-                                    print(f"{feat}: {v} -> {self.val2ud_um(feat, v)}", file=f)
-                                # map from UM feat, val to UD feat,val
-                                    raise ValueError
-       
+                          #  print("1", (row["ufeat"]), "->", transfeats, file=f)
+                           # raise ValueError
 
-                        print("-"*50, file=f)
-               
-               
-               
-                # if self.ud_inflector is not None:
-                #     if only_try_ud_if_no_um and len(form_features) > 0:
+                            # matchfeats = {col: matchrow[col][matchrow.index[0]] for col in matchrow
+                            #             if col not in um_features and str(matchrow[col][matchrow.index[0]]) not in ["NaN", "nan"]}
+                            # # only wort checking if we have no conflicts 
+                            # matchfeats_trans = map_um_value_to_ud(form_rows["ufeat"])
+                            # if matchfeats and not any([0 if um_features.get(k, None)==v or um_features.get(k, None)==None else 1
+                            #                             for k,v in matchfeats.items()]):
+                            #     print("1",form, um_features, file=f)
+                            #     print("2 um_feats", matchfeats, file=f)
+                            #     print("3 matchfeats_trans", matchfeats_trans, file=f)
+                            # #  print(UM2UD, file=f)
+
+                            #     for feat,v in matchfeats.items():
+                            #             #print(self.val2feat, file=f)
+                            #         print(f"{feat}: {v} -> {map_um_value_to_ud(v)}", file=f)
+                            #         # map from UM feat, val to UD feat,val
+                            #         print()
+                            #         raise ValueError
+                            # print("-"*50, file=f)
+                    # if self.ud_inflector is not None:
+                    #     if only_try_ud_if_no_um and len(form_features) > 0:
                 #         return form_features
                 #     ud_form_features = self.ud_inflector.get_form_features(
                 #         form, features, ufeat=None
                 #     )
                 #     form_features.update(ud_form_features)
 
-       
-
         return form_features
+
+
+def retrieve_um_anno(entry: dict, df: pd.DataFrame, args):
+    
+    pass

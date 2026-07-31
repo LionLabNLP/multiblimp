@@ -25,6 +25,9 @@ class PredictionTarget:
     # Optional: filter by head's specific feature annotation
     head_feats: dict[str: str] | None = None
 
+    # Feature to swap inflection for
+    swap_feat: str | None = None
+
     def __post_init__(self):
         if not self.child_deprels:
             raise ValueError("child_deprels must be non-empty")

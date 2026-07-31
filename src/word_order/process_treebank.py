@@ -1,3 +1,4 @@
+from pyexpat import features
 import sys
 import ast
 import os
@@ -11,10 +12,12 @@ sys.path.append("src")
 from tqdm.notebook import tqdm
 import pandas as pd
 import numpy as np
+from typing import *
 
 from multiblimp.treebank import Treebank
 from multiblimp.languages import remove_diacritics_langs, gblang2udlang
-from multiblimp.unimorph import UM2UD, UnimorphInflector
+from multiblimp.unimorph import UM2UD, UD2UM, UnimorphInflector
+from resources.um2ud_morpho.UM2UD_mapper import map_um_value_to_ud, safe_dict_update
 
 from .prediction_target import PredictionTarget
 from .utils import shorten_cls
@@ -85,6 +88,148 @@ def get_all_feats(treebank, min_freq=0.005):
 
     return set(all_feats), all_lemma_freqs, all_deprel, all_pos
 
+UNDEFINED = "UNDEFINED"
+
+def partial_df_match(
+        um_data,
+        match_feats : dict,
+        ufeat,
+        features: Dict[str, str],
+        prefer_tight_match: Optional[bool] = None,
+    ):
+        """Find all rows in the morphology dataframe that match the
+        group_index (lemma or form) and the features in the provided
+        `features` dictionary.
+        """
+
+        for filter_type, filter_value in match_feats.items():
+            #print("filtering", filter_type, filter_value)
+            if filter_value not in [None, "_"]:
+                um_data = um_data[um_data[filter_type] == filter_value]
+            if len(um_data) == 0:
+                return um_data.iloc[0:0]
+        sub_df = um_data
+
+        # print(sub_df)
+        # print(match_feats)
+        # print(features)
+        # if len(groups.indices.get(group_index, [])) == 0:
+        #     empty_df = um_data.iloc[0:0]
+        #     return empty_df
+
+        # sub_df = groups.get_group(group_index)
+
+        # if len(sub_df) == 0:
+        #     return sub_df
+        # elif len(sub_df)>1:
+        #     sub_df = sub_df[sub_df["lemma"] == node["lemma"]]
+        #     if len(sub_df)==0:
+
+        #         return um_data.iloc[0:0]
+
+        mask = np.ones(len(sub_df), dtype=bool)
+
+        for col, val in features.items():
+            if isinstance(val, list):
+                sub_mask = np.zeros_like(mask)
+                for subval in val:
+                    sub_mask |= sub_df[col] == subval
+                mask &= sub_mask
+            elif (val is not None) and (pd.notna(val)):
+                if val.startswith("-"):
+                    mask &= (sub_df[col] != val[1:]) & (sub_df[col] != UNDEFINED)
+                elif col == ufeat:
+                    mask &= sub_df[col] == val
+                else:
+                    try:
+                        mask &= (
+                            (sub_df[col] == val)
+                            | (sub_df[col] == UNDEFINED)
+                            | pd.isna(sub_df[col])
+                        )
+                    except:
+                        pass
+                        #print("???SOS", match_feats, features)
+
+        candidate_rows = sub_df[mask]
+       # print(candidate_rows)
+       # print()
+
+
+        if (not prefer_tight_match) or (len(candidate_rows) < 2):
+            return candidate_rows
+
+        features_added = np.zeros(len(candidate_rows))
+        for idx, (_, row) in enumerate(candidate_rows.iterrows()):
+            for ufeat, val in row.items():
+                if (not pd.isna(val)) or (val == UNDEFINED):
+                    # If it is a not-nan feature that is not present in the matching row, +1
+                    features_added[idx] += ufeat not in features
+                elif (not pd.isna(features.get(ufeat))) and (
+                    pd.isna(val) or (val == UNDEFINED)
+                ):
+                    # If it is a nan feature that *is* present in the matching row, +1
+                    features_added[idx] += 1
+
+        min_features_added = min(features_added)
+        min_features_added_mask = features_added == min_features_added
+
+        return candidate_rows[min_features_added_mask]
+
+
+def expand_anno(node, morph_feats, target, um_split):
+    # make copy to keep upos/lemma separate from conllu Token's feats
+    inflect_feats = morph_feats
+    inflect_feats["upos"] = node["upos"]
+    # allows for soft matching if no lemma was specified in UD
+    inflect_feats["lemma"] = node.get("lemma", None) if node.get("lemma", None) != "_" else None
+
+    um_feats = {f: (UD2UM.get((f,v), None) if f!="lemma" else v) for f, v in inflect_feats.items()}
+
+    form_rows = partial_df_match(
+        um_split,
+        {"form": node["form"], "lemma":inflect_feats["lemma"]},
+        target,
+        um_feats,
+        prefer_tight_match=True
+    )
+    add_feats=False
+    if len(form_rows):
+        unified = dict()
+        for i, row in form_rows.iterrows():
+            transformed =  map_um_value_to_ud(row["ufeat"])
+            for k, v in transformed["morpho"].items():
+                unified[k] = unified.get(k, list()) + [v]
+            unified["upos"] = unified.get("upos", list()) + [transformed["upos"]]
+
+        unified = {k: list(set(v))[0] for k, v in unified.items() if len(list(set(v)))==1}
+
+        if( not any(
+                    [1 if (inflect_feats.get(k, False) and 
+                            inflect_feats.get(k, False)!=v and
+                            inflect_feats.get(k, False)!="UNDEFINED"
+                            ) else 0 for k, v in unified.items()]
+                )):
+                    #unanimous feat matches
+                    #check for conflict with og data stil
+                    for k,v in unified.items():
+                        if not k in um_feats:#s and len(set(v))==1:
+                            if add_feats==False: add_feats = dict()
+                            add_feats[k] = v
+
+        if add_feats:
+            with open ("debug_mapping.txt", "a", encoding="utf-8") as f:
+                print("node prev", node.items(), file=f)
+                for feat, val in add_feats.items():
+                    morph_feats[feat] = val
+                print("form rows", form_rows, file=f)
+                print("unified:", unified, file=f)
+                print("add:", add_feats, file=f)
+                print("node post", node.items(), file=f)
+                print("-"*50, file=f)
+
+    #print("morph_feats", morph_feats)
+    return morph_feats
 
 def extract_node_features(
     node,
@@ -101,14 +246,15 @@ def extract_node_features(
     all_deprel: set,
     all_pos: set,
     target: PredictionTarget,
-    inflector: UnimorphInflector
+    um_data: pd.DataFrame=None,
+    fetch_all=False
 ):
     """
     Extract all features for a specific node (whether it's a child, head, or co-child).
     This ensures consistent feature extraction across all node types.
     """
     features = {}
-    morph_feats = dict()
+    if type(node.get("feats", None))!=dict: node["feats"] = dict()
 
     # Basic node features
     features[f"{prefix}_deprel"] = node["deprel"]
@@ -118,10 +264,38 @@ def extract_node_features(
     features[f"{prefix}_idx"] = node["id"]
 
     # Morphological features
+    prev = dict()
+    prev[f"{prefix}_deprel"] = node["deprel"]
+    prev[f"{prefix}_pos"] = node["upos"]
+    prev[f"{prefix}_form"] = node["form"].lower() if node["upos"]!="PROPN" else node["form"]
+    prev[f"{prefix}_lemma"] = node["lemma"]
+    prev[f"{prefix}_idx"] = node["id"]
+
+
+    for feat in all_feats:
+        prev[f"{prefix}_{feat}"] = (node["feats"] or {}).get(feat)
+
+    if type(um_data)==dict and fetch_all:
+        # first check if we could even get any more anno from UM for this upos
+        um_split = um_data.get(UD2UM["upos", node["upos"]], None)
+        if type(um_split)==pd.DataFrame and (
+            not all([node["feats"].get(k, False) for k in [x for x in um_split.columns if x[0].isupper()]])):
+            node["feats"] = expand_anno(node, node["feats"], target, um_split)
+    # Create morphological df features
+    #print("all_feats", all_feats)
+    #print("node feats", node.items(), node.get("feats", {}))
+    all_feats.update(set(node.get("feats", {}).keys()))
+    #print("all_feats", all_feats)
+
     for feat in all_feats:
         features[f"{prefix}_{feat}"] = (node["feats"] or {}).get(feat)
-        if (node["feats"] or {}).get(feat, None):
-            morph_feats[feat] = node["feats"].get(feat, None)
+
+    # if sorted(prev.items()) != sorted(features.items()):
+    #     with open ("debug_mapping.txt", "a", encoding="utf-8") as f:
+    #         print("prev", prev, file=f)
+    #         print("new", features, file=f)
+    #         print("node", node, file=f)
+    #         print("-"*50, file=f)
 
     # Further optional filters for head from PredictionTarget; filter is (lamnda x: condition)
     if prefix=="head" and target.head_feats is not None:
@@ -131,31 +305,6 @@ def extract_node_features(
              ):
             return None # item does not fulfil PredictionTarget feature filters, drop instance
 
-    # use and load inflector to add missing features
-    # TODO?: modify inflector to fetch all possible feature values, and not
-    # just for current swap type?
-    if inflector:# and morph_feats.get(inflector.ufeat, None)==None:
-        inflect_feats = morph_feats
-        # allows for soft matching if no lemma was specified in UD
-        if node["lemma"]: inflect_feats["lemma"] = node["lemma"]
-
-        um_feats = inflector.get_form_features(node["form"],
-                                               features = inflect_feats,
-                                               only_try_ud_if_no_um=True,
-                                               prefer_tight_match=True,
-                                               fetch_all=False)
-        um_feats.discard("UNDEFINED")
-        if um_feats: 
-           node[inflector.ufeat] = um_feats
-
-    # Further optional filters for head from PredictionTarget; filter is (lamnda x: condition)
-    if prefix=="head" and target.head_feats is not None:
-        if not all(
-            [val_filter(features.get(f"{prefix}_{feat}", None)) 
-             for feat, val_filter in target.head_feats.items()]
-             ):
-            return None # item does not fulfil PredictionTarget feature filters, drop instance
-    
     # Features about this node's relationship to its head
     if node["head"] != 0:
         head = tree[node["head"] - 1]
@@ -316,7 +465,7 @@ def extract_sen_features(tree):
 
 
 def extract_instances(tree, tree_idx, target: PredictionTarget, tree_metadata,
-                      inflector, predictor_var):
+                      um_data, predictor_var, fetch_all=False):
     """
     Extract training instances from a tree based on the prediction target.
 
@@ -420,14 +569,12 @@ def extract_instances(tree, tree_idx, target: PredictionTarget, tree_metadata,
             all_deprel,
             all_pos,
             target,
-            inflector,
+            um_data,
+            fetch_all,
         )
         if head_features == None: # item failed PredictionTarget filters
             continue
         instance.update(head_features)
-        
-        if head_features == None: # item failed PredictionTarget filters
-            continue
 
         # Extract features for each child type; use deprel as prefix (e.g. "nsubj_pos", "amod_pos")
         for deprel in target.child_deprels:
@@ -450,7 +597,8 @@ def extract_instances(tree, tree_idx, target: PredictionTarget, tree_metadata,
                 all_deprel,
                 all_pos,
                 target,
-                inflector
+                um_data,
+                fetch_all,
             )
             instance.update(child_features)
 
@@ -492,7 +640,8 @@ def extract_instances(tree, tree_idx, target: PredictionTarget, tree_metadata,
     return instances
 
 
-def extract_features(treebank, target: PredictionTarget, inflector, predictor_var):
+def extract_features(treebank, target: PredictionTarget, um_data, predictor_var,
+                     fetch_all=False):
     """
     Extract features from treebank based on prediction target.
 
@@ -509,7 +658,8 @@ def extract_features(treebank, target: PredictionTarget, inflector, predictor_va
     all_instances = []
 
     for tree_idx, tree in tqdm(enumerate(treebank), total=len(treebank)):
-        instances = extract_instances(tree, tree_idx, target, tree_metadata, inflector, predictor_var)
+        instances = extract_instances(tree, tree_idx, target, tree_metadata,
+                                      um_data, predictor_var, fetch_all=fetch_all)
         all_instances.extend(instances)
 
         if len(instances) > 0 and len(instances) % 100 == 0:
@@ -526,8 +676,9 @@ def create_word_order_df(
     save_to: str | None = None,
     max_treebank_len: int | None = None,
     drop_singleton_columns: bool = False,
-    inflector = None,
+    um_data = None,
     predictor_var = None,
+    fetch_all = False,
 ) -> pd.DataFrame:
     """
     Create a DataFrame with word order features for a given language and prediction target.
@@ -540,6 +691,9 @@ def create_word_order_df(
         save_to: Directory to save CSV to (optional)
         max_treebank_len: Maximum number of sentences to process
         drop_singleton_columns: drop columns with only a single value
+        um_data: all unimorph data for current language
+        predictor_var: variable name to fit the decision tree on
+        fetch_all: if True, try to enhance feature annotation via Unimorph
 
     Returns:
         DataFrame with extracted features
@@ -565,7 +719,8 @@ def create_word_order_df(
         assert lang is not None
         treebank = load_treebank(lang, resource_dir, max_treebank_len=max_treebank_len)
 
-    all_instances = extract_features(treebank, target, inflector, predictor_var)
+    all_instances = extract_features(treebank, target, um_data, predictor_var,
+                                     fetch_all=fetch_all)
     df = pd.DataFrame(all_instances)
 
     if drop_singleton_columns and len(df) > 0:

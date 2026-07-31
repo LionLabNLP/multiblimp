@@ -18,7 +18,7 @@ from .utils import get_all_orders
 
 
 RND = 42
-OMIT_FEATURES = []#["subject_idx", "object_idx", "verb_idx"]
+# OMIT_FEATURES = []#["subject_idx", "object_idx", "verb_idx"]
 
 
 def fit_dt(
@@ -44,7 +44,7 @@ def fit_dt(
         return None, None, None
 
     omit_feats = (
-        (omit_feats or set()).union(set(META_FEATURES)).union(set(OMIT_FEATURES))
+        (omit_feats or set()).union(set(META_FEATURES)).union(set(omit_feats))
     )
     omit_feats.update({col for col in full_df.columns if "idx" in col})
     omit_feats.update({col for col in full_df.columns if "_dir" in col})
@@ -109,7 +109,8 @@ def fit_dt(
 
     model.fit(X_train, y_train)
 
-    X_train = set_dt_features_in_df(model, X_train, full_df, target, predictor_var, threshold=leaf_threshold)
+    X_train = set_dt_features_in_df(model, X_train, full_df, target, predictor_var, threshold=leaf_threshold
+                                    ,omit_feats=list(omit_feats))
 
     if save_to is not None:
         os.makedirs(os.path.dirname(save_to), exist_ok=True)
@@ -125,6 +126,7 @@ def fit_dt(
 
 def set_dt_features_in_df(
     model, df, full_df, target: PredictionTarget, predictor_var:str, additional_vars=None, threshold=0.1,
+    omit_feats: list = []
 ):
     """
     Augments df with DT-derived columns and returns the enriched DataFrame.
@@ -156,7 +158,7 @@ def set_dt_features_in_df(
     leaf_full_entropy = np.array([leaf_entropy_map[node] for node in leaf_ids])
 
     additional_vars = additional_vars or []
-    additional_vars.extend(META_FEATURES + OMIT_FEATURES + [predictor_var])
+    additional_vars.extend(META_FEATURES + omit_feats + [predictor_var])
 
     new_cols = {col: full_df[col] for col in additional_vars if col in full_df.columns}
     new_cols["leaf_id"] = pd.Series(leaf_ids, index=df.index)

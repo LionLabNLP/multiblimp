@@ -5,6 +5,7 @@ import math
 import io
 
 from tqdm import tqdm
+from pandas import DataFrame 
 
 sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 sys.path.append("../")
@@ -16,6 +17,7 @@ from word_order.viz_deprel import generate_html_deprel_index
 from word_order.viz_overview import generate_html_overview_index
 from multiblimp.languages import remove_diacritics_langs, remove_multiples_langs, lang2langcode
 from multiblimp.unimorph import UnimorphInflector
+from word_order.create_pairs import create_pairs
 
 random.seed(42)
 
@@ -45,6 +47,7 @@ def load_inflector(lang: str, langcode: str, unimorph_args, inflection_map: dict
         load_from_pickle=True,
         remove_diacritics=remove_diacritics,
         remove_multiples=remove_multiples,
+        fill_unk_values=False,
         **unimorph_args,
     )
 
@@ -98,12 +101,35 @@ class Pipeline:
                 # TODO
                # with open("rivals.txt", "a", encoding="utf-8") as f :
                 #   print(lang, file=f)
+                # get POS'es from prediction target, load one lookup_df for each 
 
                 inflector, skip_lang, num_lemma, num_form = load_inflector(
-                    lang=lang, langcode=lang2langcode(lang),
-                               unimorph_args=self.unimorph_args,
-                                inflection_map=self.inflection_map,
-                                resource_dir=self.resource_dir)
+                    lang=lang, 
+                    langcode=lang2langcode(lang),
+                    unimorph_args=self.unimorph_args,
+                    inflection_map=self.inflection_map,
+                    resource_dir=self.resource_dir,)
+
+                # TODO: split by upos for quicker filter in expand_anno, which POS does language have ?
+                um_df = inflector.load_unimorph_pickle("unimorph/um_pickles", filter={}) # default load without pickle
+                # um_df = inflector.load_unimorph(
+                #         remove_diacritics=False,
+                #         filter={},
+                #         remove_multiples=False,
+                #         load_from_pickle= False,) # default load without pickle
+
+                if type(um_df)==DataFrame:
+                    um_data = {pos: um_df[um_df["upos"]==pos].dropna(axis=1, how="all") 
+                               for pos in um_df["upos"].unique()}
+                    um_data["full"] = um_df
+                else:
+                    um_data = None
+
+                # with open("debug_mapping.txt", "a", encoding="utf-8") as f:
+                #     print(um_data.keys(), file=f)
+                #     print(um_data["ADJ"], file=f)
+                #     print(um_data["ADJ"].dropna(axis=1, how="all"), file=f)
+                #     raise KeyError
 
                 df = create_word_order_df(
                     lang=lang, 
@@ -113,9 +139,11 @@ class Pipeline:
                     save_to=self.word_order_dir,
                     max_treebank_len=self.max_treebank_len,
                     drop_singleton_columns=True,
-                    inflector=inflector,
-                    predictor_var=self.predictor_var
+                    um_data=um_data,
+                    predictor_var=self.predictor_var,
+                    fetch_all=False,
                 )
+                #raise ValueError
 
                 #with open("rivals.txt", "a", encoding="utf-8") as f:
                  #   print("="*50, file=f)
@@ -153,11 +181,9 @@ class Pipeline:
                     trivial_langs[deprel] = trivial_langs.get(deprel, dict())
                     if self.never_skip or not os.path.exists(f"../../decision_trees/{self.target_id}/{self.target_id}_{deprel}/{lang}"):
                         learn_dt=False
-                        #try:
-                        pfeat = self.predictor_var.split("_")[2]
                         pred_values = set(full_df[self.predictor_var].values)
-                        
-                        if len(pred_values)>1: # TODO or label is ==yess
+
+                        if len(pred_values)>1: # TODO or label is ==yes
                             model, dt_df, predictor_df = fit_dt(
                                 full_df, 
                                 self.target, 
@@ -166,8 +192,8 @@ class Pipeline:
                                 min_impurity_decrease=min_impurity_decrease,
                                 min_samples_leaf=10,
                                 save_to=f"../../decision_trees/{self.target_id}/{self.target_id}_{deprel}/{lang}",
-                                omit_feats={f"{"head"}_{pfeat}",
-                                            f"{deprel}_{pfeat}"}
+                                omit_feats={f"{"head"}_{self.target.swap_feat}",
+                                            f"{deprel}_{self.target.swap_feat}"}
                                             )
                             if model: 
                                 learn_dt=True
@@ -177,27 +203,9 @@ class Pipeline:
                             learn_dt = False
                             trivial_langs[deprel][lang] = trivial_langs[deprel].get(lang, list(pred_values)[0])
 
-                            #if model is None:
-                             #   raise TypeError(f"no model returned for {lang, deprel}")
-                       # except TypeError:
-                        #    continue
-                        
                     else: 
                         print(f"Skipping {lang}, decision tree already found")
-                    
-                    # ????
-                    # swap_df = create_pairs(
-                    #     model, 
-                    #     dt_df,
-                    #     full_df, 
-                    #     treebank, 
-                    #     predictor_var,
-                    #     swap_type="core_arg",
-                    #     # save_to_tight_keep=f"word_order/pairs/tight/{deprel}/{lang}.csv",
-                    #     # save_to_full_keep=f"word_order/pairs/full/{deprel}/{lang}.csv",
-                    #     save_to=os.path.join(dt_df_dir, f"{lang}.csv"),
-                    # )
-                    #tree2html(model, dt_df, full_df, predictor_var, html_file, max_rows=15)
+
                     tree2html(
                         model, 
                         dt_df, 
@@ -218,10 +226,11 @@ class Pipeline:
             else:
                 print(f"Skipping {lang}, HTML file found")
 
-        generate_html_deprel_index(f"../../decision_trees/{self.target_id}/{self.target_id}_nsubj",
-                                    f"../../decision_trees/{self.target_id}",
-                                    target_col=self.predictor_var,
-                                    exclude_labels={"--", "+-"}
-                                    #trivial_langs=trivial_langs[deprel]
-                                    )
-        generate_html_overview_index(html_directory=f"../../decision_trees/")
+        # generate_html_deprel_index(f"../../decision_trees/{self.target_id}/{self.target_id}_nsubj",
+        #                             f"../../decision_trees/{self.target_id}",
+        #                             target_col=self.predictor_var,
+        #                             exclude_labels={"--", "+-"}
+        #                             #trivial_langs=trivial_langs[deprel]
+        #                             )
+        # generate_html_overview_index(html_directory=f"../../decision_trees/")
+        print("-"*50, "end", "-"*50)
