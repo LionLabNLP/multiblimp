@@ -89,3 +89,10 @@ sed "s/1;2;3;/1,2,3;/" kmr/kmr > kmr/kmr2; mv kmr/kmr2 kmr/kmr
 
 # Yiddish
 sed "s/PRES/PRS/" yid/yid > yid/yid2; mv yid/yid2 yid/yid
+
+# Irish
+sed "s/MASV/MASC/" gle/gle > gle/gle2; mv gle/gle2 gle/gle
+
+# Chuckchi
+sed "s/ARBAB1S/ARGAB1S/" ckt/ckt > ckt/ckt2; mv ckt/ckt2 ckt/ckt
+sed "s/ARBAB3S/ARGAB3S/" ckt/ckt > ckt/ckt2; mv ckt/ckt2 ckt/ckt
