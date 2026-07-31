@@ -148,8 +148,8 @@ def get_samples(
     show_features=False
 ):
     sample_ids = get_sample_ids(prep, clf, dt_df, predictor_var, max_rows, seed)
+    
     keep_columns = ["sen_str"]
-
     full_df["sen_str"] = [" ".join(sen) for sen in full_df["sen"]]
     full_df["treebank_link"] = build_treebank_links(full_df)
 
@@ -382,8 +382,8 @@ def build_treebank_links(full_df: pd.DataFrame) -> list[str]:
             f" target='_blank'>{row['treebank']}</a>"
         )
         slot = ";".join(
-            f' {map_to_x[j]} [form="{form}"] '
-            for j, form in enumerate(dict(row[form_cols]).values())
+            f' {map_to_x[j]} [form="{form if row[f"{label.split("_")[0]}_idx"]!=1 else str(form).capitalize()}"] '
+            for j, (label, form) in enumerate(dict(row[form_cols]).items())
         )
         tb_links.append(base_query.replace("QUERYSLOT_PLACEHOLDER", slot))
     return tb_links
@@ -423,8 +423,6 @@ def build_placeholder_args(dt_df, full_df, predictor_var, meta=None, show_featur
     else:
         keep_columns.extend([col for col in full_df if col.endswith("_form") ])
 
-   # seen = set()
-   # keep_columns = [c for c in keep_columns if c in full_df.columns and not (c in seen or seen.add(c))]
     keep_columns.append("treebank_link")
 
     sample_rows = full_df.sample(min(50, len(full_df)), random_state=42)[keep_columns].to_dict("records")
@@ -526,7 +524,7 @@ def tree2html(
         for cls in sorted(classes):
             if cls in class2idx_model:
                 full_dist.append(dist[class2idx_model[cls]])
-                label_distribution2[cls] = dist[class2idx_model[cls]] # TODO fix order
+                label_distribution2[cls] = dist[class2idx_model[cls]]
             else:
                 full_dist.append(0)
         label_distribution.append(full_dist)
