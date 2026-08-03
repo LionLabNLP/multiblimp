@@ -60,13 +60,14 @@ def create_html(meta, node_samples, node_data, hex_colors, classes, div_id):
 
       .page {{
         display: flex;
+        flex-direction: column;
         height: 100vh;
         overflow: hidden;
       }}
 
       .tree-panel {{
         flex: 0 0 auto;
-        width: 62%;
+        height: 58%;
         position: relative;
         overflow: hidden;
         background: var(--bg);
@@ -76,7 +77,7 @@ def create_html(meta, node_samples, node_data, hex_colors, classes, div_id):
         flex: 1 1 auto;
         overflow-y: auto;
         background: var(--surface);
-        border-left: 1px solid var(--border);
+        border-top: 1px solid var(--border);
         font-family: var(--font-ui);
         font-size: 14px;
         display: flex;
@@ -107,8 +108,9 @@ def create_html(meta, node_samples, node_data, hex_colors, classes, div_id):
       }}
 
       .splitter {{
-        width: 5px;
-        cursor: col-resize;
+        height: 5px;
+        width: 100%;
+        cursor: row-resize;
         background: var(--border);
         transition: background 0.15s;
         z-index: 20;
@@ -404,6 +406,23 @@ def create_html(meta, node_samples, node_data, hex_colors, classes, div_id):
         line-height: 1.2;
       }}
 
+      /* ── Node summary row: decision path + distribution side by side ── */
+      .node-summary-row {{
+        display: flex;
+        align-items: stretch;
+        border-bottom: 1px solid var(--border);
+      }}
+
+      #node-path-panel {{
+        flex: 1 1 auto;
+        min-width: 0;
+      }}
+
+      #node-dist-panel {{
+        flex: 1 1 auto;
+        min-width: 0;
+      }}
+
       /* ── Node distribution panel in table header ── */
       .node-dist-panel {{
         display: flex;
@@ -411,8 +430,8 @@ def create_html(meta, node_samples, node_data, hex_colors, classes, div_id):
         align-items: flex-end;
         justify-content: center;
         gap: 6px;
-        padding: 12px 20px 14px;
-        border-bottom: 1px solid var(--border);
+        padding: 12px 16px;
+        height: 100%;
         background: var(--surface-raised);
       }}
 
@@ -456,9 +475,11 @@ def create_html(meta, node_samples, node_data, hex_colors, classes, div_id):
 
       /* ── Decision path visualization ── */
       .decision-path-panel {{
+        height: 100%;
         padding: 12px 20px;
-        border-bottom: 1px solid var(--border);
+        border-right: 1px solid var(--border-subtle);
         background: var(--surface);
+        overflow-y: auto;
       }}
 
       .decision-path-title {{
@@ -467,7 +488,7 @@ def create_html(meta, node_samples, node_data, hex_colors, classes, div_id):
         color: var(--text-secondary);
         text-transform: uppercase;
         letter-spacing: 0.05em;
-        margin-bottom: 8px;
+        margin-bottom: 6px;
       }}
 
       .decision-path {{
@@ -606,6 +627,7 @@ def create_html(meta, node_samples, node_data, hex_colors, classes, div_id):
 
       .node-table tbody tr:last-child td {{ border-bottom: none; }}
       .node-table tbody tr:hover td {{ background: var(--accent-light); }}
+      .node-table td strong {{ color: var(--accent); font-weight: 700; }}
 
       .node-table a {{
         color: var(--accent);
@@ -716,8 +738,10 @@ def create_html(meta, node_samples, node_data, hex_colors, classes, div_id):
         <div class="table-panel-header">
           <h2 id="table-panel-title">Examples</h2>
         </div>
-        <div id="node-path-panel" style="display:none;"></div>
-        <div id="node-dist-panel" style="display:none;"></div>
+        <div class="node-summary-row">
+          <div id="node-path-panel" style="display:none;"></div>
+          <div id="node-dist-panel" style="display:none;"></div>
+        </div>
         <div class="table-panel-body">
           <div class="empty-state" id="node-table">
             <div class="empty-state-icon">⬡</div>
@@ -1039,7 +1063,7 @@ def create_html(meta, node_samples, node_data, hex_colors, classes, div_id):
 
     dragbar.addEventListener("mousedown", (e) => {{
       isDragging = true;
-      document.body.style.cursor = "col-resize";
+      document.body.style.cursor = "row-resize";
       document.body.style.userSelect = "none";
       e.preventDefault();
     }});
@@ -1052,9 +1076,9 @@ def create_html(meta, node_samples, node_data, hex_colors, classes, div_id):
       if (!isDragging) return;
       const page = document.querySelector(".page");
       const rect = page.getBoundingClientRect();
-      const pct = ((e.clientX - rect.left) / rect.width) * 100;
+      const pct = ((e.clientY - rect.top) / rect.height) * 100;
       if (pct > 20 && pct < 80) {{
-        treePanel.style.width = pct + "%";
+        treePanel.style.height = pct + "%";
         treePanel.style.flex = "0 0 auto";
         Plotly.Plots.resize(plot);
       }}
@@ -1148,6 +1172,7 @@ def write_placeholder_html(out_file, predictor_var, label, meta=None, sample_row
     .ex-table a {{ color: #2563eb; text-decoration: none; font-weight: 500; }}
     .ex-table a:hover {{ text-decoration: underline; }}
     .ex-table tbody tr:last-child td {{ border-bottom: none; }}
+    .ex-table td strong {{ color: #2563eb; font-weight: 700; }}
   </style>
 </head>
 <body>

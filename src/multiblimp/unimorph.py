@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 from .inflection_maps import InflectionMap
-from .languages import latin_to_cyrillic
+from .languages import latin_to_cyrillic, remove_diacritics_langs, remove_multiples_langs
 from .ud2um import load_ud_features
 from .unimorph_features import load_um_features
 
@@ -59,6 +59,41 @@ def allval2um(val):
     val = val.split("_")[-1]
 
     return UD2UM.get(val, val).upper()
+
+
+def load_inflector(lang: str, langcode: str, unimorph_args, inflection_map: dict, 
+                   resource_dir: str): # TODO put in utils?
+    num_form = 0
+    num_lemma = 0
+    skip_lang = False
+
+    remove_diacritics = lang in remove_diacritics_langs
+    remove_multiples = lang in remove_multiples_langs
+
+    inflector = UnimorphInflector(
+        langcode=langcode,
+        inflection_map=inflection_map,
+        resource_dir=resource_dir,
+        load_from_pickle=True,
+        remove_diacritics=remove_diacritics,
+        remove_multiples=remove_multiples,
+        fill_unk_values=False,
+        **unimorph_args,
+    )
+
+    if len(inflector) == 0:
+        skip_lang = True
+        num_lemma = 0
+        num_form = 0
+    else:
+        num_lemma = inflector.num_lemmas
+        num_form = inflector.num_forms
+
+    if not inflector.can_feature_swap:
+        skip_lang = True
+
+    return inflector, skip_lang, num_lemma, num_form
+
 
 
 class UnimorphInflector:
@@ -157,6 +192,8 @@ class UnimorphInflector:
         self.prev_inflections: Dict[
             Tuple[str, Dict[str, str]], Tuple[List[str], List[str]]
         ] = {}
+        # (form, features, ufeat, only_try_ud_if_no_um, prefer_tight_match, fetch_all) -> Set[str]
+        self.prev_form_features: Dict[Tuple, Set[str]] = {}
 
         if combine_um_ud:
             assert (
@@ -344,8 +381,14 @@ class UnimorphInflector:
         df = self.expand_multiple_values(df)
         df = self.set_unk_values(df)
 
+        # Plain object dtype (not "category"): the equality-heavy lookups in
+        # partial_df_match compare these columns against literal strings on every
+        # inflection attempt, and category columns backed by pandas' arrow/"str"
+        # dtype pay a large to_numpy()/astype() conversion cost on every such
+        # comparison (profiled: ~50s of a 94s create_pairs run). Plain object
+        # dtype comparisons don't hit that conversion path.
         for column in df.columns:
-            df[column] = df[column].astype("category")
+            df[column] = df[column].astype(object)
 
         return df
 
@@ -359,11 +402,13 @@ class UnimorphInflector:
             return None
         df = pd.read_pickle(path)
 
+        # Pickled dataframes were saved with "category" dtype columns; convert to
+        # plain object dtype for the same reason as load_unimorph above.
+        for column in df.columns:
+            df[column] = df[column].astype(object)
+
         df = self.filter_entries(df, filter)
         df = self.set_unk_values(df)
-
-        for column in df.columns:
-            df[column] = df[column].cat.remove_unused_categories()
 
         return df
 
@@ -778,17 +823,25 @@ class UnimorphInflector:
         if (not prefer_tight_match) or (len(candidate_rows) < 2):
             return candidate_rows
 
-        features_added = np.zeros(len(candidate_rows))
-        for idx, (_, row) in enumerate(candidate_rows.iterrows()):
-            for ufeat, val in row.items():
-                if (not pd.isna(val)) or (val == UNDEFINED):
-                    # If it is a not-nan feature that is not present in the matching row, +1
-                    features_added[idx] += ufeat not in features
-                elif (not pd.isna(features.get(ufeat))) and (
-                    pd.isna(val) or (val == UNDEFINED)
-                ):
-                    # If it is a nan feature that *is* present in the matching row, +1
-                    features_added[idx] += 1
+        # Vectorized equivalent of the per-row/per-column loop below (avoids
+        # candidate_rows.iterrows(), expensive on wide/mixed-dtype frames):
+        #   for each cell (row, col):
+        #     if cell is set (not-nan or UNDEFINED): +1 if col not in `features`
+        #     else (cell is nan): +1 if `features` has a real (non-nan) value for col
+        is_set_df = candidate_rows.notna() | (candidate_rows == UNDEFINED)
+        not_in_features = pd.Series(
+            {col: (col not in features) for col in candidate_rows.columns}
+        )
+        wants_feature = pd.Series(
+            {
+                col: (col in features) and pd.notna(features.get(col))
+                for col in candidate_rows.columns
+            }
+        )
+        penalty = is_set_df.mul(not_in_features, axis=1).astype(int) + (
+            (~is_set_df).mul(wants_feature, axis=1).astype(int)
+        )
+        features_added = penalty.sum(axis=1).to_numpy()
 
         min_features_added = min(features_added)
         min_features_added_mask = features_added == min_features_added
@@ -867,6 +920,33 @@ class UnimorphInflector:
         prefer_tight_match: bool = False,
         fetch_all = False
     ) -> Set[str]:
+        # Same form/features/ufeat combos recur constantly (common subjects, child
+        # forms, agreement targets) and each uncached call does a full UniMorph
+        # lookup — including a recursive self.ud_inflector.get_form_features call —
+        # so this is memoized the same way inflect() already is.
+        cache_key = (
+            form, frozenset(features.items()), ufeat,
+            only_try_ud_if_no_um, prefer_tight_match, fetch_all,
+        )
+        if cache_key in self.prev_form_features:
+            # Return a copy — callers must not mutate the cached set in place.
+            return set(self.prev_form_features[cache_key])
+
+        result = self._get_form_features_uncached(
+            form, features, ufeat, only_try_ud_if_no_um, prefer_tight_match, fetch_all
+        )
+        self.prev_form_features[cache_key] = result
+        return set(result)
+
+    def _get_form_features_uncached(
+        self,
+        form: str,
+        features: Dict[str, str],
+        ufeat: Optional[str] = None,
+        only_try_ud_if_no_um: bool = False,
+        prefer_tight_match: bool = False,
+        fetch_all = False
+    ) -> Set[str]:
         um_features = self.ud2um_features(features, set_defaults=False)
         if ufeat in um_features:
             del um_features[ufeat]
@@ -898,64 +978,4 @@ class UnimorphInflector:
                     )
                     form_features.update(ud_form_features)
 
-            # elif fetch_all:
-            #     # extract as many as possible? majority rules?
-            #     form_rows = self.partial_df_match(
-            #         self.form_groups, form, um_features,
-            #         prefer_tight_match=prefer_tight_match
-            #     )
-            #     #if len(form_rows):
-            #     if (len(form_rows) == 1): # easy case, we only get one good candidate
-            #         add_feats = False
-            #        ## thresholding?
-            #         with open("debug_mapping.txt", "a", encoding="utf-8") as f:
-            #             #matchrow = form_rows.filter(regex='^(?![ufeat])')
-            #             for i, row in form_rows.iterrows():
-            #                 transfeats = map_um_value_to_ud(row["ufeat"])["morpho"]
-            #             for k,v in transfeats.items():
-            #                 if not k in um_features:
-            #                     if add_feats==False: add_feats = dict()
-            #                     add_feats[k] = v
-            #                   #  print(form_rows)
-            #             if add_feats:
-            #                 print("0",form, features, file=f)
-            #                 print("1", row["ufeat"], file=f)
-            #                 print("3",transfeats, file=f)
-            #                 print("4 add:", add_feats, file=f)
-            #                 print("-"*50, file=f)
-
-                          #  print("1", (row["ufeat"]), "->", transfeats, file=f)
-                           # raise ValueError
-
-                            # matchfeats = {col: matchrow[col][matchrow.index[0]] for col in matchrow
-                            #             if col not in um_features and str(matchrow[col][matchrow.index[0]]) not in ["NaN", "nan"]}
-                            # # only wort checking if we have no conflicts 
-                            # matchfeats_trans = map_um_value_to_ud(form_rows["ufeat"])
-                            # if matchfeats and not any([0 if um_features.get(k, None)==v or um_features.get(k, None)==None else 1
-                            #                             for k,v in matchfeats.items()]):
-                            #     print("1",form, um_features, file=f)
-                            #     print("2 um_feats", matchfeats, file=f)
-                            #     print("3 matchfeats_trans", matchfeats_trans, file=f)
-                            # #  print(UM2UD, file=f)
-
-                            #     for feat,v in matchfeats.items():
-                            #             #print(self.val2feat, file=f)
-                            #         print(f"{feat}: {v} -> {map_um_value_to_ud(v)}", file=f)
-                            #         # map from UM feat, val to UD feat,val
-                            #         print()
-                            #         raise ValueError
-                            # print("-"*50, file=f)
-                    # if self.ud_inflector is not None:
-                    #     if only_try_ud_if_no_um and len(form_features) > 0:
-                #         return form_features
-                #     ud_form_features = self.ud_inflector.get_form_features(
-                #         form, features, ufeat=None
-                #     )
-                #     form_features.update(ud_form_features)
-
         return form_features
-
-
-def retrieve_um_anno(entry: dict, df: pd.DataFrame, args):
-    
-    pass

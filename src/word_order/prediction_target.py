@@ -1,6 +1,26 @@
 from dataclasses import dataclass
 
 
+def filter_head_feats(value, exclude=None, require=None):
+    """Predicate for PredictionTarget.head_feats (e.g. {"VerbForm": ...}).
+
+    Picklable replacement for the ad-hoc `lambda x: x != "Part"` /
+    `lambda x: x == "Part"` the scripts/sva_trees/*.py runners used to set
+    head_feats with — plain lambdas can't be pickled, which breaks
+    sva_trees.pipeline.Pipeline's n_jobs > 1 (ProcessPoolExecutor pickles the
+    whole Pipeline, including target.head_feats, to send to each worker).
+
+    Use via functools.partial, e.g.:
+        target.head_feats = {"VerbForm": partial(filter_head_feats, exclude="Part")}
+        target.head_feats = {"VerbForm": partial(filter_head_feats, require="Part")}
+    """
+    if exclude is not None:
+        return value != exclude
+    if require is not None:
+        return value == require
+    return True
+
+
 @dataclass
 class PredictionTarget:
     """

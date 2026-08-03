@@ -1,6 +1,7 @@
 import argparse
 import sys
 import random
+from functools import partial
 
 sys.path.append("../../src/")
 
@@ -16,10 +17,12 @@ if __name__=="__main__":
     parser.add_argument("--langs", "-l", nargs="*", help="Languages to process", default=[])
     parser.add_argument("--never_skip", "-ns", action="store_true", 
                         help="Always create new df's, decesion trees, and HTML files")
+    parser.add_argument("--simplify", "-s", action="store_true", 
+                        help="Simplify agreement labels before fitting decision tree")
     args = parser.parse_args()
 
     target = nsubj_target
-    target.head_feats = {"VerbForm": (lambda x: x!="Part")}
+    target.head_feats = {"VerbForm": partial(filter_head_feats, exclude="Part")}
     target.swap_feat = "Number"
     # target.child_feats = {}
     deprel_dir = "_".join(target.child_deprels)
@@ -45,5 +48,8 @@ if __name__=="__main__":
                                     #"head_child-deprel_cop",
                                     #"head_child-deprel_aux"
                                     ],
-                        target_id=sys.argv[0][:-3])
+                        target_id=sys.argv[0][:-3],
+                        threshold=0.12,
+                        simplify=args.simplify,
+                        )
     pipeline()

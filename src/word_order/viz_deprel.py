@@ -15,6 +15,49 @@ from .entropy import calculate_base_entropy, calculate_tree_entropy
 from .html.html_deprel import create_html
 
 
+def _dtype_coerced_metrics(dt, df, target_col, binary_entropy, smoothing):
+    """Coerce df's feature columns to match the fitted pipeline's expected dtypes
+    (mutates df in place), then compute (base_entropy, reduced_entropy,
+    delta_entropy, accuracy).
+
+    Shared by calculate_metrics and calculate_agreement_metrics, which only
+    differ in the extra per-language stats appended after this.
+    """
+    # ensure dtype matching of loaded data and classifier
+    cat_cols = [
+        col
+        for name, _, cols in dt.named_steps["preprocessor"].transformers_
+        if name == "cat"
+        for col in cols
+        if col in df.columns
+    ]
+    num_cols = [
+        col
+        for name, _, cols in dt.named_steps["preprocessor"].transformers_
+        if name == "num"
+        for col in cols
+        if col in df.columns
+    ]
+    df[cat_cols] = df[cat_cols].astype(str)
+    df[num_cols] = df[num_cols].apply(pd.to_numeric, errors="coerce").fillna(0)
+
+    # Calculate entropies
+    base_ent = calculate_base_entropy(
+        df, target_col, binary=binary_entropy, smoothing=smoothing
+    )
+    reduced_ent = calculate_tree_entropy(
+        dt, df, target_col, binary=binary_entropy, smoothing=smoothing
+    )
+    delta_ent = base_ent - reduced_ent
+
+    # Calculate accuracy on full training data
+    X = df.drop(columns=[target_col])
+    y = df[target_col]
+    accuracy = dt.score(X, y)
+
+    return base_ent, reduced_ent, delta_ent, accuracy
+
+
 def calculate_metrics(
     language_data: Dict[str, Tuple[Pipeline, pd.DataFrame]],
     target_col: str = "deprel_order",
@@ -36,36 +79,9 @@ def calculate_metrics(
     metrics = []
 
     for lang_name, (dt, df) in tqdm(language_data.items()):
-        # ensure dtype matching of loaded data and classifier
-        cat_cols = [
-            col
-            for name, _, cols in dt.named_steps["preprocessor"].transformers_
-            if name == "cat"
-            for col in cols
-            if col in df.columns
-        ]
-        num_cols = [
-            col
-            for name, _, cols in dt.named_steps["preprocessor"].transformers_
-            if name == "num"
-            for col in cols
-            if col in df.columns
-        ]
-        df[cat_cols] = df[cat_cols].astype(str)
-        df[num_cols] = df[num_cols].apply(pd.to_numeric, errors="coerce").fillna(0)
-        # Calculate entropies
-        base_ent = calculate_base_entropy(
-            df, target_col, binary=binary_entropy, smoothing=smoothing
+        base_ent, reduced_ent, delta_ent, accuracy = _dtype_coerced_metrics(
+            dt, df, target_col, binary_entropy, smoothing
         )
-        reduced_ent = calculate_tree_entropy(
-            dt, df, target_col, binary=binary_entropy, smoothing=smoothing
-        )
-        delta_ent = base_ent - reduced_ent
-
-        # Calculate accuracy on full training data
-        X = df.drop(columns=[target_col])
-        y = df[target_col]
-        accuracy = dt.score(X, y)
 
         # Number of items
         n_items = len(df)
@@ -89,6 +105,83 @@ def calculate_metrics(
                 "n_flexible": n_flexible,
                 "n_fully_flexible": n_fully_flexible,
                 "total_pairs": sum(df["num_swaps"]),
+            }
+        )
+
+    return pd.DataFrame(metrics).sort_values("language")
+
+
+def _agreement_row_stats(df, target_col, leaf_threshold, pairs_dir, lang_name):
+    """(n_raw, n_keep, n_pairs) for one language's agreement dataframe.
+
+    n_raw: rows with target_col == "Yes" (candidates for a feature swap).
+    n_keep: of those, how many pass the same leaf_top1_entropy < leaf_threshold
+        and leaf_decision filter sva_trees.create_pairs.create_pairs uses to pick
+        which rows to actually attempt to re-inflect. Trivial languages (no fitted
+        tree, hence no leaf_top1_entropy/leaf_decision columns) are single-class by
+        construction, so every raw row counts as kept.
+    n_pairs: rows actually turned into a re-inflected minimal pair by create_pairs,
+        read from "<pairs_dir>/<language>/correct_swaps.parquet". 0 if pairs_dir is
+        None or that file doesn't exist yet (create_pairs not run, or n_keep was 0).
+    """
+    is_yes = df[target_col] == "Yes"
+    n_raw = int(is_yes.sum())
+
+    if "leaf_top1_entropy" in df.columns and "leaf_decision" in df.columns:
+        keep = (df["leaf_top1_entropy"] < leaf_threshold) & df["leaf_decision"]
+        n_keep = int((keep & is_yes).sum())
+    else:
+        n_keep = n_raw
+
+    n_pairs = 0
+    if pairs_dir is not None:
+        pairs_fn = os.path.join(pairs_dir, lang_name, "correct_swaps.parquet")
+        if os.path.exists(pairs_fn):
+            n_pairs = len(pd.read_parquet(pairs_fn))
+
+    return n_raw, n_keep, n_pairs
+
+
+def calculate_agreement_metrics(
+    language_data: Dict[str, Tuple[Pipeline, pd.DataFrame]],
+    target_col: str,
+    leaf_threshold: float = 0.1,
+    pairs_dir: str | None = None,
+    binary_entropy: bool = False,
+    smoothing: float = 0.5,
+) -> pd.DataFrame:
+    """Calculate metrics for the SVA/agreement pipeline.
+
+    Unlike calculate_metrics's word-order-flexibility columns (n_flexible /
+    n_fully_flexible, derived from num_swaps), which rely on get_all_orders's
+    word-order permutation codes and don't apply to agreement Yes/No labels,
+    this reports n_raw/n_keep/n_pairs — see _agreement_row_stats.
+
+    Returns:
+        DataFrame with columns: language, base_entropy, reduced_entropy,
+                                delta_entropy, accuracy, n_raw, n_keep, n_pairs
+    """
+    metrics = []
+
+    for lang_name, (dt, df) in tqdm(language_data.items()):
+        base_ent, reduced_ent, delta_ent, accuracy = _dtype_coerced_metrics(
+            dt, df, target_col, binary_entropy, smoothing
+        )
+
+        n_raw, n_keep, n_pairs = _agreement_row_stats(
+            df, target_col, leaf_threshold, pairs_dir, lang_name
+        )
+
+        metrics.append(
+            {
+                "language": lang_name,
+                "base_entropy": base_ent,
+                "reduced_entropy": reduced_ent,
+                "delta_entropy": delta_ent,
+                "accuracy": accuracy,
+                "n_raw": n_raw,
+                "n_keep": n_keep,
+                "n_pairs": n_pairs,
             }
         )
 
@@ -125,6 +218,9 @@ def generate_html_deprel_index(
     smoothing: float = 0.5,
     exclude_labels: set | None = None,
     include_trivial_labels: set | None = None,
+    flowchart_dir: str | None = None,
+    leaf_threshold: float = 0.1,
+    pairs_dir: str | None = None,
 ) -> None:
     """Generate interactive overview page with metrics and language links.
 
@@ -139,9 +235,22 @@ def generate_html_deprel_index(
         include_trivial_labels: Trivial labels that are still linguistically interesting
             and should be kept in the table/scatter plot with a green marker instead of
             being omitted (e.g. {"Yes"}).
+        flowchart_dir: directory holding per-language flowchart HTML files named
+            "<language>.html", e.g. sva_trees.create_pairs.create_pairs's flowchart_path
+            directory. When given, languages with a matching file get a "Flowchart"
+            column link; languages without one (no qualifying rows, or the pairs step
+            hasn't been run yet) show a plain dash. None disables the column entirely.
+        leaf_threshold, pairs_dir: only used when "agreement" is in target_col (the
+            SVA pipeline). In that case the word-order "N 1 swap"/"N 4 swap"/"N Pairs"
+            columns (based on get_all_orders word-order permutation codes, meaningless
+            for Yes/No agreement labels — see calculate_agreement_metrics) are replaced
+            with N RAW / N KEEP / N PAIRS. leaf_threshold must match the leaf_threshold
+            create_pairs was/will be run with, and pairs_dir must match its save_to
+            parent directory (i.e. "<save_to>/../"), for the counts to be accurate.
     """
     html_path = Path(html_directory)
     include_trivial_labels = include_trivial_labels or set()
+    is_agreement = "agreement" in target_col
 
     # Detect trivial langs from placeholder HTML files — keys are stem strings
     trivial_langs = {}
@@ -172,12 +281,22 @@ def generate_html_deprel_index(
             )
 
     # Calculate metrics for BOTH entropy types
-    metrics_six = calculate_metrics(
-        language_data, target_col, binary_entropy=False, smoothing=smoothing
-    )
-    metrics_binary = calculate_metrics(
-        language_data, target_col, binary_entropy=True, smoothing=smoothing
-    )
+    if is_agreement:
+        metrics_six = calculate_agreement_metrics(
+            language_data, target_col, leaf_threshold=leaf_threshold,
+            pairs_dir=pairs_dir, binary_entropy=False, smoothing=smoothing
+        )
+        metrics_binary = calculate_agreement_metrics(
+            language_data, target_col, leaf_threshold=leaf_threshold,
+            pairs_dir=pairs_dir, binary_entropy=True, smoothing=smoothing
+        )
+    else:
+        metrics_six = calculate_metrics(
+            language_data, target_col, binary_entropy=False, smoothing=smoothing
+        )
+        metrics_binary = calculate_metrics(
+            language_data, target_col, binary_entropy=True, smoothing=smoothing
+        )
 
     # Pick up any trivial langs not yet covered by placeholder files
     for l in metrics_six[metrics_six["base_entropy"] == 0.0]["language"]:
@@ -207,14 +326,34 @@ def generate_html_deprel_index(
         trivial_rows = []
         for lang, label in include_trivial_langs.items():
             if lang in language_data:
-                n_items = len(language_data[lang][1])
+                lang_df = language_data[lang][1]
             else:
                 parquet_fn = os.path.join(data_dir, lang + ".parquet")
-                n_items = (
-                    len(pd.read_parquet(parquet_fn))
+                lang_df = (
+                    pd.read_parquet(parquet_fn)
                     if os.path.exists(parquet_fn)
-                    else 0
+                    else pd.DataFrame({target_col: []})
                 )
+
+            if is_agreement:
+                n_raw, n_keep, n_pairs = _agreement_row_stats(
+                    lang_df, target_col, leaf_threshold, pairs_dir, lang
+                )
+                trivial_rows.append(
+                    {
+                        "language": lang,
+                        "base_entropy": 0.0,
+                        "reduced_entropy": 0.0,
+                        "delta_entropy": 0.0,
+                        "accuracy": 1.0,
+                        "n_raw": n_raw,
+                        "n_keep": n_keep,
+                        "n_pairs": n_pairs,
+                    }
+                )
+                continue
+
+            n_items = len(lang_df)
             trivial_rows.append(
                 {
                     "language": lang,
@@ -273,6 +412,28 @@ def generate_html_deprel_index(
             else:
                 lang_link = f"<span{name_style}>{lang_name}</span>"
 
+            if flowchart_dir is not None:
+                flowchart_path = os.path.join(flowchart_dir, f"{row['language']}.html")
+                if os.path.exists(flowchart_path):
+                    flowchart_href = os.path.relpath(flowchart_path, start=html_directory)
+                    flowchart_cell = f'<td data-sort="1"><a href="{quote(flowchart_href)}">flowchart</a></td>'
+                else:
+                    flowchart_cell = '<td data-sort="0">—</td>'
+            else:
+                flowchart_cell = ""
+
+            if is_agreement:
+                count_cells = f"""
+                <td data-sort="{row['n_raw']}">{row['n_raw']:,}</td>
+                <td data-sort="{row['n_keep']}">{row['n_keep']:,}</td>
+                <td data-sort="{row['n_pairs']}">{row['n_pairs']:,}</td>"""
+            else:
+                count_cells = f"""
+                <td data-sort="{row['n_items']}">{row['n_items']:,}</td>
+                <td data-sort="{row['n_flexible']}">{row['n_flexible']:,}</td>
+                <td data-sort="{row['n_fully_flexible']}">{row['n_fully_flexible']:,}</td>
+                <td data-sort="{row['total_pairs']}">{row['total_pairs']:,}</td>"""
+
             rows.append(
                 f"""
             <tr>
@@ -280,11 +441,8 @@ def generate_html_deprel_index(
                 <td data-sort="{row['base_entropy']:.4f}">{row['base_entropy']:.3f}</td>
                 <td data-sort="{row['reduced_entropy']:.4f}">{row['reduced_entropy']:.3f}</td>
                 <td data-sort="{row['delta_entropy']:.4f}">{row['delta_entropy']:.3f}</td>
-                <td data-sort="{row['accuracy']:.4f}">{row['accuracy']:.1%}</td>
-                <td data-sort="{row['n_items']}">{row['n_items']:,}</td>
-                <td data-sort="{row['n_flexible']}">{row['n_flexible']:,}</td>
-                <td data-sort="{row['n_fully_flexible']}">{row['n_fully_flexible']:,}</td>
-                <td data-sort="{row['total_pairs']}">{row['total_pairs']:,}</td>
+                <td data-sort="{row['accuracy']:.4f}">{row['accuracy']:.1%}</td>{count_cells}
+                {flowchart_cell}
             </tr>
             """
             )
@@ -310,7 +468,9 @@ def generate_html_deprel_index(
                     "name": lang_name,
                     "base": row["base_entropy"],
                     "reduced": row["reduced_entropy"],
-                    "n_items": int(row["n_items"]),
+                    # marker size / hover count — n_raw ("Yes" items) in agreement mode,
+                    # since there's no "n_items" column there
+                    "n_items": int(row["n_raw"] if is_agreement else row["n_items"]),
                     "url": url,
                     "color": lang_colors.get(lang_name, "#2563eb"),
                 }
@@ -369,12 +529,40 @@ def generate_html_deprel_index(
 
     notes = color_note + trivial_note
 
+    header_cells = [
+        '<th class="sortable" data-column="0">Language</th>',
+        '<th class="sortable" data-column="1">Base Entropy</th>',
+        '<th class="sortable" data-column="2">Reduced Entropy</th>',
+        '<th class="sortable" data-column="3">Δ Entropy</th>',
+        '<th class="sortable" data-column="4">DT Acc%</th>',
+    ]
+    if is_agreement:
+        header_cells += [
+            '<th class="sortable" data-column="5">N RAW</th>',
+            '<th class="sortable" data-column="6">N KEEP</th>',
+            '<th class="sortable" data-column="7">N PAIRS</th>',
+        ]
+        next_col = 8
+    else:
+        header_cells += [
+            '<th class="sortable" data-column="5">N Items</th>',
+            '<th class="sortable" data-column="6">N 1 swap</th>',
+            '<th class="sortable" data-column="7">N 4 swap</th>',
+            '<th class="sortable" data-column="8">N Pairs</th>',
+        ]
+        next_col = 9
+    if flowchart_dir is not None:
+        header_cells.append(
+            f'<th class="sortable" data-column="{next_col}">Flowchart</th>'
+        )
+
     html_content = create_html(
         rows_six,
         rows_binary,
         plot_data_six_json,
         plot_data_binary_json,
         trivial_note=notes,
+        header_cells="".join(header_cells),
     )
 
     output_path = html_path / "index.html"

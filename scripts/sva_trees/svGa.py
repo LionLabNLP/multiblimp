@@ -1,6 +1,7 @@
 import argparse
 import sys
 import random
+from functools import partial
 
 sys.path.append("../../src/")
 
@@ -19,7 +20,7 @@ if __name__=="__main__":
     args = parser.parse_args()
 
     target = nsubj_target
-    target.head_feats = {"VerbForm": (lambda x: x!="Part")}
+    target.head_feats = {"VerbForm": partial(filter_head_feats, exclude="Part")}
     # target.child_feats = {}
     deprel_dir = "_".join(target.child_deprels)
     resource_dir = "../../resources"

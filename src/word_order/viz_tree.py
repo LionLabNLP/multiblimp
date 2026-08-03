@@ -1,4 +1,5 @@
 import os
+import re
 import warnings
 
 import numpy as np
@@ -10,15 +11,15 @@ import pandas as pd
 from matplotlib.colors import to_hex
 
 from .entropy import order_entropy, calculate_base_entropy, calculate_tree_entropy
-from .utils import get_all_orders
+from .utils import get_all_orders, build_grew_link
 from .html.html_tree import create_html, write_placeholder_html
 
 
 def clean_rule(rule, threshold=None, is_binary=False):
     numerical = rule.startswith("num__")
     rule = (
-        rule.replace("num__", "")
-        .replace("cat__", "")
+        rule.removeprefix("num__")
+        .removeprefix("cat__")
         .replace("sibling-deprel", "sibling")
         .replace("_missing", "nan")
     )
@@ -140,6 +141,73 @@ def get_sample_ids(prep, clf, dt_df, predictor_var, max_rows=100, seed=42):
     return predictor_samples
 
 
+# ── Agreement swap highlighting (head <-> child feature, e.g. SVA) ────────────
+# Applies only when predictor_var is an agreement predictor (e.g.
+# "head_nsubj_Number_agreement") with a known target — mirrors the highlighting
+# built for sva_trees' create_pairs flowchart. No-op for plain word-order targets.
+
+def _agreement_context(predictor_var, target):
+    """Returns (swap_feature, child_deprel) for an agreement predictor, else (None, None)."""
+    if not predictor_var or "agreement" not in predictor_var or target is None or not target.child_deprels:
+        return None, None
+    match = re.match(r".*_([A-Z][a-z]+)_.*", predictor_var)
+    return (match.group(1) if match else None), target.child_deprels[0]
+
+
+def _highlight_indices_for_row(row, prefixes):
+    """0-based positions in `sen` of the given node prefixes (e.g. head, nsubj)."""
+    idx = set()
+    for prefix in prefixes:
+        col = f"{prefix}_idx"
+        if col in row.index and pd.notna(row.get(col)):
+            idx.add(int(row[col]) - 1)
+    return idx
+
+
+def _highlighted_sen_str(sen, highlight_idx) -> str:
+    return " ".join(
+        f"<strong>{tok}</strong>" if i in highlight_idx else str(tok)
+        for i, tok in enumerate(sen)
+    )
+
+
+def _add_sen_str_column(full_df, highlight_prefixes=()):
+    """Same "sen_str" construction as before, but bolding the agreement-relevant
+    tokens (head/child) when highlight_prefixes is given."""
+    if not highlight_prefixes:
+        full_df["sen_str"] = [" ".join(sen) for sen in full_df["sen"]]
+        return
+    full_df["sen_str"] = [
+        _highlighted_sen_str(row["sen"], _highlight_indices_for_row(row, highlight_prefixes))
+        for _, row in full_df.iterrows()
+    ]
+
+
+def _build_feat_columns(full_df, swap_feature=None, highlight_prefixes=()):
+    """Build {prefix}_features list columns (one "Feat=Val" string per node feature),
+    bolding the swap-relevant feature's entry for prefixes in highlight_prefixes."""
+    feat_collect = {}
+    # Trailing (?:\[[a-z]+\])? admits UD's layered-feature suffix (e.g.
+    # "Number[psor]", "Gender[subj]") — without it these columns were silently
+    # excluded from the sample table entirely, since the plain pattern requires
+    # the feature name to be nothing but letters through end-of-string.
+    for _, row in full_df.filter(regex=r"^[a-z]+_[A-Z][a-zA-Z]+(?:\[[a-z]+\])?$", axis=1).iterrows():
+        mf = dict()
+        for label, val in row.items():
+            prefix, feature = label.split("_")
+            key = f"{prefix}_features"
+            mf[key] = mf.get(key, list())
+            val_str = str(val)[:-2] if str(val).endswith(".0") else str(val)
+            entry = f"{feature}={val_str}"
+            if swap_feature and feature == swap_feature and prefix in highlight_prefixes:
+                entry = f"<strong>{entry}</strong>"
+            mf[key].append(entry)
+        for k, v in mf.items():
+            feat_collect[k] = feat_collect.get(k, list())
+            feat_collect[k].append(v)
+    return feat_collect
+
+
 def get_samples(
     prep,
     clf,
@@ -152,26 +220,20 @@ def get_samples(
     seed=42,
     show_features=False,
     extra_columns=None,
+    target=None,
 ):
     sample_ids = get_sample_ids(prep, clf, dt_df, predictor_var, max_rows, seed)
 
+    swap_feature, child_deprel = _agreement_context(predictor_var, target)
+    highlight_prefixes = tuple(p for p in ("head", child_deprel) if p) if swap_feature else ()
+
     keep_columns = ["sen_str"]
-    full_df["sen_str"] = [" ".join(sen) for sen in full_df["sen"]]
+    _add_sen_str_column(full_df, highlight_prefixes=highlight_prefixes)
     full_df["treebank_link"] = build_treebank_links(full_df)
 
     if show_features:
-        feat_collect = {}
-        for i, row in full_df.filter(regex=r"^[a-z]+_[A-Z][a-z]+$", axis=1).iterrows():
-            mf = dict()
-            for label, val in row.items():
-                prefix, feature = label.split("_")
-                mf[f"{prefix}_features"] = mf.get(f"{prefix}_features", list())
-                mf[f"{prefix}_features"].append(
-                    f"{feature}={(str(val)[:-2] if str(val).endswith(".0") else val)}"
-                )
-            for k, v in mf.items():
-                feat_collect[k] = feat_collect.get(k, list())
-                feat_collect[k].append(v)
+        feat_collect = _build_feat_columns(full_df, swap_feature=swap_feature,
+                                            highlight_prefixes=highlight_prefixes)
 
         for k, v in feat_collect.items():
             full_df[k] = v
@@ -293,22 +355,12 @@ def has_word_forms(row, form_cols):
 def build_treebank_links(full_df: pd.DataFrame) -> list[str]:
     """Build grew.fr query links for each row in full_df."""
 
-    map_to_x = {
-        i: x for i, x in enumerate([chr(i) for i in range(ord("A"), ord("Z") + 1)])
-    }
     form_cols = [x for x in full_df.columns if x.endswith("_form")]
     tb_links = []
     for _, row in full_df.iterrows():
-        base_query = (
-            f"<a href='https://universal.grew.fr/?corpus={row['treebank']}@2.18"
-            f"&request=pattern {{ meta.sent_id = \"{row['sent_id']}\" ;QUERYSLOT_PLACEHOLDER }}'"
-            f" target='_blank'>{row['treebank']}</a>"
-        )
-        slot = ";".join(
-            f' {map_to_x[j]} [form="{form}"|"{str(form).capitalize()}"] '
-            for j, (label, form) in enumerate(dict(row[form_cols]).items())
-        )
-        tb_links.append(base_query.replace("QUERYSLOT_PLACEHOLDER", slot))
+        form_values = list(dict(row[form_cols]).values())
+        link = build_grew_link(row.get("treebank"), row.get("sent_id"), form_values)
+        tb_links.append(link if link is not None else "&mdash;")
     return tb_links
 
 
@@ -318,7 +370,7 @@ def remove_censored(full_df):
 
 
 def build_placeholder_args(
-    dt_df, full_df, predictor_var, meta=None, show_features=False
+    dt_df, full_df, predictor_var, meta=None, show_features=False, target=None
 ):
     """Compute all arguments needed for write_placeholder_html."""
     sole_label = dt_df[predictor_var].iloc[0]
@@ -328,23 +380,16 @@ def build_placeholder_args(
     meta["Training samples"] = f"{len(dt_df):,}"
     meta["Predictor"] = predictor_var
 
-    full_df["sen_str"] = [" ".join(sen) for sen in full_df["sen"]]
+    swap_feature, child_deprel = _agreement_context(predictor_var, target)
+    highlight_prefixes = tuple(p for p in ("head", child_deprel) if p) if swap_feature else ()
+
+    _add_sen_str_column(full_df, highlight_prefixes=highlight_prefixes)
     full_df["treebank_link"] = build_treebank_links(full_df)
 
     keep_columns = ["sen_str"]
     if show_features:
-        feat_collect = {}
-        for i, row in full_df.filter(regex=r"^[a-z]+_[A-Z][a-z]+$", axis=1).iterrows():
-            mf = dict()
-            for label, val in row.items():
-                prefix, feature = label.split("_")
-                mf[f"{prefix}_features"] = mf.get(f"{prefix}_features", list())
-                mf[f"{prefix}_features"].append(
-                    f"{feature}={(str(val)[:-2] if str(val).endswith(".0") else val)}"
-                )
-            for k, v in mf.items():
-                feat_collect[k] = feat_collect.get(k, list())
-                feat_collect[k].append(v)
+        feat_collect = _build_feat_columns(full_df, swap_feature=swap_feature,
+                                            highlight_prefixes=highlight_prefixes)
 
         for k, v in feat_collect.items():
             full_df[k] = v
@@ -723,7 +768,7 @@ def tree2html(
             out_file,
             predictor_var,
             *build_placeholder_args(
-                dt_df, full_df, predictor_var, meta, show_features=show_features
+                dt_df, full_df, predictor_var, meta, show_features=show_features, target=target
             ),
         )
         return
@@ -815,6 +860,7 @@ def tree2html(
         max_rows=max_rows,
         extra_columns=extra_columns,
         show_features=show_features,
+        target=target,
     )
 
     _finalize_tree_html(

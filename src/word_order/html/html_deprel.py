@@ -1,5 +1,6 @@
 def create_html(
-    rows_six, rows_binary, plot_data_six_json, plot_data_binary_json, trivial_note=""
+    rows_six, rows_binary, plot_data_six_json, plot_data_binary_json, trivial_note="",
+    header_cells="",
 ):
     return f"""<!DOCTYPE html>
     <html lang="en">
@@ -224,15 +225,7 @@ def create_html(
             <table id="dataTable">
                 <thead>
                     <tr>
-                        <th class="sortable" data-column="0">Language</th>
-                        <th class="sortable" data-column="1">Base Entropy</th>
-                        <th class="sortable" data-column="2">Reduced Entropy</th>
-                        <th class="sortable" data-column="3">Δ Entropy</th>
-                        <th class="sortable" data-column="4">DT Acc%</th>
-                        <th class="sortable" data-column="5">N Items</th>
-                        <th class="sortable" data-column="6">N 1 swap</th>
-                        <th class="sortable" data-column="7">N 4 swap</th>
-                        <th class="sortable" data-column="8">N Pairs</th>
+                        {header_cells}
                     </tr>
                 </thead>
                 <tbody id="tableBody">

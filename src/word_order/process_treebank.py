@@ -18,13 +18,13 @@ from typing import *
 from multiblimp.treebank import Treebank
 from multiblimp.languages import remove_diacritics_langs, gblang2udlang
 from multiblimp.unimorph import UM2UD, UD2UM, UnimorphInflector
-from resources.um2ud_morpho.UM2UD_mapper import map_um_value_to_ud, safe_dict_update
+from resources.um2ud_morpho.UM2UD_mapper import map_um_value_to_ud
 
 from .prediction_target import PredictionTarget
 from .utils import shorten_cls
 
 
-META_FEATURES = ["sen", "treebank", "sent_id", "tree_idx", "treebank_link", "sen_str"]
+META_FEATURES = ["sen", "no_space_after", "treebank", "sent_id", "tree_idx", "treebank_link", "sen_str"]
 
 
 @dataclass
@@ -74,6 +74,47 @@ def tree2sen(tree):
     return [x["form"] for x in tree]
 
 
+def tree_no_space_after(tree):
+    """Per-token SpaceAfter=No flags, parallel to tree2sen(tree). Saved alongside
+    "sen" so downstream consumers (e.g. sva_trees' flowchart) can reconstruct the
+    correctly-spaced surface string without reloading the source treebank."""
+    return [(tok["misc"] or {}).get("SpaceAfter") == "No" for tok in tree]
+
+
+_SUBJ_FEAT_SUFFIXES = ("[subj]", "[nsubj]")
+
+
+def merge_subj_layered_feats(treebank) -> None:
+    """UD sometimes marks a token's subject-agreement value with a layered
+    "[subj]" suffix (or "[nsubj]", depending on the treebank) instead of the
+    plain feature name — e.g. Abkhaz annotates verbs with Number[subj] rather
+    than plain Number: in the shipped data, head_Number is set on only ~5% of
+    Abkhaz rows, vs. 100% for head_Number[subj]. For SVA purposes this is the
+    same underlying property as the plain feature, so fold it into the plain
+    key wherever the plain key is itself absent, and drop the layered key —
+    "Number[subj]" never survives as its own separate feature/column.
+
+    Deliberately narrow: only [subj]/[nsubj] are converted. Other layered
+    features (e.g. Number[psor]) are left untouched — they stay as their own
+    distinct feature rather than being folded into anything.
+
+    Mutates token["feats"] in place; must run before get_all_feats/
+    extract_instances read them, since both only see whatever's already there.
+    """
+    for tree in treebank:
+        for token in tree:
+            feats = token.get("feats")
+            if not feats:
+                continue
+            for key in list(feats.keys()):
+                for suffix in _SUBJ_FEAT_SUFFIXES:
+                    if key.endswith(suffix):
+                        base = key[: -len(suffix)]
+                        feats.setdefault(base, feats[key])
+                        del feats[key]
+                        break
+
+
 def get_all_feats(treebank, min_freq=0.005):
     all_feats = Counter()
     all_deprel = set()
@@ -97,7 +138,39 @@ def get_all_feats(treebank, min_freq=0.005):
 
     return set(all_feats), all_lemma_freqs, all_deprel, all_pos
 
+
 UNDEFINED = "UNDEFINED"
+
+# Cached groupby("form") per UniMorph POS-slice, keyed by object identity. The
+# same POS-slice DataFrame (from sva_trees.pipeline.get_um_lookup_table) is
+# reused across every node of that POS for the whole treebank, so grouping it
+# once and reusing .get_group() turns each partial_df_match call from a full
+# linear scan of a (often 100k+ row) DataFrame into an indexed lookup.
+_form_groups_cache: dict = {}
+
+
+def _get_form_groups(um_data):
+    key = id(um_data)
+    cached = _form_groups_cache.get(key)
+    if cached is not None and cached[0] is um_data:
+        return cached[1]
+    groups = um_data.groupby("form", observed=False)
+    _form_groups_cache[key] = (um_data, groups)
+    return groups
+
+
+def clear_form_groups_cache() -> None:
+    """Drop all cached groupby("form") results and their source DataFrames.
+
+    The cache holds a strong reference to every um_data slice it's ever seen
+    (see _get_form_groups), so it grows for as long as new slices keep coming
+    in. Callers that process a sequence of languages where each language's
+    um_data is never revisited (e.g. sva_trees.pipeline.Pipeline, one
+    get_um_lookup_table() call per language) should call this once they're
+    done with a language's data, so memory doesn't accumulate across the run.
+    """
+    _form_groups_cache.clear()
+
 
 def partial_df_match(
         um_data,
@@ -110,31 +183,20 @@ def partial_df_match(
         group_index (lemma or form) and the features in the provided
         `features` dictionary.
         """
+        remaining_match_feats = dict(match_feats)
+        form_val = remaining_match_feats.pop("form", None)
+        if (form_val not in (None, "_")) and ("form" in um_data.columns):
+            groups = _get_form_groups(um_data)
+            if form_val not in groups.groups:
+                return um_data.iloc[0:0]
+            um_data = groups.get_group(form_val)
 
-        for filter_type, filter_value in match_feats.items():
-            #print("filtering", filter_type, filter_value)
+        for filter_type, filter_value in remaining_match_feats.items():
             if filter_value not in [None, "_"]:
                 um_data = um_data[um_data[filter_type] == filter_value]
             if len(um_data) == 0:
                 return um_data.iloc[0:0]
         sub_df = um_data
-
-        # print(sub_df)
-        # print(match_feats)
-        # print(features)
-        # if len(groups.indices.get(group_index, [])) == 0:
-        #     empty_df = um_data.iloc[0:0]
-        #     return empty_df
-
-        # sub_df = groups.get_group(group_index)
-
-        # if len(sub_df) == 0:
-        #     return sub_df
-        # elif len(sub_df)>1:
-        #     sub_df = sub_df[sub_df["lemma"] == node["lemma"]]
-        #     if len(sub_df)==0:
-
-        #         return um_data.iloc[0:0]
 
         mask = np.ones(len(sub_df), dtype=bool)
 
@@ -158,27 +220,31 @@ def partial_df_match(
                         )
                     except:
                         pass
-                        #print("???SOS", match_feats, features)
 
         candidate_rows = sub_df[mask]
-       # print(candidate_rows)
-       # print()
-
 
         if (not prefer_tight_match) or (len(candidate_rows) < 2):
             return candidate_rows
 
-        features_added = np.zeros(len(candidate_rows))
-        for idx, (_, row) in enumerate(candidate_rows.iterrows()):
-            for ufeat, val in row.items():
-                if (not pd.isna(val)) or (val == UNDEFINED):
-                    # If it is a not-nan feature that is not present in the matching row, +1
-                    features_added[idx] += ufeat not in features
-                elif (not pd.isna(features.get(ufeat))) and (
-                    pd.isna(val) or (val == UNDEFINED)
-                ):
-                    # If it is a nan feature that *is* present in the matching row, +1
-                    features_added[idx] += 1
+        # Vectorized equivalent of the per-row/per-column loop below (avoids
+        # candidate_rows.iterrows()):
+        #   for each cell (row, col):
+        #     if cell is set (not-nan or UNDEFINED): +1 if col not in `features`
+        #     else (cell is nan): +1 if `features` has a real (non-nan) value for col
+        is_set_df = candidate_rows.notna() | (candidate_rows == UNDEFINED)
+        not_in_features = pd.Series(
+            {col: (col not in features) for col in candidate_rows.columns}
+        )
+        wants_feature = pd.Series(
+            {
+                col: (col in features) and pd.notna(features.get(col))
+                for col in candidate_rows.columns
+            }
+        )
+        penalty = is_set_df.mul(not_in_features, axis=1).astype(int) + (
+            (~is_set_df).mul(wants_feature, axis=1).astype(int)
+        )
+        features_added = penalty.sum(axis=1).to_numpy()
 
         min_features_added = min(features_added)
         min_features_added_mask = features_added == min_features_added
@@ -227,160 +293,9 @@ def expand_anno(node, morph_feats, target, um_split):
                             add_feats[k] = v
 
         if add_feats:
-            with open ("debug_mapping.txt", "a", encoding="utf-8") as f:
-                print("node prev", node.items(), file=f)
-                for feat, val in add_feats.items():
-                    morph_feats[feat] = val
-                print("form rows", form_rows, file=f)
-                print("unified:", unified, file=f)
-                print("add:", add_feats, file=f)
-                print("node post", node.items(), file=f)
-                print("-"*50, file=f)
+            for feat, val in add_feats.items():
+                morph_feats[feat] = val
 
-    #print("morph_feats", morph_feats)
-    return morph_feats
-
-UNDEFINED = "UNDEFINED"
-
-def partial_df_match(
-        um_data,
-        match_feats : dict,
-        ufeat,
-        features: Dict[str, str],
-        prefer_tight_match: Optional[bool] = None,
-    ):
-        """Find all rows in the morphology dataframe that match the
-        group_index (lemma or form) and the features in the provided
-        `features` dictionary.
-        """
-
-        for filter_type, filter_value in match_feats.items():
-            #print("filtering", filter_type, filter_value)
-            if filter_value not in [None, "_"]:
-                um_data = um_data[um_data[filter_type] == filter_value]
-            if len(um_data) == 0:
-                return um_data.iloc[0:0]
-        sub_df = um_data
-
-        # print(sub_df)
-        # print(match_feats)
-        # print(features)
-        # if len(groups.indices.get(group_index, [])) == 0:
-        #     empty_df = um_data.iloc[0:0]
-        #     return empty_df
-
-        # sub_df = groups.get_group(group_index)
-
-        # if len(sub_df) == 0:
-        #     return sub_df
-        # elif len(sub_df)>1:
-        #     sub_df = sub_df[sub_df["lemma"] == node["lemma"]]
-        #     if len(sub_df)==0:
-
-        #         return um_data.iloc[0:0]
-
-        mask = np.ones(len(sub_df), dtype=bool)
-
-        for col, val in features.items():
-            if isinstance(val, list):
-                sub_mask = np.zeros_like(mask)
-                for subval in val:
-                    sub_mask |= sub_df[col] == subval
-                mask &= sub_mask
-            elif (val is not None) and (pd.notna(val)):
-                if val.startswith("-"):
-                    mask &= (sub_df[col] != val[1:]) & (sub_df[col] != UNDEFINED)
-                elif col == ufeat:
-                    mask &= sub_df[col] == val
-                else:
-                    try:
-                        mask &= (
-                            (sub_df[col] == val)
-                            | (sub_df[col] == UNDEFINED)
-                            | pd.isna(sub_df[col])
-                        )
-                    except:
-                        pass
-                        #print("???SOS", match_feats, features)
-
-        candidate_rows = sub_df[mask]
-       # print(candidate_rows)
-       # print()
-
-
-        if (not prefer_tight_match) or (len(candidate_rows) < 2):
-            return candidate_rows
-
-        features_added = np.zeros(len(candidate_rows))
-        for idx, (_, row) in enumerate(candidate_rows.iterrows()):
-            for ufeat, val in row.items():
-                if (not pd.isna(val)) or (val == UNDEFINED):
-                    # If it is a not-nan feature that is not present in the matching row, +1
-                    features_added[idx] += ufeat not in features
-                elif (not pd.isna(features.get(ufeat))) and (
-                    pd.isna(val) or (val == UNDEFINED)
-                ):
-                    # If it is a nan feature that *is* present in the matching row, +1
-                    features_added[idx] += 1
-
-        min_features_added = min(features_added)
-        min_features_added_mask = features_added == min_features_added
-
-        return candidate_rows[min_features_added_mask]
-
-
-def expand_anno(node, morph_feats, target, um_split):
-    # make copy to keep upos/lemma separate from conllu Token's feats
-    inflect_feats = morph_feats
-    inflect_feats["upos"] = node["upos"]
-    # allows for soft matching if no lemma was specified in UD
-    inflect_feats["lemma"] = node.get("lemma", None) if node.get("lemma", None) != "_" else None
-
-    um_feats = {f: (UD2UM.get((f,v), None) if f!="lemma" else v) for f, v in inflect_feats.items()}
-
-    form_rows = partial_df_match(
-        um_split,
-        {"form": node["form"], "lemma":inflect_feats["lemma"]},
-        target,
-        um_feats,
-        prefer_tight_match=True
-    )
-    add_feats=False
-    if len(form_rows):
-        unified = dict()
-        for i, row in form_rows.iterrows():
-            transformed =  map_um_value_to_ud(row["ufeat"])
-            for k, v in transformed["morpho"].items():
-                unified[k] = unified.get(k, list()) + [v]
-            unified["upos"] = unified.get("upos", list()) + [transformed["upos"]]
-
-        unified = {k: list(set(v))[0] for k, v in unified.items() if len(list(set(v)))==1}
-
-        if( not any(
-                    [1 if (inflect_feats.get(k, False) and 
-                            inflect_feats.get(k, False)!=v and
-                            inflect_feats.get(k, False)!="UNDEFINED"
-                            ) else 0 for k, v in unified.items()]
-                )):
-                    #unanimous feat matches
-                    #check for conflict with og data stil
-                    for k,v in unified.items():
-                        if not k in um_feats:#s and len(set(v))==1:
-                            if add_feats==False: add_feats = dict()
-                            add_feats[k] = v
-
-        if add_feats:
-            with open ("debug_mapping.txt", "a", encoding="utf-8") as f:
-                print("node prev", node.items(), file=f)
-                for feat, val in add_feats.items():
-                    morph_feats[feat] = val
-                print("form rows", form_rows, file=f)
-                print("unified:", unified, file=f)
-                print("add:", add_feats, file=f)
-                print("node post", node.items(), file=f)
-                print("-"*50, file=f)
-
-    #print("morph_feats", morph_feats)
     return morph_feats
 
 
@@ -752,6 +667,7 @@ def extract_instances(
         sen = tree2sen(tree)
         instance = {
             "sen": sen,
+            "no_space_after": tree_no_space_after(tree),
             "treebank": tree.metadata["treebank"].split("/")[0],
             "sent_id": tree.metadata["sent_id"],
             "tree_idx": tree_idx,
@@ -882,6 +798,7 @@ def extract_features(
     of partial DataFrames; the caller is responsible for concatenating and
     categorizing them (see create_word_order_df).
     """
+    merge_subj_layered_feats(treebank)
     all_feats, all_lemma_freqs, all_deprel, all_pos = get_all_feats(treebank)
     tree_metadata = (all_feats, all_lemma_freqs, all_deprel, all_pos)
 
@@ -970,7 +887,7 @@ def create_word_order_df(
     df = _categorize(df)
 
     if drop_singleton_columns and len(df) > 0:
-        always_keep = {"deprel_order", "sen", "treebank", "sent_id", "tree_idx"}
+        always_keep = {"deprel_order", "sen", "no_space_after", "treebank", "sent_id", "tree_idx"}
         always_keep.update(set([col for col in df.columns if col.endswith("agreement")]))
         always_keep.update(set([col for col in df.columns if col.endswith("_idx")]))
         cols_to_check = df.columns.difference(list(always_keep))
