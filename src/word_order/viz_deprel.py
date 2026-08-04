@@ -209,6 +209,24 @@ def extract_trivial_label(html_path: Path) -> str | None:
         return match.group(1).strip()
     return None
 
+def extract_trivial_sample_count(html_path: Path) -> int:
+    """Extract the "Training samples" count write_placeholder_html wrote into a
+    placeholder page's meta panel, e.g. '<span class="meta-val">4,486</span>'.
+    0 if the page has no such row (shouldn't normally happen for a placeholder).
+
+    A trivial language never gets a fitted tree, so it has no data_dir/{lang}.parquet
+    for row-count fallbacks to read (fit_dt is what writes that file) — this reuses
+    the count tree2html already computed and embedded in the one file we do have.
+    """
+    content = html_path.read_text(encoding="utf-8")
+    match = re.search(
+        r'<span class="meta-key">Training samples</span>\s*'
+        r'<span class="meta-val">([\d,]+)</span>',
+        content,
+    )
+    return int(match.group(1).replace(",", "")) if match else 0
+
+
 
 def generate_html_deprel_index(
     data_dir: str,
@@ -254,12 +272,14 @@ def generate_html_deprel_index(
 
     # Detect trivial langs from placeholder HTML files — keys are stem strings
     trivial_langs = {}
+    trivial_counts = {}
     for html_file in html_path.glob("*.html"):
         if html_file.name.lower() == "index.html":
             continue
         label = extract_trivial_label(html_file)
         if label is not None:
             trivial_langs[html_file.stem] = label  # ← stem string, not Path
+            trivial_counts[html_file.stem] = extract_trivial_sample_count(html_file)
 
     if language_data is None:
         language_data = {}
@@ -300,7 +320,7 @@ def generate_html_deprel_index(
 
     # Pick up any trivial langs not yet covered by placeholder files
     for l in metrics_six[metrics_six["base_entropy"] == 0.0]["language"]:
-        trivial_langs[l] = set(language_data[l][target_col].values)[0]
+        trivial_langs[l] = list(set(language_data[l][1][target_col].values))[0]
 
     # Split trivial langs: include_trivial_labels go back into the main table/plot
     include_trivial_langs = {
@@ -328,12 +348,7 @@ def generate_html_deprel_index(
             if lang in language_data:
                 lang_df = language_data[lang][1]
             else:
-                parquet_fn = os.path.join(data_dir, lang + ".parquet")
-                lang_df = (
-                    pd.read_parquet(parquet_fn)
-                    if os.path.exists(parquet_fn)
-                    else pd.DataFrame({target_col: []})
-                )
+                lang_df = pd.DataFrame({target_col: [label] * trivial_counts.get(lang, 0)})
 
             if is_agreement:
                 n_raw, n_keep, n_pairs = _agreement_row_stats(
@@ -385,16 +400,6 @@ def generate_html_deprel_index(
     }
     deprel = html_path.name
 
-    # Build color lookup before generating rows
-    lang_colors = {}
-    for _, row in metrics_six.iterrows():
-        lang_name = row["language"].replace("_", " ")
-        if row["language"] in include_trivial_langs:
-            lang_colors[lang_name] = "#31cb9f"  # green — matches palette_map "Yes"
-        else:
-            lang_colors[lang_name] = scatter_color(
-                row, language_data, target_col, exclude_labels=exclude_labels
-            )
 
     # Generate table rows for both entropy types
     def generate_rows(metrics_df, lang_colors):
@@ -448,10 +453,17 @@ def generate_html_deprel_index(
             )
         return "".join(rows)
 
-    lang_colors = {
-        row["language"].replace("_", " "): scatter_color(row, language_data, target_col, exclude_labels=exclude_labels)
-        for _, row in metrics_six.iterrows()
-    }
+ # Build color lookup before generating rows/plot data
+    lang_colors = {}
+    for _, row in metrics_six.iterrows():
+        lang_name = row["language"].replace("_", " ")
+        if row["language"] in include_trivial_langs:
+            lang_colors[lang_name] = "#31cb9f"  # green — matches palette_map "Yes"
+        else:
+            lang_colors[lang_name] = scatter_color(
+                row, language_data, target_col, exclude_labels=exclude_labels
+            )
+
     rows_six = generate_rows(metrics_six, lang_colors)
     rows_binary = generate_rows(metrics_binary, lang_colors)
 
@@ -484,25 +496,29 @@ def generate_html_deprel_index(
     plot_data_binary_json = json.dumps(plot_data_binary)
 
     # Build legend / notes
-    color_note_parts = [
-        '<p class="trivial-note">'
-        '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;'
-        'background:#e5c64d;margin-right:6px;vertical-align:middle;"></span>'
-        "Languages shown in <strong>yellow</strong> only exhibit uninformative agreement "
-        "(labels <code>--</code> and <code>+-</code>) — no Yes/No contrast was observed."
-    ]
+    any_yellow_drawn = "#e5c64d" in lang_colors.values()
+    color_note_parts = []
+    if any_yellow_drawn:
+        color_note_parts.append(
+            '<p class="trivial-note">'
+            '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;'
+            'background:#e5c64d;margin-right:6px;vertical-align:middle;"></span>'
+            "Languages shown in <strong>yellow</strong> only exhibit uninformative agreement "
+            "(labels <code>--</code> and <code>+-</code>) — no Yes/No contrast was observed."
+        )
     if include_trivial_labels:
         labels_str = ", ".join(
             f"<code>{l}</code>" for l in sorted(include_trivial_labels)
         )
         color_note_parts.append(
-            "<br>"
-            '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;'
+            ('<br>' if any_yellow_drawn else '<p class="trivial-note">')
+            + '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;'
             'background:#31cb9f;margin-right:6px;margin-top:6px;vertical-align:middle;"></span>'
             f"Languages shown in <strong>green</strong> have categorical agreement throughout "
             f"— all samples share the label {labels_str}."
         )
-    color_note_parts.append("</p>")
+    if color_note_parts:
+        color_note_parts.append("</p>")
     color_note = "".join(color_note_parts)
 
     if omit_langs:

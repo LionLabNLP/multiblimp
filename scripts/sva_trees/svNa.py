@@ -42,7 +42,7 @@ if __name__=="__main__":
                         deprel_dir="_".join(target.child_deprels), 
                         resource_dir="../../resources", 
                         word_order_dir=f"../../treebank_features/{deprel_dir}",
-                        max_treebank_len=30_000,
+                        max_treebank_len=None,
                         never_skip=args.never_skip,
                         rm_columns=["nsubj_child-deprel_conj",
                                     #"head_child-deprel_cop",
@@ -51,5 +51,6 @@ if __name__=="__main__":
                         target_id=sys.argv[0][:-3],
                         threshold=0.12,
                         simplify=args.simplify,
+                        n_jobs=4
                         )
     pipeline()

@@ -131,6 +131,12 @@ def flag_treebanks(flag_type: str) -> dict[str, list[str]]:
             results.setdefault(language_name, []).extend(
                 name_of(tb) for tb in treebank_headers
             )
+        for name in list(results.keys()):
+            if name is None:
+                continue
+            alt = name.replace(" ", "_") if " " in name else name.replace("_", " ")
+            if alt != name:
+                results.setdefault(alt, results[name])
 
     return results
 
@@ -154,8 +160,12 @@ class Treebank:
         if load_from_pickle:
             pickle_path = os.path.join(resource_dir, pickle_path, f"{lang}.pickle")
             # TODO: if no pickle, run pickle script
-            with open(pickle_path, "rb") as f:
-                return pickle.load(f)
+            if os.path.exists(pickle_path):
+                with open(pickle_path, "rb") as f:
+                    return pickle.load(f)
+            else:
+                with open("error_log.txt", "a") as f:
+                    f.write(f"Pickle not found for {lang} at {pickle_path}\n")
 
         if test_files_only:
             treebank_glob = os.path.join(UD_PATH, f"UD_{lang}*/*test*.conllu")
@@ -164,7 +174,7 @@ class Treebank:
         treebank_glob = os.path.join(resource_dir, treebank_glob)
         treebank_paths = glob(treebank_glob)
 
-        skip_flagged = flag_treebanks("sign language").get((lang if not "_" in lang else lang.split("_")[0]), [])
+        skip_flagged = flag_treebanks("sign language").get(lang, [])
         treebank_paths = [p for p in treebank_paths if p.split("/")[-2].split("-")[-1].lower() not in skip_flagged]
         selected_treebanks = udlang2treebanks.get(lang)
         if use_selected_treebanks and selected_treebanks is not None:

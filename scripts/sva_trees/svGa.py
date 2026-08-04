@@ -17,16 +17,19 @@ if __name__=="__main__":
     parser.add_argument("--langs", "-l", nargs="*", help="Languages to process", default=[])
     parser.add_argument("--never_skip", "-ns", action="store_true", 
                         help="Always create new df's, decesion trees, and HTML files")
+    parser.add_argument("--simplify", "-s", action="store_true", 
+                        help="Simplify agreement labels before fitting decision tree")
     args = parser.parse_args()
 
     target = nsubj_target
     target.head_feats = {"VerbForm": partial(filter_head_feats, exclude="Part")}
+    target.swap_feat = "Gender"
     # target.child_feats = {}
     deprel_dir = "_".join(target.child_deprels)
     resource_dir = "../../resources"
 
     pipeline = Pipeline(target=target,
-                        predictor_var="head_nsubj_Gender_agreement",
+                        predictor_var=f"head_nsubj_{target.swap_feat}_agreement",
                         langs=(args.langs if args.langs else get_ud_langs(resource_dir)), 
                         inflection_map=swap_number_subj_any,
                         unimorph_args = {
@@ -39,11 +42,15 @@ if __name__=="__main__":
                         deprel_dir="_".join(target.child_deprels), 
                         resource_dir="../../resources", 
                         word_order_dir=f"../../treebank_features/{deprel_dir}",
-                        max_treebank_len=30_000,
+                        max_treebank_len=None,
                         never_skip=args.never_skip,
                         rm_columns=["nsubj_child-deprel_conj",
                                     #"head_child-deprel_cop",
                                     #"head_child-deprel_aux"
                                     ],
-                        target_id=sys.argv[0][:-3])
+                        target_id=sys.argv[0][:-3],
+                        threshold=0.12,
+                        simplify=args.simplify,
+                        n_jobs=4
+                        )
     pipeline()

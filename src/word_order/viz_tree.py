@@ -465,14 +465,11 @@ def _finalize_tree_html(
 
     feature_names = prep.get_feature_names_out()
 
-    X_trans = prep.transform(data_df)
-    if hasattr(X_trans, "toarray"):
-        X_trans = X_trans.toarray()
-    binary_feature_indices = {
-        i
-        for i in range(X_trans.shape[1])
-        if set(np.unique(X_trans[:, i])).issubset({0, 1, 0.0, 1.0})
-    }
+    n_features_out = len(feature_names)
+    cat_slice = prep.output_indices_.get("cat")
+    binary_feature_indices = (
+        set(range(*cat_slice.indices(n_features_out))) if cat_slice is not None else set()
+    )
 
     if correlate_features:
         correlated_features = get_correlated_features(prep, clf, data_df)

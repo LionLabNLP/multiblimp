@@ -272,12 +272,16 @@ def expand_anno(node, morph_feats, target, um_split):
     if len(form_rows):
         unified = dict()
         for i, row in form_rows.iterrows():
+            # go through all plausible match rows
+            # -> if more than one, only use features for which all rows agree on the value
             transformed =  map_um_value_to_ud(row["ufeat"])
             for k, v in transformed["morpho"].items():
                 unified[k] = unified.get(k, list()) + [v]
             unified["upos"] = unified.get("upos", list()) + [transformed["upos"]]
 
-        unified = {k: list(set(v))[0] for k, v in unified.items() if len(list(set(v)))==1}
+        # drop any features with multiple competing values
+        unified = {k: list(set(v))[0] for k, v in unified.items()
+                   if len(list(set(v)))==1 and type(v[0])!=tuple}
 
         if( not any(
                     [1 if (inflect_feats.get(k, False) and 
@@ -890,6 +894,7 @@ def create_word_order_df(
         always_keep = {"deprel_order", "sen", "no_space_after", "treebank", "sent_id", "tree_idx"}
         always_keep.update(set([col for col in df.columns if col.endswith("agreement")]))
         always_keep.update(set([col for col in df.columns if col.endswith("_idx")]))
+        always_keep.update(set([col for col in df.columns if col.endswith("_form")]))
         cols_to_check = df.columns.difference(list(always_keep))
         keep = df[cols_to_check].nunique() > 1
         kept_always = [c for c in always_keep if c in df.columns]

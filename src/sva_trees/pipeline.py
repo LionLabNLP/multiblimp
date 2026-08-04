@@ -3,11 +3,13 @@ import sys
 import random
 import math
 import io
-from concurrent.futures import ProcessPoolExecutor, as_completed
+import joblib
 
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pandas import DataFrame
 
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+PYTHONIOENCODING="utf-8"
+#sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 sys.path.append("../")
 
 from word_order.process_treebank import (
@@ -30,7 +32,7 @@ def get_impurity(n, min_n=300, max_n=4000, max_val=0.1, min_val=0.01):
         return min_val
 
     t = (math.log(n) - math.log(min_n)) / (math.log(max_n) - math.log(min_n))
-    
+
     return max_val - t * (max_val - min_val)
 
 
@@ -47,8 +49,6 @@ def get_um_lookup_table(inflector):
 def get_data_df(lang, resource_dir, save_to_dir, target, predictor_var, inflector, max_treebank_len):
     treebank = load_treebank(lang, resource_dir, max_treebank_len=max_treebank_len)
 
-    # get POS'es from prediction target, load one lookup_df for each
-    # TODO alpha split or precompute?
     um_data = get_um_lookup_table(inflector)
 
     df = create_word_order_df(
@@ -99,18 +99,21 @@ class Pipeline:
                     future.result()  # re-raise any worker exception here
         else:
             for lang in langs:
-                self._process_language(lang)
+                self._process_language(lang, rerun=self.never_skip)
 
         for deprel in self.target.child_deprels:
+            print("Generating deprel index for", deprel)
             flowchart_dir = f"../../decision_trees/{self.target_id}/{self.target_id}_{deprel}/flowcharts/"
             generate_html_deprel_index(data_dir=f"../../decision_trees/{self.target_id}/{self.target_id}_{deprel}",
                             html_directory=f"../../decision_trees/{self.target_id}",
                             target_col=self.predictor_var,
                             exclude_labels={"unk"} if self.simplify else {"--", "+-"},
+                            include_trivial_labels={"Yes"},
                             flowchart_dir=flowchart_dir,
                             leaf_threshold=self.leaf_threshold,
                             pairs_dir=f"../../minimal_pairs/{self.target_id}/{self.target_id}_{deprel}",
                             )
+        print("Generating overview index")
         generate_html_overview_index(html_directory=f"../../decision_trees/")
 
     def _process_language(self, lang):
@@ -124,12 +127,15 @@ class Pipeline:
             clear_form_groups_cache()
 
     def _process_language_impl(self, lang):
-        print(lang)
-
-        html_file = f"../../decision_trees/{self.target_id}/{lang}.html"
-        if self.never_skip==False and os.path.exists(html_file):
-            print(f"HTML found and -ns==False.")
+        # If the minimal pairs for all deprels already exist, skip this language
+        if not self.never_skip and all(
+            os.path.isdir(f"../../minimal_pairs/{self.target_id}/{self.target_id}_{deprel}/{lang}")
+            for deprel in self.target.child_deprels
+            ):
+            print(f"{lang}: Skip, minimal pairs already found")
             return
+
+        print(lang)
 
         df = read_df(lang, word_order_dir=self.word_order_dir) if (
             os.path.exists(f"{self.word_order_dir}/{lang.replace(' ', '_')}.parquet")
@@ -145,14 +151,10 @@ class Pipeline:
         if self.never_skip or type(df)==bool or not self.predictor_var in df.columns:
             df = get_data_df(lang, self.resource_dir, self.word_order_dir, self.target, self.predictor_var,
                             inflector, self.max_treebank_len)
-            print(lang, len(df))
-            if not len(df):
-                print(f"Skipping {lang}, raw_df has no entries")
-                return
-        else:
-            print(f"Skipping {lang} load_treebank(), df already found")
 
-        print("Generating HTML file for", lang)
+        if not len(df):
+            print(f"Skipping {lang}, raw_df has no entries")
+            return
 
         full_df = df[df[self.predictor_var].notnull()]
 
@@ -177,9 +179,9 @@ class Pipeline:
             # unbound entirely on the first iteration).
             dt_df, model, learn_dt = None, None, False
 
-            if self.never_skip or not os.path.exists(f"../../decision_trees/{self.target_id}/{self.target_id}_{deprel}/{lang}"):
-                pred_values = set(full_df[self.predictor_var].values)
+            pred_values = set(full_df[self.predictor_var].values)
 
+            if self.never_skip or not os.path.exists(f"../../decision_trees/{self.target_id}/{self.target_id}_{deprel}/{lang}"):
                 if len(pred_values)>1: # TODO or label is ==yes
                     model, dt_df, predictor_df = fit_dt(
                         full_df=full_df,
@@ -199,42 +201,41 @@ class Pipeline:
                     model, predictor_df = None, None
                     dt_df = full_df
                     learn_dt = False
-
             else:
-                print(f"Skipping {lang}, decision tree already found")
+                # read from disk if it already exists
+                dt_df = read_df(lang, word_order_dir=f"../../decision_trees/{self.target_id}/{self.target_id}_{deprel}")
+                model = joblib.load(f"../../decision_trees/{self.target_id}/{self.target_id}_{deprel}/{lang}.joblib")
 
-            if dt_df is None:
-                # The "already found" branch above didn't reload the tree from
-                # disk, so there's nothing to render/generate pairs from this
-                # iteration — skip rather than reuse a previous deprel's dt_df.
-                print(f"Skipping {lang}/{deprel} tree2html/create_pairs, no dt_df available")
-                continue
-
-            tree2html(
-                pipeline_model=model,
-                dt_df=dt_df,
-                full_df=full_df,
-                predictor_var=self.predictor_var,
-                target=self.target,
-                out_file=html_file,
-                max_rows=15,
-                meta={"Language": lang},
-                only_show_real_orders=True,
-                correlate_features=True,
-                show_features=True,
-                full_tree_html=learn_dt,
-                palette_map = (
-                    {"Yes": "#31cb9f", "No": "#f16393", "unk": "#b893de"}
-                    if self.simplify else
-                    {"Yes": "#31cb9f", "No": "#f16393",
-                     "+-": "#e5c64d", "--": "#b893de"}
+            if self.never_skip or not os.path.exists(f"../../decision_trees/{self.target_id}/{lang}.html"):
+                tree2html(
+                    pipeline_model=model,
+                    dt_df=dt_df,
+                    full_df=full_df,
+                    predictor_var=self.predictor_var,
+                    target=self.target,
+                    out_file=f"../../decision_trees/{self.target_id}/{lang}.html",
+                    max_rows=15,
+                    meta={"Language": lang},
+                    only_show_real_orders=True,
+                    correlate_features=True,
+                    show_features=True,
+                    full_tree_html=learn_dt,
+                    palette_map = (
+                        {"Yes": "#31cb9f", "No": "#f16393", "unk": "#b893de"}
+                        if self.simplify else
+                        {"Yes": "#31cb9f", "No": "#f16393",
+                        "+-": "#e5c64d", "--": "#b893de"}
+                    )
                 )
-            )
-
-            print("Generating minimal pairs for", lang)
-            flowchart_dir = f"../../decision_trees/{self.target_id}/{self.target_id}_{deprel}/flowcharts/"
-            create_pairs(dt_df, swap_feat=self.predictor_var , inflector=inflector,
+            e=False
+            try:
+                create_pairs(dt_df, swap_feat=self.predictor_var , inflector=inflector,
                         leaf_threshold=self.leaf_threshold,
                         save_to=f"../../minimal_pairs/{self.target_id}/{self.target_id}_{deprel}/{lang}",
-                        flowchart_path = os.path.join(flowchart_dir, f"{lang}.html"),
+                        flowchart_path = os.path.join(f"../../decision_trees/{self.target_id}/{self.target_id}_{deprel}/flowcharts/", f"{lang}.html"),
                         verbose=True)
+            except KeyError:
+                print(f"Skipping {lang} for {deprel}, missing column")
+                e=True
+            if e:
+                raise FileNotFoundError(f"Skipping {lang} for {deprel}, missing column")

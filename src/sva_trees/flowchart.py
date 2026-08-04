@@ -295,7 +295,8 @@ def render_flowchart_html(diagnostic_dfs: dict, out_file: str, max_examples: int
         examples = _examples_table_html(item_df, max_examples, treebank=treebank,
                                          child_deprel=child_deprel, default_kind=default_kind,
                                          swap_feature=swap_feature)
-        return f'''<div class="outcome" style="--dot:{color}">
+        cls = "outcome" + (" outcome-empty" if n == 0 else "")
+        return f'''<div class="{cls}" style="--dot:{color}">
       <div class="outcome-title"><span class="outcome-dot"></span>{html_lib.escape(label)}<span class="count">n={n}</span></div>
       <details><summary>examples (up to {max_examples})</summary>{examples}</details>
     </div>'''
@@ -469,6 +470,7 @@ def render_flowchart_html(diagnostic_dfs: dict, out_file: str, max_examples: int
     text-align: center; background: var(--surface); transition: box-shadow .15s;
   }}
   .outcome:hover {{ box-shadow: var(--shadow-md); }}
+  .outcome:not(.outcome-empty) {{ background: #ecfdf5; }}
   .outcome-title {{
     font-weight: 600; font-size: 12.5px; display: flex; align-items: center;
     justify-content: center; gap: 6px;

@@ -280,6 +280,11 @@ def fit_dt(
     X = sub_df[sub_condition_on].copy()
     X = X.loc[:, X.nunique() > 1].copy()
 
+    dropped_form_cols = {
+        col for col in sub_condition_on if col.endswith("_form") and col not in X.columns
+    }
+    omit_feats.update(dropped_form_cols)
+
     y = sub_df[predictor_var].copy()
     y[pd.isna(y)] = "None"
 

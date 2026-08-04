@@ -130,7 +130,8 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
         keep = pd.Series(True, index=df.index)
     swap_df = df[keep & (df[swap_feat]=="Yes")]
     if len(swap_df) == 0:
-        print(f"No rows to process for {swap_feat} (keep={len(df[keep])}, swap={len(df[df[swap_feat]=='Yes'])})")
+        with open("error_log.txt", "a") as f:
+            f.write(f"No rows to process for {swap_feat} (keep={len(df[keep])}, swap={len(df[df[swap_feat]=='Yes'])})\n")
         return {bucket: pd.DataFrame() for bucket in [
             "correct_swaps", "same_forms", "same_features", "undefined_features",
             "no_inflections", "no_candidates", "multi_now_valid", "ambiguous_subjects",
