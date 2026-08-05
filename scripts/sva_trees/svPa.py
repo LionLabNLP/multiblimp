@@ -51,6 +51,7 @@ if __name__=="__main__":
                         target_id=sys.argv[0][:-3],
                         threshold=0.12,
                         simplify=args.simplify,
-                        n_jobs=4
+                        n_jobs=1,
+                        force=False,
                         )
     pipeline()

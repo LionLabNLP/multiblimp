@@ -2,18 +2,18 @@ import os
 import sys
 import random
 import math
-import io
+import gc
 import joblib
 
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pandas import DataFrame
 
 PYTHONIOENCODING="utf-8"
-#sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
+
 sys.path.append("../")
 
 from word_order.process_treebank import (
-    load_treebank, create_word_order_df, read_df, clear_form_groups_cache,
+    create_word_order_df, read_df, clear_form_groups_cache,
 )
 from word_order.decision_tree import fit_dt
 from word_order.viz_tree import tree2html
@@ -24,6 +24,43 @@ from multiblimp.unimorph import load_inflector
 from sva_trees.create_pairs import create_pairs
 
 random.seed(42)
+
+def _total_system_memory_bytes():
+    """Best-effort total physical RAM, POSIX only. None if undetectable
+    (e.g. Windows). Only used as a fallback when /proc/meminfo isn't
+    available — prefer _available_system_memory_bytes for anything
+    memory-cap-related.
+    """
+    try:
+        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
+    except (ValueError, OSError, AttributeError):
+        return None
+
+
+def _available_system_memory_bytes():
+    """Best-effort currently-available memory."""
+    try:
+        with open("/proc/meminfo") as f:
+            for line in f:
+                if line.startswith("MemAvailable:"):
+                    return int(line.split()[1]) * 1024
+    except (FileNotFoundError, OSError, ValueError, IndexError):
+        pass
+    return _total_system_memory_bytes()
+
+
+def _limit_worker_memory(max_bytes):
+    """ProcessPoolExecutor initializer: caps this worker's address space so a
+    runaway language (huge treebank/lookup tables) hits a catchable
+    MemoryError instead of letting the OS OOM-killer kill processes system-
+    wide (which is what takes down unrelated services, not just this pool).
+    """
+    try:
+        import resource
+        resource.setrlimit(resource.RLIMIT_AS, (max_bytes, max_bytes))
+    except (ImportError, ValueError, OSError):
+        pass
+
 
 def get_impurity(n, min_n=300, max_n=4000, max_val=0.1, min_val=0.01):
     if n <= min_n:
@@ -39,22 +76,47 @@ def get_impurity(n, min_n=300, max_n=4000, max_val=0.1, min_val=0.01):
 def get_um_lookup_table(inflector):
     um_df = inflector.load_unimorph_pickle("unimorph/um_pickles", filter={})
     if type(um_df)==DataFrame:
-        um_data = {pos: um_df[um_df["upos"]==pos].dropna(axis=1, how="all") 
+        um_data = {pos: um_df[um_df["upos"]==pos].dropna(axis=1, how="all")
                     for pos in um_df["upos"].unique()}
         um_data["full"] = um_df
     else:
         um_data = None
     return um_data
 
+def get_ud_lookup_table(inflector):
+    """UD-derived UniMorph-schema data, used as an expand_anno fallback for
+    features um_data didn't have a confident match for. Same shape as
+    get_um_lookup_table's return value, just sourced from ud_unimorph/ud_pickles
+    via inflector's internal UD-mode inflector instead of unimorph/um_pickles.
+
+    None whenever there's no UD-mode inflector to source from — i.e. the
+    caller didn't build `inflector` with combine_um_ud=True, same as passing
+    use_ud_inflections=True directly would (see UnimorphInflector's assertion
+    against combining both at once): either way there's a single, correct
+    source of UD-derived data, inflector.ud_inflector.
+    """
+    if inflector.ud_inflector is None:
+        return None
+    ud_df = inflector.ud_inflector.load_unimorph_pickle("ud_unimorph/ud_pickles", filter={})
+    if type(ud_df)==DataFrame:
+        ud_data = {pos: ud_df[ud_df["upos"]==pos].dropna(axis=1, how="all")
+                    for pos in ud_df["upos"].unique()}
+        ud_data["full"] = ud_df
+    else:
+        ud_data = None
+    return ud_data
+
 def get_data_df(lang, resource_dir, save_to_dir, target, predictor_var, inflector, max_treebank_len):
-    treebank = load_treebank(lang, resource_dir, max_treebank_len=max_treebank_len)
-
     um_data = get_um_lookup_table(inflector)
+   # ud_data = get_ud_lookup_table(inflector)
 
+    # treebank is loaded inside create_word_order_df (treebank=None default)
+    # rather than here, so this frame never holds its own reference to it —
+    # otherwise `del treebank` there couldn't actually drop the refcount to
+    # zero while this call is still on the stack.
     df = create_word_order_df(
-        lang=lang, 
-        treebank=treebank,
-        target=target, 
+        lang=lang,
+        target=target,
         resource_dir=resource_dir,
         save_to=save_to_dir,
         max_treebank_len=max_treebank_len,
@@ -62,15 +124,32 @@ def get_data_df(lang, resource_dir, save_to_dir, target, predictor_var, inflecto
         predictor_var=predictor_var,
         lexicalize=True,
         um_data=um_data,
+       # ud_data=ud_data,
         fetch_all=True,
     )
     return df
+
+def _find_other_running_instances(script_name):
+    """PIDs of other processes whose command line mentions script_name,
+    excluding this process itself. Uses pgrep -f; returns [] (skips the
+    check) if pgrep isn't available rather than blocking the run."""
+    import subprocess
+    try:
+        result = subprocess.run(
+            ["pgrep", "-f", script_name], capture_output=True, text=True
+        )
+    except (FileNotFoundError, OSError):
+        return []
+    pids = [int(p) for p in result.stdout.split() if p.strip().isdigit()]
+    return [p for p in pids if p != os.getpid()]
+
 
 class Pipeline:
     def __init__(self, target, predictor_var, langs, inflection_map, unimorph_args,
                  deprel_dir, resource_dir, word_order_dir,
                  max_treebank_len, never_skip=False, rm_columns=[], target_id=False,
-                 threshold=0.12, simplify=False, n_jobs=1):
+                 threshold=0.12, simplify=False, n_jobs=1,
+                 max_worker_mem_gb=None, mem_headroom=0.8, force=False):
         self.target = target
         self.predictor_var = predictor_var
         self.langs = langs
@@ -86,20 +165,61 @@ class Pipeline:
         self.leaf_threshold = threshold
         self.simplify = simplify  # collapse +-/-- to "unk" for decision tree
         self.n_jobs = n_jobs # parallelise langauge computation across this many processes; 1=serial, >1=parallel
+        # Per-worker RLIMIT_AS cap, in GB. None (default) auto-derives one from
+        # currently-available system RAM (mem_headroom fraction, split across
+        # n_jobs).
+        self.max_worker_mem_gb = max_worker_mem_gb
+        self.mem_headroom = mem_headroom
+        # If True, skip the startup check for other already-running instances
+        # of this same script. Only meant for deliberate concurrent runs.
+        self.force = force
+
+    def _worker_mem_bytes(self):
+        if self.max_worker_mem_gb is not None:
+            return int(self.max_worker_mem_gb * 1024**3)
+        available_mem = _available_system_memory_bytes()
+        if available_mem is None:
+            return None
+        return int((available_mem * self.mem_headroom) / self.n_jobs)
 
     def __call__(self):
         if not len(self.langs):
             raise ValueError("No langs specified/found")
 
+        if not self.force:
+            script_name = os.path.basename(sys.argv[0])
+            other_pids = _find_other_running_instances(script_name)
+            if other_pids:
+                raise RuntimeError(
+                    f"Another instance of {script_name} appears to already be "
+                    f"running (PID(s): {other_pids}). "
+                    f"If they're stale, kill them first: kill {' '.join(map(str, other_pids))}"
+                    f"Else, pass force=True to Pipeline."
+                )
+
         langs = sorted(self.langs)
+        worker_mem_bytes = self._worker_mem_bytes()
+        if worker_mem_bytes is None:
+            print("Could not detect system RAM; running without a memory cap")
+
         if self.n_jobs > 1:
-            with ProcessPoolExecutor(max_workers=self.n_jobs) as executor:
+            if worker_mem_bytes is not None:
+                print(f"Capping each of {self.n_jobs} workers to "
+                      f"{worker_mem_bytes / 1024**3:.1f} GB RAM")
+                initializer, initargs = _limit_worker_memory, (worker_mem_bytes,)
+            else:
+                initializer, initargs = None, ()
+            with ProcessPoolExecutor(max_workers=self.n_jobs,
+                                      initializer=initializer, initargs=initargs) as executor:
                 futures = [executor.submit(self._process_language, lang) for lang in langs]
                 for future in as_completed(futures):
                     future.result()  # re-raise any worker exception here
         else:
+            if worker_mem_bytes is not None:
+                print(f"Capping this process to {worker_mem_bytes / 1024**3:.1f} GB RAM")
+                _limit_worker_memory(worker_mem_bytes)
             for lang in langs:
-                self._process_language(lang, rerun=self.never_skip)
+                self._process_language(lang)
 
         for deprel in self.target.child_deprels:
             print("Generating deprel index for", deprel)
@@ -118,13 +238,12 @@ class Pipeline:
 
     def _process_language(self, lang):
         # Each language gets its own um_data POS-slices (sva_trees.pipeline.
-        # get_um_lookup_table), and the langs loop never revisits a language, so
-        # process_treebank's per-DataFrame groupby cache can be dropped as soon as
-        # we're done with this one rather than growing for the rest of the run.
+        # get_um_lookup_table), can be dropped as soon as lang is done.
         try:
             self._process_language_impl(lang)
         finally:
             clear_form_groups_cache()
+            gc.collect()
 
     def _process_language_impl(self, lang):
         # If the minimal pairs for all deprels already exist, skip this language
@@ -151,12 +270,15 @@ class Pipeline:
         if self.never_skip or type(df)==bool or not self.predictor_var in df.columns:
             df = get_data_df(lang, self.resource_dir, self.word_order_dir, self.target, self.predictor_var,
                             inflector, self.max_treebank_len)
+            # um_data/ud_data no longer needed
+            clear_form_groups_cache()
 
         if not len(df):
             print(f"Skipping {lang}, raw_df has no entries")
             return
 
         full_df = df[df[self.predictor_var].notnull()]
+        del df
 
         for col in full_df:
             # drop all instances with a specific column=True value; greedily
@@ -174,9 +296,7 @@ class Pipeline:
         min_impurity_decrease = get_impurity(len(full_df))
 
         for deprel in self.target.child_deprels:
-            # Reset per-iteration: each deprel gets its own dt_df/model, never a
-            # stale one carried over from a previous deprel in this loop (or left
-            # unbound entirely on the first iteration).
+            # Reset per-iteration: each deprel gets its own dt_df/model
             dt_df, model, learn_dt = None, None, False
 
             pred_values = set(full_df[self.predictor_var].values)
@@ -227,7 +347,6 @@ class Pipeline:
                         "+-": "#e5c64d", "--": "#b893de"}
                     )
                 )
-            e=False
             try:
                 create_pairs(dt_df, swap_feat=self.predictor_var , inflector=inflector,
                         leaf_threshold=self.leaf_threshold,
@@ -236,6 +355,3 @@ class Pipeline:
                         verbose=True)
             except KeyError:
                 print(f"Skipping {lang} for {deprel}, missing column")
-                e=True
-            if e:
-                raise FileNotFoundError(f"Skipping {lang} for {deprel}, missing column")

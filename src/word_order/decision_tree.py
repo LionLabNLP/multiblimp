@@ -43,6 +43,29 @@ def _infer_column_types(cols: list[str]) -> tuple[list[str], list[str]]:
     return categorical_cols, numeric_cols
 
 
+def _prune_rare_categoricals(
+    X: pd.DataFrame, categorical_cols: list[str], min_support: int
+) -> list[str]:
+    """Drop categorical columns whose minority (non-mode) rows number fewer
+    than min_support.
+
+    fit_dt's X.nunique() > 1 filter only removes truly constant columns, but
+    the deprel/feat/pos cross-product in extract_node_features generates many
+    categorical columns that are >99% one value with just a handful of rows
+    in the tail. Those survive nunique() > 1 yet one-hot encode into a column
+    per rare category, which is what blows up ColumnTransformer/OneHotEncoder
+    memory on languages with large, heterogeneous treebanks. A column whose
+    minority class has fewer rows than min_support also can't produce a valid
+    decision-tree leaf anyway, so pruning it costs no real signal.
+    """
+    return [
+        col
+        for col in categorical_cols
+        if (X[col] != X[col].mode(dropna=False).iloc[0]).sum() >= min_support
+        if len(X) - X[col].value_counts(dropna=False).iloc[0] >= min_support
+    ]
+
+
 def _fill_missing(
     X: pd.DataFrame, categorical_cols: list[str], numeric_cols: list[str]
 ) -> pd.DataFrame:
@@ -208,6 +231,8 @@ def fit_pipeline(
     X_test and y_test are None when test_size is None (no train/test split).
     """
     categorical_cols, numeric_cols = _infer_column_types(X.columns.tolist())
+    min_support = max(min_samples_leaf, int(0.01 * len(X)))
+    categorical_cols = _prune_rare_categoricals(X, categorical_cols, min_support)
     X = _fill_missing(X, categorical_cols, numeric_cols)
 
     for col in numeric_cols:

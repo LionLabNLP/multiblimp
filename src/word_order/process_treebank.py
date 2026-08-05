@@ -10,7 +10,7 @@ from dataclasses import dataclass
 
 sys.path.append("src")
 
-from tqdm.notebook import tqdm
+from tqdm.auto import tqdm
 import pandas as pd
 import numpy as np
 from typing import *
@@ -316,6 +316,7 @@ def extract_node_features(
     lexicalize: bool = False,
     encode_positional_features: bool = False,
     um_data: pd.DataFrame=None,
+    ud_data: pd.DataFrame=None,
     fetch_all=False
 ) -> dict[str, str | bool | int]:
     """
@@ -345,6 +346,16 @@ def extract_node_features(
         if type(um_split)==pd.DataFrame and (
             not all([node["feats"].get(k, False) for k in [x for x in um_split.columns if x[0].isupper()]])):
             node["feats"] = expand_anno(node, node["feats"], target, um_split)
+
+    # Second: same expand_anno matching, against the UD-derived UniMorph-schema
+    # data (combine_um_ud's ud_inflector source) as a fallback — only reached
+    # for features the UM pass above didn't already fill in, mirroring the
+    # UM-first/UD-fallback precedence UnimorphInflector.inflect() uses.
+    if type(ud_data)==dict and fetch_all:
+        ud_split = ud_data.get(UD2UM["upos", node["upos"]], None)
+        if type(ud_split)==pd.DataFrame and (
+            not all([node["feats"].get(k, False) for k in [x for x in ud_split.columns if x[0].isupper()]])):
+            node["feats"] = expand_anno(node, node["feats"], target, ud_split)
 
     all_feats.update(set(node.get("feats", {}).keys()))
 
@@ -612,6 +623,7 @@ def extract_instances(
     predictor_var: str | None = None,
     lexicalize: bool = False,
     um_data: pd.DataFrame | None = None,
+    ud_data: pd.DataFrame | None = None,
     fetch_all: bool = False,
 ):
     """
@@ -692,6 +704,7 @@ def extract_instances(
             lexicalize=lexicalize,
             excluded_deprels=excluded_deprels,
             um_data=um_data,
+            ud_data=ud_data,
             fetch_all=fetch_all
         )
         if head_features == None: # item failed PredictionTarget filters
@@ -717,6 +730,9 @@ def extract_instances(
                 all_pos,
                 target,
                 lexicalize=lexicalize,
+                um_data=um_data,
+                ud_data=ud_data,
+                fetch_all=fetch_all,
             )
             instance.update(child_features)
 
@@ -874,15 +890,19 @@ def create_word_order_df(
         assert lang is not None, "lang must be provided for loading treebank"
         treebank = load_treebank(lang, resource_dir, max_treebank_len=max_treebank_len)
 
-    dfs = extract_features(
+        dfs = extract_features(
         treebank,
         target,
         predictor_var=predictor_var,
         lexicalize=lexicalize,
         batch_size=batch_size,
         um_data=um_data,
+        #ud_data=ud_data,
         fetch_all=fetch_all
     )
+    del treebank
+    gc.collect()
+
     df = pd.concat(dfs, ignore_index=True) if dfs else pd.DataFrame()
 
     del dfs

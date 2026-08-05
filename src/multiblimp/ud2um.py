@@ -4,6 +4,8 @@ from collections import defaultdict, Counter
 from glob import glob
 from typing import *
 
+from tqdm import tqdm
+
 from .languages import lang2langcode, skip_langs
 from .treebank import Treebank, tree_is_malformed
 
@@ -137,7 +139,7 @@ def create_unimorph_from_ud(
 ):
     rows = []
 
-    iterator = tqdm_notebook(treebank) if verbose else treebank
+    iterator = tqdm(treebank) if verbose else treebank
 
     for tree in iterator:
         for token in tree:
