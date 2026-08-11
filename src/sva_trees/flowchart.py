@@ -239,6 +239,7 @@ def _examples_table_html(item_df: pd.DataFrame, max_examples: int, treebank=None
     meta_cols = []
     if default_kind:
         meta_cols.append(f"{default_kind}_feats")
+        meta_cols.append(f"{default_kind}_feats_after")
     if child_deprel:
         meta_cols.append(f"{child_deprel}_feats")
     if has_treebank:
@@ -258,6 +259,7 @@ def _examples_table_html(item_df: pd.DataFrame, max_examples: int, treebank=None
         if default_kind:
             kind = _resolve_kind(row, default_kind)
             cells += f'<td class="feats">{_feats_summary(row, kind, highlight_feat=swap_feature)}</td>'
+            cells += f'<td class="feats">{_feats_summary(row, f"after_{kind}", highlight_feat=swap_feature)}</td>'
         if child_deprel:
             cells += f'<td class="feats">{_feats_summary(row, child_deprel, highlight_feat=swap_feature)}</td>'
         if has_treebank:

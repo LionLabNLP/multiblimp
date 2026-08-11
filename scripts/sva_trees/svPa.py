@@ -17,8 +17,18 @@ if __name__=="__main__":
     parser.add_argument("--langs", "-l", nargs="*", help="Languages to process", default=[])
     parser.add_argument("--never_skip", "-ns", action="store_true", 
                         help="Always create new df's, decesion trees, and HTML files")
-    parser.add_argument("--simplify", "-s", action="store_true", 
-                        help="Simplify agreement labels before fitting decision tree")
+    parser.add_argument("--distinguish_unk", "-d", action="store_true",
+                        help="Keep +-/-- labels distinct instead of collapsing them "
+                             "into 'unk' before fitting the decision tree (default: collapsed)")
+    parser.add_argument("--n_jobs", "-j", type=int, default=1,
+                        help="Languages processed in parallel (1=serial)")
+    parser.add_argument("--max_worker_mem_gb", "-m", type=float, default=None,
+                        help="Hard RAM cap per worker process, in GB. Default: "
+                             "auto-derived from currently-available system RAM / n_jobs")
+    parser.add_argument("--force", action="store_true",
+                        help="Skip the startup check for other already-running "
+                             "instances of this script. Only use for deliberate "
+                             "concurrent runs.")
     args = parser.parse_args()
 
     target = nsubj_target
@@ -41,7 +51,7 @@ if __name__=="__main__":
                                 },
                         deprel_dir="_".join(target.child_deprels), 
                         resource_dir="../../resources", 
-                        word_order_dir=f"../../treebank_features/{deprel_dir}",
+                        word_order_dir=f"../../treebank_features/{deprel_dir}_fin",
                         max_treebank_len=None,
                         never_skip=args.never_skip,
                         rm_columns=["nsubj_child-deprel_conj",
@@ -50,8 +60,9 @@ if __name__=="__main__":
                                     ],
                         target_id=sys.argv[0][:-3],
                         threshold=0.12,
-                        simplify=args.simplify,
-                        n_jobs=1,
-                        force=False,
+                        simplify=not args.distinguish_unk,
+                        n_jobs=args.n_jobs,
+                        max_worker_mem_gb=args.max_worker_mem_gb,
+                        force=args.force,
                         )
     pipeline()

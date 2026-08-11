@@ -1,85 +1,53 @@
 import os
+import sys
 import pandas as pd
 from collections import defaultdict, Counter
-from glob import glob
 from typing import *
 
 from tqdm import tqdm
 
 from .languages import lang2langcode, skip_langs
-from .treebank import Treebank, tree_is_malformed
+from .treebank import Treebank, has_typo
+from .unimorph import UD2UM
 
-ud_upos2um_upos = {
-    "VERB": "V",
-    "NOUN": "N",
-    "PRON": "PRON",
-    "ADJ": "ADJ",
-    "DET": "DET",
-    "ADV": "ADV",
-    "AUX": "V",  # NB: we map auxiliaries to verbs
-}
+sys.path.append("../../")
+from resources.um2ud_annotation.UM2UD_mapper import UM2UD_values
 
 
-def is_finite(features):
-    return features.get("VerbForm") == "Fin"
+def _fuses_upos(tag: str) -> bool:
+    """True if `tag` (or a "/" disjunction component) is a compound UM tag
+    that already implies a upos, e.g. "V.PTCP" implies upos=VERB."""
+    return any(UM2UD_values.get(sub, {}).get("upos") is not None for sub in tag.split("/"))
 
 
-def require_mood(features):
-    return "Mood" in features
+def ud_feats_to_um_tags(upos: str, feats: Optional[Dict[str, str]]) -> Optional[List[str]]:
+    """Convert a UD token's upos + feats into real UniMorph tag strings
+    (e.g. ["V", "PST", "3", "SG"]) via UD2UM. Comma-valued UD features
+    (syncretic forms) map to UM's "/" disjunction syntax. Layered features
+    (Number[psor], ...) and values with no UD2UM entry are skipped.
+    Returns None if upos itself has no UM counterpart (PUNCT, SYM, X, ...).
+    """
+    upos_tag = UD2UM.get(("upos", upos))
+    if upos_tag is None:
+        return None
 
+    tags = []
+    for feat, raw_val in (feats or {}).items():
+        if "[" in feat:
+            continue
+        sub_tags = [
+            UD2UM[(feat, val)]
+            for val in raw_val.split(",")
+            if (feat, val) in UD2UM
+        ]
+        if sub_tags:
+            # dict.fromkeys: dedupe while preserving first-seen order
+            tags.append("/".join(dict.fromkeys(sub_tags)))
 
-default_values = [
-    ("Mood", is_finite, "Ind"),
-    ("VerbForm", require_mood, "Fin"),
-    ("Voice", is_finite, "Act"),
-]
+    if not any(_fuses_upos(tag) for tag in tags):
+        tags.insert(0, upos_tag)
 
-
-def load_ud_features(path: str):
-    with open(path) as f:
-        lines = f.read().split("\n")
-
-    feat2val_UD = {
-        "upos": [
-            "N",
-            "PROPN",
-            "ADJ",
-            "PRO",
-            "CLF",
-            "ART",
-            "DET",
-            "V",
-            "ADV",
-            "AUX",
-            "ADP",
-            "COMP",
-            "CONJ",
-            "NUM",
-            "PART",
-            "INTJ",
-            "AJD",  # classical armenian
-            "PRE",  # Livvi
-            "ADJ.CVB",  # Korean
-            "PRON",
-        ],
-    }
-    val2feat_UD = {}
-    cur_feat = None
-
-    for idx, line in enumerate(lines):
-        if line == lines[idx - 1]:
-            cur_feat = line
-            feat2val_UD[cur_feat] = []
-        if ":" in line:
-            val = line.split(":")[0]
-            val = f"{cur_feat}_{val}"
-            feat2val_UD[cur_feat].append(val)
-
-    for feat, vals in feat2val_UD.items():
-        for val in vals:
-            val2feat_UD[val] = feat
-
-    return feat2val_UD, val2feat_UD
+    return tags or None
 
 
 def create_all_unimorph_from_ud(
@@ -89,15 +57,13 @@ def create_all_unimorph_from_ud(
     dup_form_threshold=100.0,
     dup_feat_threshold: float = 100.0,
     load_from_pickle=False,
+    save_ud2um_stats=False
 ):
-    ud_feature_path = os.path.join(resource_dir, "ud/ud_feats.txt")
-    _, val2feat_UD = load_ud_features(ud_feature_path)
-
     ud_unimorph_dir = os.path.join(resource_dir, "ud_unimorph")
     if not os.path.exists(ud_unimorph_dir):
         os.makedirs(ud_unimorph_dir)
 
-    for lang in sorted(ud_langs):
+    for lang in tqdm(sorted(ud_langs)):
         if lang in skip_langs:
             continue
 
@@ -116,7 +82,6 @@ def create_all_unimorph_from_ud(
 
         df = create_unimorph_from_ud(
             treebank,
-            val2feat_UD,
             file=um_file,
             skip_no_lemma=True,
             skip_prep_lemma=True,
@@ -124,12 +89,15 @@ def create_all_unimorph_from_ud(
             dup_form_threshold=dup_form_threshold,
             dup_feat_threshold=dup_feat_threshold,
         )
-        print(lang, len(df.lemma.unique()), len(df.form.unique()), len(df), sep="\t")
+        if save_ud2um_stats:
+            with open(os.path.join(ud_unimorph_dir, "UM_from_UD.txt"), "a") as f:
+                print(lang, len(df.lemma.unique()), len(df.form.unique()), len(df), sep="\t", file=f)
+        else:
+            print(lang, len(df.lemma.unique()), len(df.form.unique()), len(df), sep="\t")
 
 
 def create_unimorph_from_ud(
     treebank: Treebank,
-    val2feat_UD: Dict[str, str],
     file: Optional[str] = None,
     skip_no_lemma: bool = False,
     skip_prep_lemma: bool = False,
@@ -153,29 +121,19 @@ def create_unimorph_from_ud(
             if skip_prep_lemma and "_" in lemma:
                 continue
 
-            if tree_is_malformed(token):
+            if has_typo(token):
                 continue
 
-            if upos in ud_upos2um_upos:
-                token_feats = token["feats"] or {}
-                if len(token_feats) == 0:
-                    continue
+            token_feats = token["feats"] or {}
+            if len(token_feats) == 0:
+                continue
 
-                upos = ud_upos2um_upos[upos]
-                ufeats: str = upos
+            um_tags = ud_feats_to_um_tags(upos, token_feats)
+            if um_tags is None:
+                continue
 
-                for feat, condition, val in default_values:
-                    if (feat not in token_feats) and condition(token_feats):
-                        token_feats[feat] = val
-
-                for feat, val in sorted(token_feats.items()):
-                    if f"{feat}_{val}" in val2feat_UD or "," in val:
-                        ufeats += ";" + f"{feat}_{val}"
-                    else:
-                        print("Feature value not found:", form, upos, feat, val)
-
-                row = (lemma.lower(), form.lower(), ufeats)
-                rows.append(row)
+            row = (lemma.lower(), form.lower(), ";".join(um_tags))
+            rows.append(row)
 
     row_freqs = [(*row, freq) for row, freq in Counter(rows).items()]
 

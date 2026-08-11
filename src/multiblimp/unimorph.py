@@ -7,13 +7,11 @@ import pandas as pd
 
 from .inflection_maps import InflectionMap
 from .languages import latin_to_cyrillic, remove_diacritics_langs, remove_multiples_langs
-from .ud2um import load_ud_features
 from .unimorph_features import load_um_features
 
 import sys
 sys.path.append("../../")
-from resources.um2ud_morpho.UM2UD_mapper import map_um_value_to_ud, UM2UD_values
-from resources.um2ud_morpho.UM_tagset import UM_feature2values
+from resources.um2ud_annotation.UM2UD_mapper import UM2UD_values
 
 
 unmarked_features = {
@@ -30,25 +28,20 @@ DEFAULTS = {
     "Mood": "IND",
     "Voice": "ACT",
 }
+# raw UM upos codes (not UD tags) for the two verbal POS
+VERB_UPOS_VALUES = {"V", "AUX"}
 
-UD2UM = {
-    "Plur": "PL",
-    "Sing": "SG",
-    "Pres": "PRS",
-    "Past": "PST",
-    "Sub": "SBJV",
-    "Cnd": "COND",
-    "Perf": "PRF",
-    "Dual": "DU",
-    "Part": "V.PTCP",
-}
-UM2UD = {v: k for k, v in UD2UM.items()}
-UM2UD["INDF"] = "Ind"
-# overwrite mapping
-# UM value strings are unique
-UM2UD = {k: list(v.values())[0] if v.values() else None for k, v in UM2UD_values.items()}
-# for UD->UM we must map via feature name first
+# UM2UD[tag] is the tag's full {UD_feature: UD_value} dict, e.g.
+# UM2UD["V.PTCP"] == {"upos": "VERB", "VerbForm": "Part"}.
+UM2UD = UM2UD_values
+# Pass 1: (feature, value) -> UM tag via each tag's first dict item (matches
+# UM2UD_values' longest-tag-first order, e.g. Mood/Ind -> "IND" over "REAL").
 UD2UM = {tuple(v.items())[0]: k for k, v in UM2UD_values.items() if v.items()}
+# Pass 2: backfill (feature, value) pairs compound tags set beyond their
+# first (e.g. VerbForm/Part for "V.PTCP"), without overwriting pass 1's picks.
+for um_tag, ud_feats in UM2UD_values.items():
+    for feat, val in ud_feats.items():
+        UD2UM.setdefault((feat, val), um_tag)
 
 
 
@@ -56,9 +49,9 @@ def allval2um(val):
     if val == UNDEFINED:
         return UNDEFINED
 
-    val = val.split("_")[-1]
-
-    return UD2UM.get(val, val).upper()
+    # val is already a real UM tag (unimorph/ and ud_unimorph/ both store
+    # real UM tags now, see multiblimp.ud2um), so just normalize casing.
+    return val.upper()
 
 
 def load_inflector(lang: str, langcode: str, unimorph_args, inflection_map: dict, 
@@ -77,7 +70,7 @@ def load_inflector(lang: str, langcode: str, unimorph_args, inflection_map: dict
         load_from_pickle=True,
         remove_diacritics=remove_diacritics,
         remove_multiples=remove_multiples,
-        fill_unk_values=False,
+        fill_unk_values=True,
         **unimorph_args,
     )
 
@@ -160,12 +153,9 @@ class UnimorphInflector:
         self.langcode = langcode
         self.resource_dir = resource_dir or "."
 
-        if use_ud_inflections:
-            self.feat2val, self.val2feat = load_ud_features(
-                os.path.join(self.resource_dir, "ud/ud_feats.txt")
-            )
-        else:
-            self.feat2val, self.val2feat = load_um_features()
+        # ud_unimorph/ now stores real UM tag syntax too (multiblimp.ud2um),
+        # so use_ud_inflections only changes which file gets read, not the vocabulary.
+        self.feat2val, self.val2feat = load_um_features()
 
         self.inflection_map = inflection_map
         self.use_ud_inflections = use_ud_inflections
@@ -367,7 +357,7 @@ class UnimorphInflector:
         ufeat_cols = {x: [] for x in self.feat2val}
 
         for ufeat in df.ufeat:
-            row_ufeats = self.ufeats2dict(ufeat)# map_um_value_to_ud(ufeat)# XCX self.ufeats2dict(ufeat) # to  map_um_value_to_ud(ufeat) #?
+            row_ufeats = self.ufeats2dict(ufeat)
             for ufeat_col in self.feat2val:
                 ufeat_cols[ufeat_col].append(row_ufeats.get(ufeat_col))
 
@@ -381,12 +371,10 @@ class UnimorphInflector:
         df = self.expand_multiple_values(df)
         df = self.set_unk_values(df)
 
-        # Plain object dtype (not "category"): the equality-heavy lookups in
-        # partial_df_match compare these columns against literal strings on every
-        # inflection attempt, and category columns backed by pandas' arrow/"str"
-        # dtype pay a large to_numpy()/astype() conversion cost on every such
-        # comparison (profiled: ~50s of a 94s create_pairs run). Plain object
-        # dtype comparisons don't hit that conversion path.
+        # Plain object dtype, not "category": partial_df_match's equality
+        # lookups compare these columns against literal strings on every
+        # inflection attempt, and category dtype pays a conversion cost on
+        # each such comparison (profiled: ~50s of a 94s create_pairs run).
         for column in df.columns:
             df[column] = df[column].astype(object)
 
@@ -425,7 +413,7 @@ class UnimorphInflector:
 
         for ufeat, values in filter.items():
             if ufeat in df.columns:
-                values = self.val2ud_um(ufeat, values) # TODO
+                values = self.val2ud_um(ufeat, values)
                 pos_values = [val for val in values if not val.startswith("-")]
                 neg_values = [val[1:] for val in values if val.startswith("-")]
 
@@ -457,6 +445,28 @@ class UnimorphInflector:
                 df.loc[pd.isna(df[column]), column] = BASE
             for column in implicit_features & set(df.columns):
                 df.loc[pd.isna(df[column]), column] = UNDEFINED
+
+            # Plain finite verbs get no VerbForm token (only V.PTCP/INF/... do),
+            # leaving NaN -- a partial_df_match wildcard that could match Part.
+            # Resolved before DEFAULTS below, which needs finiteness to decide
+            # whether Mood/Voice defaults apply (mood/voice are meaningless on
+            # participles etc., so must not be defaulted onto them).
+            fin_val = None
+            if "VerbForm" in df.columns and "upos" in df.columns:
+                fin_val = self.val2ud_um("VerbForm", "Fin")
+                is_verb = df["upos"].isin(VERB_UPOS_VALUES)
+                if (
+                    isinstance(df["VerbForm"].dtype, pd.CategoricalDtype)
+                    and fin_val not in df["VerbForm"].cat.categories
+                ):
+                    df["VerbForm"] = df["VerbForm"].cat.add_categories([fin_val])
+                df.loc[is_verb & pd.isna(df["VerbForm"]), "VerbForm"] = fin_val
+
+            # Mood/Voice defaults only make sense on finite forms; skip
+            # non-finite rows (participles etc.) if we know which are which.
+            is_finite = (
+                df["VerbForm"] == fin_val if fin_val is not None else True
+            )
             for column in set(DEFAULTS.keys()) & set(df.columns):
                 column_val = self.val2ud_um(column, DEFAULTS[column])
 
@@ -465,7 +475,7 @@ class UnimorphInflector:
                     and column_val not in df[column].cat.categories
                 ):
                     df[column] = df[column].cat.add_categories([column_val])
-                df.loc[pd.isna(df[column]), column] = column_val
+                df.loc[is_finite & pd.isna(df[column]), column] = column_val
 
         return df
 
@@ -486,7 +496,7 @@ class UnimorphInflector:
                     all_vals = val.split("+")
                     for extra_val in all_vals:
                         extra_row = row.copy()
-                        extra_row[ufeat] = self.val2ud_um(ufeat, extra_val) #TODO
+                        extra_row[ufeat] = self.val2ud_um(ufeat, extra_val)
                         df_rows.append(extra_row)
 
                     # We expand only one ufeat per loop, if multiple ufeats are disjunctions we get to those
@@ -545,23 +555,6 @@ class UnimorphInflector:
             swap_ufeat = None
             self.inflection_map = (swap_ufeat, swap_map)
 
-        # The UD inflections use a different feature format than UM.
-        # To allow the use of a single inflection_map, we map the UM features
-        # to UD-compatible features here (e.g. SG becomes Number_Sing).
-        if (
-            self.use_ud_inflections
-            and (swap_ufeat is not None)
-            and (swap_map is not None)
-        ):
-            new_swap_map = {}
-            for feat1, feat2 in swap_map.items():
-                new_feat1 = f"{swap_ufeat}_{UM2UD.get(feat1, feat1).title()}"
-                new_feat2 = f"{swap_ufeat}_{UM2UD.get(feat2, feat1).title()}"
-                assert (
-                    new_feat1 in self.val2feat
-                ), f"Swapped feature not present {new_feat1}"
-                new_swap_map[new_feat1] = new_feat2
-            self.inflection_map = (swap_ufeat, new_swap_map)
 
     def ufeats2dict(self, ufeats: str) -> Dict[str, str]: # replace with um2ud_mapper 
         """Translates the unimorph X;Y;Z format to a dictionary"""
@@ -612,57 +605,89 @@ class UnimorphInflector:
         form: str,
         ud_features: Dict[str, str],
         strategies: List[Dict[str, Optional[str]]] = [],
-    ) -> Tuple[Union[None, str, List[str]], Optional[Set[str]]]:
-        prev_inflect_key = (form, frozenset(ud_features.items()))
+        return_swap_feats: bool = False,
+    ) -> Union[
+        Tuple[Union[None, str, List[str]], Optional[Set[str]]],
+        Tuple[Union[None, str, List[str]], Optional[Set[str]], Dict[str, Dict[str, Set[str]]]],
+    ]:
+        """return_swap_feats: also return {swap_form: {feature: {values}}},
+        e.g. for flowchart display -- captured directly from the rows that
+        produced each swap_form, instead of a separate get_form_feature_bundle
+        lookup by result form. Default False keeps the old 2-tuple return
+        shape so existing callers (e.g. multiblimp.pipeline) don't break.
+        """
+        prev_inflect_key = (form, frozenset(ud_features.items()), return_swap_feats)
         if prev_inflect_key in self.prev_inflections:
             return self.prev_inflections[prev_inflect_key]
 
         if self.unimorph_df is None or len(self.unimorph_df) == 0:
             swap_forms = None
             feature_vals = None
+            swap_feats = {}
         else:
-            swap_forms, feature_vals = self.inflect_features(
-                form, ud_features, strategies
+            swap_forms, feature_vals, swap_feats = self.inflect_features(
+                form, ud_features, strategies, return_swap_feats
             )
 
             if not self.form_found(swap_forms) and self.inflect_wo_ud_features:
-                swap_forms, feature_vals = self.inflect_features(form, {}, strategies)
+                swap_forms, feature_vals, swap_feats = self.inflect_features(
+                    form, {}, strategies, return_swap_feats
+                )
 
         if self.ud_inflector is not None and not self.form_found(swap_forms):
-            ud_forms, ud_feature_vals = self.ud_inflector.inflect(
-                form, ud_features, strategies=strategies
+            ud_result = self.ud_inflector.inflect(
+                form, ud_features, strategies=strategies,
+                return_swap_feats=return_swap_feats,
             )
+            if return_swap_feats:
+                ud_forms, ud_feature_vals, ud_swap_feats = ud_result
+            else:
+                ud_forms, ud_feature_vals = ud_result
+                ud_swap_feats = {}
             if swap_forms is None:
                 swap_forms = ud_forms
                 feature_vals = ud_feature_vals
+                swap_feats = ud_swap_feats
             elif ud_forms is not None:
                 swap_forms.update(ud_forms)
                 feature_vals.update(ud_feature_vals)
+                for swap_form, bundle in ud_swap_feats.items():
+                    merged = swap_feats.setdefault(swap_form, {})
+                    for col, vals in bundle.items():
+                        merged.setdefault(col, set()).update(vals)
 
         if isinstance(swap_forms, set):
             swap_forms = list(swap_forms)
 
-        self.prev_inflections[prev_inflect_key] = swap_forms, feature_vals
+        result = (
+            (swap_forms, feature_vals, swap_feats)
+            if return_swap_feats
+            else (swap_forms, feature_vals)
+        )
+        self.prev_inflections[prev_inflect_key] = result
 
-        return swap_forms, feature_vals
+        return result
 
     def inflect_features(
         self,
         form: str,
         ud_features: Dict[str, str],
         strategies: List[Dict[str, Optional[str]]],
-    ) -> Tuple[Optional[Set[str]], Optional[Set[str]]]:
+        return_swap_feats: bool = False,
+    ) -> Tuple[Optional[Set[str]], Optional[Set[str]], Dict[str, Dict[str, Set[str]]]]:
         """Inflect form based on provided `ud_features`."""
-        swap_forms, feature_vals = self.inflect_strategy(form, ud_features)
+        swap_forms, feature_vals, swap_feats = self.inflect_strategy(
+            form, ud_features, return_swap_feats=return_swap_feats
+        )
         if not self.form_found(swap_forms):
             for strat in strategies:
-                swap_forms, feature_vals = self.inflect_strategy(
-                    form, ud_features, strategy=strat
+                swap_forms, feature_vals, swap_feats = self.inflect_strategy(
+                    form, ud_features, strategy=strat, return_swap_feats=return_swap_feats
                 )
                 if self.form_found(swap_forms):
                     break
 
-        return swap_forms, feature_vals
+        return swap_forms, feature_vals, swap_feats
 
     @staticmethod
     def form_found(forms: Optional[List[str]]) -> bool:
@@ -673,26 +698,34 @@ class UnimorphInflector:
         form: str,
         ud_features: Dict[str, str],
         strategy: Dict[str, Optional[str]] = {},
-    ) -> Tuple[Optional[Set[str]], Optional[Set[str]]]:
+        return_swap_feats: bool = False,
+    ) -> Tuple[Optional[Set[str]], Optional[Set[str]], Dict[str, Dict[str, Set[str]]]]:
         um_features = self.ud2um_features(ud_features, strategy)
         form_rows = self.form2rows(form, um_features)
 
         # We skip inflection if no matching rows were found
         if len(form_rows) == 0:
-            return None, None
+            return None, None, {}
 
         forms = set()
         feature_vals = set()
+        swap_feats = {}
 
         for row_features, feature_val in self.yield_row_features(
             um_features, form_rows, strategy
         ):
-            inflected_forms = self.lemma2form(row_features)
+            inflected_forms, bundles = self.lemma2form(row_features, return_swap_feats)
 
             forms.update(inflected_forms)
             feature_vals.add(feature_val)
+            # Union per form: the same swap form can be reached via more than
+            # one candidate row (e.g. different original-form matches).
+            for swap_form, bundle in bundles.items():
+                merged = swap_feats.setdefault(swap_form, {})
+                for col, vals in bundle.items():
+                    merged.setdefault(col, set()).update(vals)
 
-        return forms, feature_vals
+        return forms, feature_vals, swap_feats
 
     def ud2um_features(
         self, ud_features: Dict[str, str], strategy={}, set_defaults=True
@@ -739,18 +772,19 @@ class UnimorphInflector:
             return [self.val2ud_um(feat, subval) for subval in val]
         elif val in self.val2feat:
             return val
-        elif val in UD2UM:
-            return self.val2ud_um(feat, UD2UM[val])
-        elif val in UM2UD:
-            return self.val2ud_um(feat, UM2UD[val])
+        elif (feat, val) in UD2UM:
+            # Must come before val.upper() below: e.g. "PART" is also a valid
+            # val2feat entry (upos Particle), which would misresolve VerbForm=Part.
+            return UD2UM[(feat, val)]
+        elif val in UM2UD and feat in UM2UD[val]:
+            # val is already a UM tag carrying a value for this feature.
+            return self.val2ud_um(feat, UM2UD[val][feat])
         elif val.upper() in self.val2feat:
             return val.upper()
         elif val.startswith("-"):
             return "-" + self.val2ud_um(feat, val[1:])
         elif f"{feat}_{val.title()}" in self.val2feat:
             return f"{feat}_{val.title()}"
-        elif self.use_ud_inflections:
-            return f"{feat}_{val}"
         else:
             raise ValueError(f"Unknown {feat}: {val}")
 
@@ -765,7 +799,7 @@ class UnimorphInflector:
 
         return sub_df
 
-    def lemma2form(self, row_features: Dict[str, str]):
+    def lemma2form(self, row_features: Dict[str, str], return_bundle: bool = False):
         lemma = row_features.pop("lemma")
         sub_df = self.partial_df_match(self.lemma_groups, lemma, row_features)
         inflected_forms = set(sub_df.form)
@@ -774,7 +808,31 @@ class UnimorphInflector:
             print("Matched Inflected Rows:", sub_df)
             print("Matched Forms:", inflected_forms)
 
-        return inflected_forms
+        bundles = {}
+        if return_bundle:
+            for form_val, rows in sub_df.groupby("form"):
+                bundle = self._rows_to_bundle(rows)
+                if bundle:
+                    bundles[form_val] = bundle
+
+        return inflected_forms, bundles
+
+    @staticmethod
+    def _rows_to_bundle(rows_df) -> Dict[str, Set[str]]:
+        """Every UM feature column's value(s) across `rows_df`, e.g. for
+        displaying a reinflected form's other features (flowchart's "after"
+        column). UNDEFINED means "no info", same as NaN -- excluded."""
+        bundle = {}
+        for col in rows_df.columns:
+            if col in ("lemma", "form", "ufeat", "upos"):
+                continue
+            values = {
+                allval2um(val) for val in set(rows_df[col])
+                if isinstance(val, str) and val != UNDEFINED
+            }
+            if values:
+                bundle[col] = values
+        return bundle
 
     def partial_df_match(
         self,
@@ -895,7 +953,7 @@ class UnimorphInflector:
                         continue
                     else:
                         feature_val = allval2um(val)
-                        row_features[ufeat] = self.val2ud_um(ufeat, swap_map[val]) #TODO
+                        row_features[ufeat] = self.val2ud_um(ufeat, swap_map[val])
                 elif val == UNDEFINED:
                     continue
                 else:
@@ -967,7 +1025,8 @@ class UnimorphInflector:
                         {
                             allval2um(val)
                             for val in set(form_rows[df_ufeat])
-                            if isinstance(val, str)
+                            # UNDEFINED means "no info", same as NaN -- exclude it.
+                            if isinstance(val, str) and val != UNDEFINED
                         }
                     )
                 if self.ud_inflector is not None:

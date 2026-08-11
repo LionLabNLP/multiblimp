@@ -19,9 +19,10 @@ from word_order.decision_tree import fit_dt
 from word_order.viz_tree import tree2html
 from word_order.viz_deprel import generate_html_deprel_index
 from word_order.viz_overview import generate_html_overview_index
-from multiblimp.languages import lang2langcode
+from multiblimp.languages import lang2langcode, gblang2udlang
 from multiblimp.unimorph import load_inflector
 from sva_trees.create_pairs import create_pairs
+from sva_trees.diagnostics import generate_diagnostics_table, write_diagnostics_csv
 
 random.seed(42)
 
@@ -84,16 +85,10 @@ def get_um_lookup_table(inflector):
     return um_data
 
 def get_ud_lookup_table(inflector):
-    """UD-derived UniMorph-schema data, used as an expand_anno fallback for
-    features um_data didn't have a confident match for. Same shape as
-    get_um_lookup_table's return value, just sourced from ud_unimorph/ud_pickles
-    via inflector's internal UD-mode inflector instead of unimorph/um_pickles.
-
-    None whenever there's no UD-mode inflector to source from — i.e. the
-    caller didn't build `inflector` with combine_um_ud=True, same as passing
-    use_ud_inflections=True directly would (see UnimorphInflector's assertion
-    against combining both at once): either way there's a single, correct
-    source of UD-derived data, inflector.ud_inflector.
+    """UD-derived UniMorph-schema data (expand_anno fallback for features
+    um_data had no confident match for). Same shape as get_um_lookup_table's
+    return value. None if `inflector` wasn't built with combine_um_ud=True
+    (i.e. has no inflector.ud_inflector to source from).
     """
     if inflector.ud_inflector is None:
         return None
@@ -106,28 +101,6 @@ def get_ud_lookup_table(inflector):
         ud_data = None
     return ud_data
 
-def get_data_df(lang, resource_dir, save_to_dir, target, predictor_var, inflector, max_treebank_len):
-    um_data = get_um_lookup_table(inflector)
-   # ud_data = get_ud_lookup_table(inflector)
-
-    # treebank is loaded inside create_word_order_df (treebank=None default)
-    # rather than here, so this frame never holds its own reference to it —
-    # otherwise `del treebank` there couldn't actually drop the refcount to
-    # zero while this call is still on the stack.
-    df = create_word_order_df(
-        lang=lang,
-        target=target,
-        resource_dir=resource_dir,
-        save_to=save_to_dir,
-        max_treebank_len=max_treebank_len,
-        drop_singleton_columns=True,
-        predictor_var=predictor_var,
-        lexicalize=True,
-        um_data=um_data,
-       # ud_data=ud_data,
-        fetch_all=True,
-    )
-    return df
 
 def _find_other_running_instances(script_name):
     """PIDs of other processes whose command line mentions script_name,
@@ -149,9 +122,15 @@ class Pipeline:
                  deprel_dir, resource_dir, word_order_dir,
                  max_treebank_len, never_skip=False, rm_columns=[], target_id=False,
                  threshold=0.12, simplify=False, n_jobs=1,
-                 max_worker_mem_gb=None, mem_headroom=0.8, force=False):
+                 max_worker_mem_gb=None, mem_headroom=0.8, force=False,
+                 agreement_feats=None):
         self.target = target
         self.predictor_var = predictor_var
+        # Extract agreement var for all of these, df's can be shared between similar scripts.
+        self.agreement_feats = (
+            agreement_feats if agreement_feats is not None
+            else ["Number", "Gender", "Person"]
+        )
         self.langs = langs
         self.inflection_map = inflection_map
         self.unimorph_args = unimorph_args
@@ -164,10 +143,8 @@ class Pipeline:
         self.target_id = target_id if target_id else predictor_var.split("_")[2][0]
         self.leaf_threshold = threshold
         self.simplify = simplify  # collapse +-/-- to "unk" for decision tree
-        self.n_jobs = n_jobs # parallelise langauge computation across this many processes; 1=serial, >1=parallel
-        # Per-worker RLIMIT_AS cap, in GB. None (default) auto-derives one from
-        # currently-available system RAM (mem_headroom fraction, split across
-        # n_jobs).
+        self.n_jobs = n_jobs # parallelise language computation across this many processes; 1=serial, >1=parallel
+        # Per-worker RLIMIT_AS cap, in GB. None (default) auto-derives.
         self.max_worker_mem_gb = max_worker_mem_gb
         self.mem_headroom = mem_headroom
         # If True, skip the startup check for other already-running instances
@@ -224,6 +201,7 @@ class Pipeline:
         for deprel in self.target.child_deprels:
             print("Generating deprel index for", deprel)
             flowchart_dir = f"../../decision_trees/{self.target_id}/{self.target_id}_{deprel}/flowcharts/"
+            pairs_dir = f"../../minimal_pairs/{self.target_id}/{self.target_id}_{deprel}"
             generate_html_deprel_index(data_dir=f"../../decision_trees/{self.target_id}/{self.target_id}_{deprel}",
                             html_directory=f"../../decision_trees/{self.target_id}",
                             target_col=self.predictor_var,
@@ -231,8 +209,14 @@ class Pipeline:
                             include_trivial_labels={"Yes"},
                             flowchart_dir=flowchart_dir,
                             leaf_threshold=self.leaf_threshold,
-                            pairs_dir=f"../../minimal_pairs/{self.target_id}/{self.target_id}_{deprel}",
+                            pairs_dir=pairs_dir,
                             )
+            print("Generating diagnostics table for", deprel)
+            diagnostics_df = generate_diagnostics_table(pairs_dir)
+            write_diagnostics_csv(
+                diagnostics_df,
+                f"../../diagnostics/{self.target_id}/{self.target_id}_{deprel}.csv",
+            )
         print("Generating overview index")
         generate_html_overview_index(html_directory=f"../../decision_trees/")
 
@@ -256,8 +240,9 @@ class Pipeline:
 
         print(lang)
 
+        cached_lang = gblang2udlang.get(lang, lang).replace(" ", "_")
         df = read_df(lang, word_order_dir=self.word_order_dir) if (
-            os.path.exists(f"{self.word_order_dir}/{lang.replace(' ', '_')}.parquet")
+            os.path.exists(f"{self.word_order_dir}/{cached_lang}.parquet")
             ) else False
 
         inflector, skip_lang, num_lemma, num_form = load_inflector(
@@ -268,9 +253,23 @@ class Pipeline:
                 resource_dir=self.resource_dir,)
 
         if self.never_skip or type(df)==bool or not self.predictor_var in df.columns:
-            df = get_data_df(lang, self.resource_dir, self.word_order_dir, self.target, self.predictor_var,
-                            inflector, self.max_treebank_len)
-            # um_data/ud_data no longer needed
+            um_data = get_um_lookup_table(inflector)
+            ud_data = get_ud_lookup_table(inflector)
+
+            df = create_word_order_df(
+                lang=lang,
+                target=self.target,
+                resource_dir=self.resource_dir,
+                save_to=self.word_order_dir,
+                max_treebank_len=self.max_treebank_len,
+                drop_singleton_columns=True,
+                predictor_var=self.predictor_var,
+                agreement_feats=self.agreement_feats,
+                lexicalize=True,
+                um_data=um_data,
+                ud_data=ud_data,
+                fetch_all=True,
+            )
             clear_form_groups_cache()
 
         if not len(df):
@@ -283,7 +282,7 @@ class Pipeline:
         for col in full_df:
             # drop all instances with a specific column=True value; greedily
             # match col name to also rm :pass or :tense items
-            if (lambda x: any([x.startswith(y) for y in self.rm_columns]))(col):
+            if any(col.startswith(y) for y in self.rm_columns):
                 full_df = full_df[~full_df[col]]
 
         if self.simplify:
@@ -302,7 +301,7 @@ class Pipeline:
             pred_values = set(full_df[self.predictor_var].values)
 
             if self.never_skip or not os.path.exists(f"../../decision_trees/{self.target_id}/{self.target_id}_{deprel}/{lang}"):
-                if len(pred_values)>1: # TODO or label is ==yes
+                if len(pred_values)>1:
                     model, dt_df, predictor_df = fit_dt(
                         full_df=full_df,
                         model_type="decision_tree",
@@ -312,9 +311,8 @@ class Pipeline:
                         min_impurity_decrease=min_impurity_decrease,
                         min_samples_leaf=10,
                         save_to=f"../../decision_trees/{self.target_id}/{self.target_id}_{deprel}/{lang}",
-                        omit_feats={f"{"head"}_{self.target.swap_feat}",
-                                    f"{deprel}_{self.target.swap_feat}"}
-                                    )
+                        omit_feats=set([col for col in full_df if col.endswith(f"_{self.target.swap_feat}") and not col.startswith("swap_")])
+                        )
                     if model:
                         learn_dt=True
                 if len(pred_values)<=1 or learn_dt==False: # no decision to learn
@@ -322,7 +320,6 @@ class Pipeline:
                     dt_df = full_df
                     learn_dt = False
             else:
-                # read from disk if it already exists
                 dt_df = read_df(lang, word_order_dir=f"../../decision_trees/{self.target_id}/{self.target_id}_{deprel}")
                 model = joblib.load(f"../../decision_trees/{self.target_id}/{self.target_id}_{deprel}/{lang}.joblib")
 
@@ -352,6 +349,8 @@ class Pipeline:
                         leaf_threshold=self.leaf_threshold,
                         save_to=f"../../minimal_pairs/{self.target_id}/{self.target_id}_{deprel}/{lang}",
                         flowchart_path = os.path.join(f"../../decision_trees/{self.target_id}/{self.target_id}_{deprel}/flowcharts/", f"{lang}.html"),
-                        verbose=True)
+                        verbose=True,
+                        num_lemma=num_lemma,
+                        num_form=num_form)
             except KeyError:
                 print(f"Skipping {lang} for {deprel}, missing column")

@@ -55,7 +55,10 @@ def calculate_base_entropy(
     Returns:
         Entropy value in bits
     """
-    value_counts = df[target_col].value_counts()
+    # astype(str) drops any unused categorical categories -- otherwise a
+    # single-observed-class df[target_col] (e.g. a trivial language) can carry
+    # phantom zero-count categories and never actually reach exactly 0 entropy.
+    value_counts = df[target_col].astype(str).value_counts()
 
     if binary:
         # Binary entropy: majority class vs. rest

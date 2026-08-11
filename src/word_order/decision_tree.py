@@ -58,10 +58,11 @@ def _prune_rare_categoricals(
     minority class has fewer rows than min_support also can't produce a valid
     decision-tree leaf anyway, so pruning it costs no real signal.
     """
+    # value_counts(dropna=False) treats NaN as its own bucket; a plain
+    # `col != col.mode()` comparison breaks when the mode itself is NaN.
     return [
         col
         for col in categorical_cols
-        if (X[col] != X[col].mode(dropna=False).iloc[0]).sum() >= min_support
         if len(X) - X[col].value_counts(dropna=False).iloc[0] >= min_support
     ]
 
@@ -299,6 +300,10 @@ def fit_dt(
             if "agreement" in col and not predictor_var in col
         }
     )
+    # Keep target.head_feats columns in omit_feats so set_dt_features_in_df
+    # restores them into dt_df even though X.nunique() drops them as constant.
+    if target is not None and target.head_feats:
+        omit_feats.update({f"head_{feat}" for feat in target.head_feats})
 
     sub_condition_on = list(set(full_df.columns) - omit_feats - {predictor_var})
 
@@ -387,9 +392,7 @@ def set_dt_features_in_df(
     leaf_entropy_map = dict(zip(leaf_node_ids, impurity[leaf_node_ids]))
     leaf_full_entropy = np.array([leaf_entropy_map[node] for node in leaf_ids])
 
-    additional_vars = additional_vars or set()
-    additional_vars.union(META_FEATURES)
-    additional_vars.union(omit_feats)
+    additional_vars = (additional_vars or set()).union(META_FEATURES).union(omit_feats)
     additional_vars.add(predictor_var)
 
     new_cols = {col: full_df[col] for col in additional_vars if col in full_df.columns}
@@ -397,13 +400,19 @@ def set_dt_features_in_df(
     new_cols["leaf_full_entropy"] = pd.Series(leaf_full_entropy, index=df.index)
 
     classes_list = list(model.classes_)
+    class_to_idx = {c: i for i, c in enumerate(classes_list)}
     predictor_series = full_df.loc[df.index, predictor_var]
+    # leaf_id repeats across rows; the distribution only depends on the leaf,
+    # so compute it once per unique leaf instead of once per row.
+    leaf_distributions = {
+        leaf_id: tree.value[leaf_id][0] * tree.n_node_samples[leaf_id]
+        for leaf_id in set(leaf_ids)
+    }
 
     leaf_top1_entropies = []
     for leaf_id, deprel_order in zip(leaf_ids, predictor_series):
-        deprel_order_idx = classes_list.index(deprel_order)
-        leaf_distribution = tree.value[leaf_id][0] * tree.n_node_samples[leaf_id]
-        n_right = leaf_distribution[deprel_order_idx]
+        leaf_distribution = leaf_distributions[leaf_id]
+        n_right = leaf_distribution[class_to_idx[deprel_order]]
         n_wrong = sum(leaf_distribution) - n_right
         leaf_top1_entropies.append(order_entropy(n_right, n_wrong))
     new_cols["leaf_top1_entropy"] = leaf_top1_entropies
@@ -431,10 +440,8 @@ def set_dt_features_in_df(
         for swapped_idx, swapped_class in enumerate(classes_list + unseen_classes):
             class_entropies = []
             for leaf_id, deprel_order in zip(leaf_ids, predictor_series):
-                deprel_order_idx = classes_list.index(deprel_order)
-                leaf_distribution = (
-                    tree.value[leaf_id][0] * tree.n_node_samples[leaf_id]
-                )
+                deprel_order_idx = class_to_idx[deprel_order]
+                leaf_distribution = leaf_distributions[leaf_id]
                 n_swapped = (
                     leaf_distribution[swapped_idx]
                     if swapped_idx < len(leaf_distribution)

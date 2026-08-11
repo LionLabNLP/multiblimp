@@ -1,6 +1,7 @@
 import sys
 import os
 import re
+import json
 
 import pandas as pd
 from collections import Counter
@@ -27,6 +28,7 @@ def process_item(
         context_inflector,
         take_features_from,
         max_num_of_pairs=None,
+        swap_bundle=None,
     ) -> Tuple[str, Dict[str, str]]:
         item[f"swap_{take_features_from}"] = swap_form
 
@@ -41,6 +43,10 @@ def process_item(
                 + " -> "
                 + "|".join(sorted(swap_feature_vals))
             )
+
+            # The reinflected form's OTHER features, acc to reinflection source
+            for feat, vals in (swap_bundle or {}).items():
+                item[f"after_{take_features_from}_{feat}"] = "/".join(sorted(vals))
 
             add_item = False
             for feat1 in feature_vals:
@@ -101,7 +107,7 @@ def process_item(
 def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_target,
                   swap_target=["head",], context_inflector=None, max_num_of_pairs=None,
                   leaf_threshold=0.1, save_to=None, verbose=False, flowchart_path=None,
-                  flowchart_examples=5):
+                  flowchart_examples=5, num_lemma=None, num_form=None):
     """
     Create re-inflected minimal sentence pairs for each row in the decision tree dataframe.
 
@@ -117,7 +123,7 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
         flowchart_path: where to write the flowchart HTML. Defaults to
             "<save_to>/flowchart.html" if save_to is given, else "pairs_flowchart.html".
         flowchart_examples: max example rows shown per bucket in the flowchart (default 5).
-
+        num_lemma, num_form: lexicon-size stats for this language.
     Returns:
         dict[str, pd.DataFrame]: one DataFrame per diagnostics bucket (e.g. "correct_swaps").
     """
@@ -129,14 +135,6 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
         # convention as viz_deprel.py's _agreement_row_stats.
         keep = pd.Series(True, index=df.index)
     swap_df = df[keep & (df[swap_feat]=="Yes")]
-    if len(swap_df) == 0:
-        with open("error_log.txt", "a") as f:
-            f.write(f"No rows to process for {swap_feat} (keep={len(df[keep])}, swap={len(df[df[swap_feat]=='Yes'])})\n")
-        return {bucket: pd.DataFrame() for bucket in [
-            "correct_swaps", "same_forms", "same_features", "undefined_features",
-            "no_inflections", "no_candidates", "multi_now_valid", "ambiguous_subjects",
-            "extra_pairs"
-        ]}
 
     child_deprel = target.child_deprels[0]
     ufeat, _ = inflector.inflection_map
@@ -155,62 +153,76 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
                 "extra_pairs": [],
             }
 
-    columns = list(swap_df.columns)
-    # Precompute, once, which columns hold each swap kind's morphological
-    # features (was re-matched via regex on every row before).
-    kind_feat_cols = {
-        kind: [
-            (col, re.match(rf"^{kind}_([A-Z][a-z]+)", col).group(1))
-            for col in columns
-            if re.match(rf"^{kind}_[A-Z]", col)
-        ]
-        for kind in swap_target
-    }
+    if len(swap_df) == 0:
+        # Still fall through to the save_to/verbose blocks below with empty
+        # buckets, so a zero-candidate language gets a diagnostics entry
+        with open("error_log.txt", "a") as f:
+            f.write(f"No rows to process for {swap_feat} (keep={len(df[keep])}, swap={len(df[df[swap_feat]=='Yes'])})\n")
+    else:
+        columns = list(swap_df.columns)
+        # Precompute, once, which columns hold each swap kind's morphological
+        # features (was re-matched via regex on every row before).
+        kind_feat_cols = {
+            kind: [
+                (col, re.match(rf"^{kind}_([A-Z][a-z]+)", col).group(1))
+                for col in columns
+                if re.match(rf"^{kind}_[A-Z]", col)
+            ]
+            for kind in swap_target
+        }
 
-    # iter over each row in the decision tree dataframe. itertuples() (vs.
-    # iterrows()) avoids rebuilding a per-row Series from this wide, mixed-dtype
-    # dataframe on every iteration, which otherwise dominates runtime.
-    for row_tuple in tqdm(swap_df.itertuples(index=False, name=None), total=swap_df.shape[0]):
-        # get nsubj and head; extract their features; swap the features; re-inflect the words;
-        # create a new sentence with the re-inflected words; add the new sentence to the dataframe
-        base_item = dict(zip(columns, row_tuple))
-        base_item["child"] = base_item.get(f"{child_deprel}_form")
+        for row_tuple in tqdm(swap_df.itertuples(index=False, name=None), total=swap_df.shape[0]):
+            # get nsubj and head; extract their features; swap the features; re-inflect the words;
+            # create a new sentence with the re-inflected words; add the new sentence to the dataframe
+            base_item = dict(zip(columns, row_tuple))
+            base_item["child"] = base_item.get(f"{child_deprel}_form")
 
-        for kind in swap_target:
-            og_feats = {feat: base_item[col] for col, feat in kind_feat_cols[kind]}
-            form = base_item[f"{kind}_form"]
+            for kind in swap_target:
+                og_feats = {feat: base_item[col] for col, feat in kind_feat_cols[kind]}
+                # Column missing (not NaN) means target.head_feats pinned VerbForm
+                # via require=... and the now-constant column got dropped; recover it.
+                if "VerbForm" not in og_feats:
+                    verbform_filter = (target.head_feats or {}).get("VerbForm")
+                    required = getattr(verbform_filter, "keywords", {}).get("require")
+                    og_feats["VerbForm"] = required if required is not None else "Fin"
+                elif pd.isna(og_feats["VerbForm"]):
+                    og_feats["VerbForm"] = "Fin"
+                form = base_item[f"{kind}_form"]
 
-            swap_forms, feature_vals = inflector.inflect(form, og_feats)
+                swap_forms, feature_vals, swap_feats = inflector.inflect(
+                    form, og_feats, return_swap_feats=True
+                )
 
-            if swap_forms!=None:
-                if len(swap_forms) > 0:
-                    for swap_form in swap_forms:
+                if swap_forms!=None:
+                    if len(swap_forms) > 0:
+                        for swap_form in swap_forms:
+                            items_seen += 1
+                            item_type, item = process_item(
+                                dict(base_item),
+                                form,
+                                swap_form,
+                                og_feats,
+                                ufeat,
+                                feature_vals,
+                                feature_distribution,
+                                inflector,
+                                context_inflector,
+                                take_features_from=kind,
+                                max_num_of_pairs=max_num_of_pairs,
+                                swap_bundle=swap_feats.get(swap_form, {}),
+                            )
+                            diagnostics[item_type].append(item)
+
+                            if (item_type == "correct_swaps") and (len(swap_forms) > 1):
+                                multi_item = dict(item)
+                                multi_item["alternatives"] = swap_forms
+                                diagnostics["multi_now_valid"].append(multi_item)
+                    else:
                         items_seen += 1
-                        item_type, item = process_item(
-                            dict(base_item),
-                            form,
-                            swap_form,
-                            og_feats,
-                            ufeat,
-                            feature_vals,
-                            feature_distribution,
-                            inflector,
-                            context_inflector,
-                            take_features_from=kind,
-                            max_num_of_pairs=max_num_of_pairs,
-                        )
-                        diagnostics[item_type].append(item)
-
-                        if (item_type == "correct_swaps") and (len(swap_forms) > 1):
-                            multi_item = dict(item)
-                            multi_item["alternatives"] = swap_forms
-                            diagnostics["multi_now_valid"].append(multi_item)
+                        diagnostics["no_inflections"].append(dict(base_item))
                 else:
                     items_seen += 1
-                    diagnostics["no_inflections"].append(dict(base_item))
-            else:
-                items_seen += 1
-                diagnostics["no_candidates"].append(dict(base_item))
+                    diagnostics["no_candidates"].append(dict(base_item))
 
     coverage = f"{len(diagnostics['correct_swaps'])/max(items_seen,1)*100:.1f}"
     print(f"items_seen={items_seen} correct_swaps={len(diagnostics['correct_swaps'])} coverage={coverage}%")
@@ -221,6 +233,13 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
         os.makedirs(save_to, exist_ok=True)
         for item_type, item_df in diagnostic_dfs.items():
             item_df.to_parquet(os.path.join(save_to, f"{item_type}.parquet"))
+        with open(os.path.join(save_to, "meta.json"), "w") as f:
+            json.dump({
+                "num_ud_candidates": len(swap_df),
+                "items_seen": items_seen,
+                "num_lemma": num_lemma,
+                "num_form": num_form,
+            }, f)
 
     if verbose:
         if flowchart_path is not None:

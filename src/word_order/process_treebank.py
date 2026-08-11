@@ -17,8 +17,8 @@ from typing import *
 
 from multiblimp.treebank import Treebank
 from multiblimp.languages import remove_diacritics_langs, gblang2udlang
-from multiblimp.unimorph import UM2UD, UD2UM, UnimorphInflector
-from resources.um2ud_morpho.UM2UD_mapper import map_um_value_to_ud
+from multiblimp.unimorph import UD2UM, UnimorphInflector
+from resources.um2ud_annotation.UM2UD_mapper import map_um_value_to_ud
 
 from .prediction_target import PredictionTarget
 from .utils import shorten_cls
@@ -218,8 +218,8 @@ def partial_df_match(
                             | (sub_df[col] == UNDEFINED)
                             | pd.isna(sub_df[col])
                         )
-                    except:
-                        pass
+                    except KeyError:
+                        pass  # col not in sub_df for this POS-slice; leave mask unfiltered on it
 
         candidate_rows = sub_df[mask]
 
@@ -258,6 +258,10 @@ def expand_anno(node, morph_feats, target, um_split):
     inflect_feats["upos"] = node["upos"]
     # allows for soft matching if no lemma was specified in UD
     inflect_feats["lemma"] = node.get("lemma", None) if node.get("lemma", None) != "_" else None
+
+    # If no VerbForm, assume Fin
+    if node["upos"] in ("VERB", "AUX") and "VerbForm" not in inflect_feats:
+        inflect_feats["VerbForm"] = "Fin"
 
     um_feats = {f: (UD2UM.get((f,v), None) if f!="lemma" else v) for f, v in inflect_feats.items()}
 
@@ -621,6 +625,7 @@ def extract_instances(
     target: PredictionTarget,
     tree_metadata,
     predictor_var: str | None = None,
+    agreement_feats: list[str] | None = None,
     lexicalize: bool = False,
     um_data: pd.DataFrame | None = None,
     ud_data: pd.DataFrame | None = None,
@@ -736,12 +741,15 @@ def extract_instances(
             )
             instance.update(child_features)
 
-            # add SV agreement variable for predictor_var (e.g. "head_nsubj_Number_agreement")
-            # 1. is feature annotated on head & target child?, 2. is value the same? -> TRUE else False
-            if predictor_var and "agreement" in predictor_var:
-                target_feature = re.match(r".*_([A-Z][a-z]+)_.*", predictor_var).group(
-                    1
-                )
+            # add SV agreement variable(s) (e.g. "head_nsubj_Number_agreement")
+            if agreement_feats is not None:
+                target_features = agreement_feats
+            elif predictor_var and "agreement" in predictor_var:
+                target_features = [re.match(r".*_([A-Z][a-z]+)_.*", predictor_var).group(1)]
+            else:
+                target_features = []
+
+            for target_feature in target_features:
                 head_val = head_features.get(f"head_{target_feature}", None)
                 child_val = child_features.get(f"{deprel}_{target_feature}", None)
                 if head_val == child_val:
@@ -805,9 +813,11 @@ def extract_features(
     treebank,
     target: PredictionTarget | None = None,
     predictor_var: str | None = None,
+    agreement_feats: list[str] | None = None,
     lexicalize: bool = False,
     batch_size: int = 500,
     um_data: pd.DataFrame | None = None,
+    ud_data: pd.DataFrame | None = None,
     fetch_all: bool = False
 ):
     """
@@ -834,7 +844,9 @@ def extract_features(
                 tree_metadata,
                 lexicalize=lexicalize,
                 predictor_var=predictor_var,
+                agreement_feats=agreement_feats,
                 um_data=um_data,
+                ud_data=ud_data,
                 fetch_all=fetch_all
             )
         )
@@ -860,9 +872,11 @@ def create_word_order_df(
     max_treebank_len: int | None = None,
     drop_singleton_columns: bool = False,
     predictor_var = None,
+    agreement_feats: list[str] | None = None,
     lexicalize: bool = False,
     batch_size: int = 500,
     um_data: pd.DataFrame | None = None,
+    ud_data: pd.DataFrame | None = None,
     fetch_all: bool = False,
 ) -> pd.DataFrame:
     """
@@ -877,7 +891,11 @@ def create_word_order_df(
         max_treebank_len: Maximum number of sentences to process
         drop_singleton_columns: drop columns with only a single value
         um_data: all unimorph data for current language
+        ud_data: UD-derived UniMorph-schema data for current language.
         predictor_var: variable name to fit the decision tree on
+        agreement_feats: if given, compute a "head_{deprel}_{feat}_agreement"
+            column for every feat in this list (instead of just the one named
+            in predictor_var).
         fetch_all: if True, try to enhance feature annotation via Unimorph
 
     Returns:
@@ -890,14 +908,15 @@ def create_word_order_df(
         assert lang is not None, "lang must be provided for loading treebank"
         treebank = load_treebank(lang, resource_dir, max_treebank_len=max_treebank_len)
 
-        dfs = extract_features(
+    dfs = extract_features(
         treebank,
         target,
         predictor_var=predictor_var,
+        agreement_feats=agreement_feats,
         lexicalize=lexicalize,
         batch_size=batch_size,
         um_data=um_data,
-        #ud_data=ud_data,
+        ud_data=ud_data,
         fetch_all=fetch_all
     )
     del treebank
@@ -915,13 +934,18 @@ def create_word_order_df(
         always_keep.update(set([col for col in df.columns if col.endswith("agreement")]))
         always_keep.update(set([col for col in df.columns if col.endswith("_idx")]))
         always_keep.update(set([col for col in df.columns if col.endswith("_form")]))
+        # Keep target.head_feats columns even if singletons (e.g. spGa's
+        # VerbForm=Part) -- fit_dt filters constants independently.
+        if target is not None and target.head_feats:
+            always_keep.update({f"head_{feat}" for feat in target.head_feats})
         cols_to_check = df.columns.difference(list(always_keep))
         keep = df[cols_to_check].nunique() > 1
         kept_always = [c for c in always_keep if c in df.columns]
         df = df[[*kept_always, *keep.index[keep]]].copy()
 
     if save_to is not None and len(df) > 0:
-        output_path = os.path.join(save_to, f"{lang.replace(' ', '_')}.parquet")
+        output_lang = gblang2udlang.get(lang, lang).replace(" ", "_")
+        output_path = os.path.join(save_to, f"{output_lang}.parquet")
         os.makedirs(os.path.dirname(output_path), exist_ok=True)
         df.to_parquet(output_path, index=False)
 

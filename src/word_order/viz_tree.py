@@ -154,16 +154,6 @@ def _agreement_context(predictor_var, target):
     return (match.group(1) if match else None), target.child_deprels[0]
 
 
-def _highlight_indices_for_row(row, prefixes):
-    """0-based positions in `sen` of the given node prefixes (e.g. head, nsubj)."""
-    idx = set()
-    for prefix in prefixes:
-        col = f"{prefix}_idx"
-        if col in row.index and pd.notna(row.get(col)):
-            idx.add(int(row[col]) - 1)
-    return idx
-
-
 def _highlighted_sen_str(sen, highlight_idx) -> str:
     return " ".join(
         f"<strong>{tok}</strong>" if i in highlight_idx else str(tok)
@@ -172,15 +162,19 @@ def _highlighted_sen_str(sen, highlight_idx) -> str:
 
 
 def _add_sen_str_column(full_df, highlight_prefixes=()):
-    """Same "sen_str" construction as before, but bolding the agreement-relevant
-    tokens (head/child) when highlight_prefixes is given."""
+    """Create sentence string and embolden the agreement-relevant
+    tokens (head/child) when highlight_prefixes is given.
+    """
     if not highlight_prefixes:
         full_df["sen_str"] = [" ".join(sen) for sen in full_df["sen"]]
         return
-    full_df["sen_str"] = [
-        _highlighted_sen_str(row["sen"], _highlight_indices_for_row(row, highlight_prefixes))
-        for _, row in full_df.iterrows()
-    ]
+    idx_cols = [f"{p}_idx" for p in highlight_prefixes if f"{p}_idx" in full_df.columns]
+    idx_series = [full_df[c] for c in idx_cols]
+    sen_strs = []
+    for sen, *idx_vals in zip(full_df["sen"], *idx_series): # more efficient than iterrows on wide dataset
+        highlight_idx = {int(v) - 1 for v in idx_vals if pd.notna(v)}
+        sen_strs.append(_highlighted_sen_str(sen, highlight_idx))
+    full_df["sen_str"] = sen_strs
 
 
 def _build_feat_columns(full_df, swap_feature=None, highlight_prefixes=()):
@@ -188,12 +182,13 @@ def _build_feat_columns(full_df, swap_feature=None, highlight_prefixes=()):
     bolding the swap-relevant feature's entry for prefixes in highlight_prefixes."""
     feat_collect = {}
     # Trailing (?:\[[a-z]+\])? admits UD's layered-feature suffix (e.g.
-    # "Number[psor]", "Gender[subj]") — without it these columns were silently
-    # excluded from the sample table entirely, since the plain pattern requires
-    # the feature name to be nothing but letters through end-of-string.
-    for _, row in full_df.filter(regex=r"^[a-z]+_[A-Z][a-zA-Z]+(?:\[[a-z]+\])?$", axis=1).iterrows():
+    # "Number[psor]", "Gender[subj]")
+    feat_df = full_df.filter(regex=r"^[a-z]+_[A-Z][a-zA-Z]+(?:\[[a-z]+\])?$", axis=1)
+    feat_cols = list(feat_df.columns)
+    # itertuples(), not iterrows(): avoids rebuilding a full-width Series per row.
+    for row_tuple in feat_df.itertuples(index=False, name=None):
         mf = dict()
-        for label, val in row.items():
+        for label, val in zip(feat_cols, row_tuple):
             prefix, feature = label.split("_")
             key = f"{prefix}_features"
             mf[key] = mf.get(key, list())
@@ -346,27 +341,28 @@ def interpolate_color(hex1, hex2, t):
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
-def has_word_forms(row, form_cols):
-    """True if at least one form column has a real word (not underscore or empty)."""
-
-    return any(str(row[c]).strip() not in ("_", "", "nan") for c in form_cols)
-
-
 def build_treebank_links(full_df: pd.DataFrame) -> list[str]:
     """Build grew.fr query links for each row in full_df."""
 
     form_cols = [x for x in full_df.columns if x.endswith("_form")]
+    treebanks = full_df["treebank"] if "treebank" in full_df.columns else [None] * len(full_df)
+    sent_ids = full_df["sent_id"] if "sent_id" in full_df.columns else [None] * len(full_df)
+    form_rows = zip(*(full_df[c] for c in form_cols)) if form_cols else [()] * len(full_df)
     tb_links = []
-    for _, row in full_df.iterrows():
-        form_values = list(dict(row[form_cols]).values())
-        link = build_grew_link(row.get("treebank"), row.get("sent_id"), form_values)
+    for treebank, sent_id, form_values in zip(treebanks, sent_ids, form_rows):
+        link = build_grew_link(treebank, sent_id, list(form_values))
         tb_links.append(link if link is not None else "&mdash;")
     return tb_links
 
 
 def remove_censored(full_df):
+    """Keep rows where at least one *_form column has a real word (not underscore/empty)."""
     form_cols = [x for x in full_df.columns if x.endswith("_form")]
-    return full_df[full_df.apply(lambda row: has_word_forms(row, form_cols), axis=1)]
+    if not form_cols:
+        return full_df
+    stripped = full_df[form_cols].astype(str).apply(lambda s: s.str.strip())
+    has_word = ~stripped.isin(["_", "", "nan"])
+    return full_df[has_word.any(axis=1)]
 
 
 def build_placeholder_args(
