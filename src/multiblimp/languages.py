@@ -14,7 +14,6 @@ def lang2langcode(name: str):
     try:
         return Lang(udlang2iso639.get(name, name)).pt3
     except InvalidLanguageValue:
-        print(name)
         return {"Ancient_Greek": "grc",
                 "Ancient_Hebrew": name,
                 "Bokota": name,

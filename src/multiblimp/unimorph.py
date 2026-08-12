@@ -389,13 +389,12 @@ class UnimorphInflector:
                 print(f"UM Pickle not found at {path}")
             return None
         df = pd.read_pickle(path)
+        df = self.filter_entries(df, filter)
 
-        # Pickled dataframes were saved with "category" dtype columns; convert to
-        # plain object dtype for the same reason as load_unimorph above.
+        # Convert to plain object dtype (same reason as load_unimorph above)
         for column in df.columns:
             df[column] = df[column].astype(object)
 
-        df = self.filter_entries(df, filter)
         df = self.set_unk_values(df)
 
         return df
