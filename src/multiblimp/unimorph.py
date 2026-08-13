@@ -1028,12 +1028,20 @@ class UnimorphInflector:
                             if isinstance(val, str) and val != UNDEFINED
                         }
                     )
-                if self.ud_inflector is not None:
-                    if only_try_ud_if_no_um and len(form_features) > 0:
-                        return form_features
-                    ud_form_features = self.ud_inflector.get_form_features(
-                        form, features, ufeat
-                    )
-                    form_features.update(ud_form_features)
+
+        # UD fallback: not gated behind has_unimorph_df, since it's exactly
+        # meant to cover languages/POS for which the UM dataframe is empty
+        # (e.g. Ancient Greek has zero UM verb entries) -- mirrors inflect()'s
+        # unconditional fallback to self.ud_inflector.inflect().
+        if self.ud_inflector is not None:
+            if only_try_ud_if_no_um and len(form_features) > 0:
+                return form_features
+            ud_form_features = self.ud_inflector.get_form_features(
+                form, features, ufeat,
+                only_try_ud_if_no_um=only_try_ud_if_no_um,
+                prefer_tight_match=prefer_tight_match,
+                fetch_all=fetch_all,
+            )
+            form_features.update(ud_form_features)
 
         return form_features

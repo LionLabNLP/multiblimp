@@ -369,7 +369,13 @@ def build_placeholder_args(
     dt_df, full_df, predictor_var, meta=None, show_features=False, target=None
 ):
     """Compute all arguments needed for write_placeholder_html."""
-    sole_label = dt_df[predictor_var].iloc[0]
+    # dt_df's predictor values may not actually be uniform: this placeholder
+    # path is also taken when fit_dt refuses to fit a tree for having too few
+    # rows (below its min_df_len), regardless of how many distinct labels are
+    # present. Report the true distribution rather than assuming dt_df[0]
+    # speaks for every row.
+    value_counts = dt_df[predictor_var].value_counts()
+    label = value_counts.index[0] if len(value_counts) == 1 else dict(value_counts)
 
     if meta is None:
         meta = {}
@@ -399,7 +405,7 @@ def build_placeholder_args(
         keep_columns
     ].to_dict("records")
 
-    return sole_label, meta, sample_rows
+    return label, meta, sample_rows
 
 
 def _finalize_tree_html(

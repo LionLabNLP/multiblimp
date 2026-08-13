@@ -1088,6 +1088,28 @@ def create_html(meta, node_samples, node_data, hex_colors, classes, div_id):
 
 
 def write_placeholder_html(out_file, predictor_var, label, meta=None, sample_rows=None):
+    # `label` is a single value when every training sample genuinely shares
+    # one predictor value, or a {value: count} dict when the tree wasn't fit
+    # for some other reason (e.g. too few samples) despite a mixed label set.
+    if isinstance(label, dict):
+        heading = "Too few samples to fit a tree"
+        description = (
+            f"Training samples for <b>{predictor_var}</b> don&rsquo;t share one "
+            "agreement label, but there weren&rsquo;t enough of them to fit a "
+            "decision tree — showing the raw label distribution instead."
+        )
+        label_html = "".join(
+            f'<div class="label">{cls}: {n}</div>'
+            for cls, n in sorted(label.items(), key=lambda kv: -kv[1])
+        )
+    else:
+        heading = "Single label"
+        description = (
+            f"All training samples for <b>{predictor_var}</b> share one "
+            "agreement label — no decision tree was needed."
+        )
+        label_html = f'<div class="label">{label}</div>'
+
     meta_rows = ""
     if meta:
         for key, val in meta.items():
@@ -1151,7 +1173,9 @@ def write_placeholder_html(out_file, predictor_var, label, meta=None, sample_row
     p  {{ color: #78716c; font-size: 0.875rem; margin: 0; line-height: 1.5; }}
     .label {{ display: inline-block; padding: 0.3rem 0.9rem;
               background: #f5f5f4; border-radius: 999px; font-weight: 600;
-              font-size: 1rem; border: 1px solid #e7e5e4; }}
+              font-size: 1rem; border: 1px solid #e7e5e4;
+              margin: 0 0.4rem 0.4rem 0; }}
+    .labels {{ display: flex; flex-wrap: wrap; }}
     .meta {{ font-size: 0.8rem; }}
     .meta-row {{ display: flex; justify-content: space-between; padding: 0.2rem 0;
                  border-bottom: 1px solid #e7e5e4; }}
@@ -1179,10 +1203,10 @@ def write_placeholder_html(out_file, predictor_var, label, meta=None, sample_row
   <div class="layout">
     <div class="sidebar">
       <div>
-        <h2>Single label</h2>
-        <p>All training samples for <b>{predictor_var}</b> share one agreement label — no decision tree was needed.</p>
+        <h2>{heading}</h2>
+        <p>{description}</p>
       </div>
-      <div class="label">{label}</div>
+      <div class="labels">{label_html}</div>
       <div class="meta">{meta_rows}</div>
     </div>
     <div class="main">

@@ -939,7 +939,12 @@ def create_word_order_df(
         if target is not None and target.head_feats:
             always_keep.update({f"head_{feat}" for feat in target.head_feats})
         cols_to_check = df.columns.difference(list(always_keep))
-        keep = df[cols_to_check].nunique() > 1
+        # dropna=False: a column that alternates between one real value and
+        # "not annotated" (NaN) is informative -- e.g. head_Person being 3 on
+        # some rows and unset on others is exactly what drives a Yes/unk
+        # agreement split -- so plain nunique() (which ignores NaN) would
+        # wrongly treat it as a constant singleton and drop it.
+        keep = df[cols_to_check].nunique(dropna=False) > 1
         kept_always = [c for c in always_keep if c in df.columns]
         df = df[[*kept_always, *keep.index[keep]]].copy()
 

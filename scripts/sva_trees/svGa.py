@@ -41,7 +41,7 @@ if __name__=="__main__":
     pipeline = Pipeline(target=target,
                         predictor_var=f"head_nsubj_{target.swap_feat}_agreement",
                         langs=(args.langs if args.langs else get_ud_langs(resource_dir)), 
-                        inflection_map=swap_number_subj_any,
+                        inflection_map=swap_gender_any,
                         unimorph_args = {
                             "filter_entries": {
                                 "upos": ["V"],
