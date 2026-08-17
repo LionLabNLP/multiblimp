@@ -894,8 +894,8 @@ def _create_diagnostics_html(
           <h3>Table columns</h3>
           <dl class="legend-list">
             <div><dt>Distribution</dt><dd>The language's full Yes / No / unk label mix, before the decision tree drops unk rows. Always ordered Yes &rarr; No &rarr; unk, coloured to match the tree pages. Hover a bar for exact percentages.</dd></div>
-            <div><dt>Base Entropy</dt><dd>Entropy of the target label distribution before any splitting. The uninformed baseline. Coloured on the item-loss scale (teal = low = good), relative to the highest base entropy in this table.</dd></div>
-            <div><dt>Reduced Entropy</dt><dd>Entropy remaining after fitting the decision tree; lower means the tree explains more of the outcome. Coloured the same way as Base Entropy, on the same scale.</dd></div>
+            <div><dt>Base Entropy</dt><dd>Entropy of the target label distribution before any splitting. The uninformed baseline. Coloured on the item-loss scale (teal = low = good), relative to 1 bit or the highest base entropy in this table, whichever is larger.</dd></div>
+            <div><dt>Reduced Entropy</dt><dd>Entropy remaining after fitting the decision tree; lower means the tree explains more of the outcome. Coloured on the item-loss scale (teal = low = good), relative to that language's own Base Entropy (reduced can never exceed it) -- so this cell always matches Δ Entropy's colour for the same row.</dd></div>
             <div><dt>Δ Entropy</dt><dd>Base Entropy minus Reduced Entropy. How much uncertainty the tree removes. Coloured on the coverage scale (teal = good), by what fraction of the base entropy that delta represents, not the raw number. 0.3 off a base of 0.4 is a much bigger win than 0.3 off a base of 2.0.</dd></div>
             <div><dt>DT Acc%</dt><dd>The decision tree's accuracy scored on its own training data. Coloured on the coverage scale (teal = high = good).</dd></div>
             <div><dt>N RAW</dt><dd>Candidate rows before the entropy/leaf-confidence filter is applied. Not coloured. There's no cheap per-language reference point (like treebank size) to scale it against, and not informative enough to be worth adding one for.</dd></div>
@@ -1080,11 +1080,13 @@ def _create_diagnostics_html(
     }}
 
     // Entropy has no fixed 0-100 scale (its ceiling depends on how many
-    // labels the target has), so colour it relative to the highest base
-    // entropy in the CURRENTLY DISPLAYED set (recomputed per entropy-type
-    // toggle) rather than assuming a theoretical max.
-    function entropyColor(value, maxEntropy) {{
-      return pctColor(Math.min(100, (value / maxEntropy) * 100), true);
+    // labels the target has), so colour it relative to a ceiling rather
+    // than assuming a theoretical max -- maxBaseEntropy (table-wide) for
+    // base entropy, that row's own base entropy for reduced entropy (see
+    // renderAll/generate_rows below). invert stays at its default true for
+    // both: lower is better, teal at the low end.
+    function entropyColor(value, maxEntropy, invert = true) {{
+      return pctColor(Math.min(100, (value / maxEntropy) * 100), invert);
     }}
 
     // Delta entropy isn't meaningful in isolation -- 0.3 off a base of 0.4
@@ -1212,7 +1214,24 @@ def _create_diagnostics_html(
 
     function renderAll() {{
       const list = LANGUAGES[currentEntropyType];
-      const maxEntropy = Math.max(...list.map(l => l.base), 0.0001);
+      // Base entropy: anchored at 1 bit (the true ceiling for a binary
+      // Yes/No split) rather than just "worst on screen" -- otherwise a
+      // table where every language happens to sit close together stretches
+      // that narrow band across the whole gradient and makes mediocre
+      // values look artificially bad. Math.max(...) still wins when the
+      // real data exceeds 1 (possible for six-class entropy, never binary).
+      // Lower is better, teal at the low end.
+      //
+      // Reduced entropy: not a table-wide ceiling at all -- reduced can
+      // never exceed that same row's own base entropy (the tree only ever
+      // removes uncertainty, never adds it), so each row is scaled 0..its
+      // own base entropy, right where the cell is rendered below. Lower is
+      // better, same direction as base entropy -- reduced/base and
+      // delta/base are complementary fractions of the same number, so this
+      // makes a row's Reduced Entropy cell always match its Delta Entropy
+      // cell's colour exactly (t and 1-t cancel through the two invert
+      // directions), rather than contradicting it.
+      const maxBaseEntropy = Math.max(1, ...list.map(l => l.base));
       const acc = SORT_ACCESSORS[currentSort.column];
       const sorted = [...list].sort((a, b) => {{
         const av = acc(a), bv = acc(b);
@@ -1244,8 +1263,8 @@ def _create_diagnostics_html(
           <div class="cell c-chev"><span class="chevron">${{chevronSvg()}}</span></div>
           <div class="cell c-lang lang-name">${{nameHtml}}</div>
           <div class="cell c-dist">${{renderDistBar(lang.diag && lang.diag.labelDistribution)}}</div>
-          <div class="cell c-base" style="color:${{entropyColor(lang.base, maxEntropy)}}">${{lang.base.toFixed(3)}}</div>
-          <div class="cell c-reduced" style="color:${{entropyColor(lang.reduced, maxEntropy)}}">${{lang.reduced.toFixed(3)}}</div>
+          <div class="cell c-base" style="color:${{entropyColor(lang.base, maxBaseEntropy)}}">${{lang.base.toFixed(3)}}</div>
+          <div class="cell c-reduced" style="color:${{entropyColor(lang.reduced, Math.max(lang.base, 0.0001))}}">${{lang.reduced.toFixed(3)}}</div>
           <div class="cell c-delta" style="color:${{deltaColor(lang.base, lang.delta)}}">${{lang.delta.toFixed(3)}}</div>
           <div class="cell c-acc" style="color:${{pctColor(lang.acc * 100)}}">${{(lang.acc * 100).toFixed(1)}}%</div>
           <div class="cell c-raw">${{lang.nRaw.toLocaleString()}}</div>
