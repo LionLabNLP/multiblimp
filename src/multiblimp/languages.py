@@ -192,6 +192,8 @@ skip_langs = {
     "Turkish_English",
     "Spanish_Sign_Language",
     "Swedish_Sign_Language",
+    "UD_French_ALTS",
+    "UD_French:PoitevinDIVITAL",
 }
 
 

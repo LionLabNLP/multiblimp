@@ -29,6 +29,20 @@ if __name__=="__main__":
                         help="Skip the startup check for other already-running "
                              "instances of this script. Only use for deliberate "
                              "concurrent runs.")
+    parser.add_argument("--max_treebank_len", type=int, default=30_000,
+                        help="Cap the number of treebank sentences read per "
+                             "language. Default: 30000 (this script's prior "
+                             "hardcoded value -- the other sva_trees scripts "
+                             "default to no cap).")
+    parser.add_argument("--keep_unk", action="store_true",
+                        help="Keep unk-labeled rows (missing head/child feature "
+                             "annotation) in the decision tree fit instead of "
+                             "dropping them. Default: dropped.")
+    parser.add_argument("--target_id", default=None,
+                        help="Override the output dir name (decision_trees/<id>, "
+                             "minimal_pairs/<id>, ...). Default: this script's "
+                             "filename (spNa). Useful for A/B runs that shouldn't "
+                             "overwrite each other, e.g. --keep_unk comparisons.")
     args = parser.parse_args()
 
     target = nsubj_target
@@ -52,17 +66,18 @@ if __name__=="__main__":
                         deprel_dir="_".join(target.child_deprels), 
                         resource_dir="../../resources", 
                         word_order_dir=f"../../treebank_features/{deprel_dir}_part",
-                        max_treebank_len=30_000,
+                        max_treebank_len=args.max_treebank_len,
                         never_skip=args.never_skip,
                         rm_columns=["nsubj_child-deprel_conj",
                                     #"head_child-deprel_cop",
                                     #"head_child-deprel_aux"
                                     ],
-                        target_id=sys.argv[0][:-3],
+                        target_id=args.target_id or sys.argv[0][:-3],
                         threshold=0.12,
                         simplify=not args.distinguish_unk,
                         n_jobs=args.n_jobs,
                         max_worker_mem_gb=args.max_worker_mem_gb,
                         force=args.force,
+                        drop_unk=not args.keep_unk,
                         )
     pipeline()

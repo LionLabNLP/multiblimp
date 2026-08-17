@@ -50,8 +50,9 @@ def build_grew_link(treebank, sent_id, form_values, link_text=None) -> str | Non
     """Build an HTML <a> link to a universal.grew.fr query matching this sentence,
     constraining the given ordered word forms (one grew "form" slot per value).
 
-    Shared by word_order/viz_tree.py's build_treebank_links and sva_trees/
-    flowchart.py's example tables, which both need this exact query construction.
+    Shared by word_order/viz_tree.py's build_treebank_links and
+    sva_trees/create_pairs.py's example tables, which both need this exact
+    query construction.
 
     Percent-encodes the query values (not just interpolating them raw) since
     sent_id can itself contain characters like "+" (e.g. Abkhaz) that a naive

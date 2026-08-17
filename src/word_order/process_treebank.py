@@ -76,8 +76,9 @@ def tree2sen(tree):
 
 def tree_no_space_after(tree):
     """Per-token SpaceAfter=No flags, parallel to tree2sen(tree). Saved alongside
-    "sen" so downstream consumers (e.g. sva_trees' flowchart) can reconstruct the
-    correctly-spaced surface string without reloading the source treebank."""
+    "sen" so downstream consumers (e.g. sva_trees.create_pairs's example tables)
+    can reconstruct the correctly-spaced surface string without reloading the
+    source treebank."""
     return [(tok["misc"] or {}).get("SpaceAfter") == "No" for tok in tree]
 
 
@@ -226,11 +227,6 @@ def partial_df_match(
         if (not prefer_tight_match) or (len(candidate_rows) < 2):
             return candidate_rows
 
-        # Vectorized equivalent of the per-row/per-column loop below (avoids
-        # candidate_rows.iterrows()):
-        #   for each cell (row, col):
-        #     if cell is set (not-nan or UNDEFINED): +1 if col not in `features`
-        #     else (cell is nan): +1 if `features` has a real (non-nan) value for col
         is_set_df = candidate_rows.notna() | (candidate_rows == UNDEFINED)
         not_in_features = pd.Series(
             {col: (col not in features) for col in candidate_rows.columns}
@@ -293,8 +289,8 @@ def expand_anno(node, morph_feats, target, um_split):
                             inflect_feats.get(k, False)!="UNDEFINED"
                             ) else 0 for k, v in unified.items()]
                 )):
-                    #unanimous feat matches
-                    #check for conflict with og data stil
+                    # unanimous feat matches
+                    # check for conflict with og data stil
                     for k,v in unified.items():
                         if not k in um_feats:#s and len(set(v))==1:
                             if add_feats==False: add_feats = dict()
@@ -630,6 +626,7 @@ def extract_instances(
     um_data: pd.DataFrame | None = None,
     ud_data: pd.DataFrame | None = None,
     fetch_all: bool = False,
+    require_all_children: bool = True,
 ):
     """
     Extract training instances from a tree.
@@ -637,6 +634,10 @@ def extract_instances(
     When target is None, returns one instance per (head, child) pair across all
     non-root tokens, using prefix 'head' and 'child'. When target is provided,
     filters to matching head-child groups and uses the deprel as the child prefix.
+
+    require_all_children: if True (default, matches all existing callers), a
+        head only yields an instance when every deprel in target.child_deprels
+        is present.
 
     Returns:
         list of dicts, where each dict contains features for one instance
@@ -656,11 +657,15 @@ def extract_instances(
         if child["deprel"] in target.child_deprels:
             head2children[child["head"]].append(child)
 
-    # For each head that has all required child deprels present
+    # For each head that has the required child deprels present
     for head_id, children in head2children.items():
-        # Check if we have all required deprels
         child_deprels_present = {c["deprel"] for c in children}
-        if not all(deprel in child_deprels_present for deprel in target.child_deprels):
+        deprels_ok = (
+            all(deprel in child_deprels_present for deprel in target.child_deprels)
+            if require_all_children
+            else any(deprel in child_deprels_present for deprel in target.child_deprels)
+        )
+        if not deprels_ok:
             continue
 
         head = tree[head_id - 1]
@@ -777,6 +782,7 @@ def extract_instances(
         deprel_ids = {
             deprel: instance[f"{deprel}_idx"]
             for deprel in target.child_deprels + ["head"]
+            if deprel in deprel2child or deprel == "head"
         }
         deprel_order = "_".join(sorted(deprel_ids, key=deprel_ids.get))
         instance["deprel_order"] = shorten_cls(deprel_order, target)
@@ -818,7 +824,8 @@ def extract_features(
     batch_size: int = 500,
     um_data: pd.DataFrame | None = None,
     ud_data: pd.DataFrame | None = None,
-    fetch_all: bool = False
+    fetch_all: bool = False,
+    require_all_children: bool = True,
 ):
     """
     Extract features from treebank based on prediction target.
@@ -827,6 +834,8 @@ def extract_features(
     avoid holding the full list of dicts in memory at once. Returns a list
     of partial DataFrames; the caller is responsible for concatenating and
     categorizing them (see create_word_order_df).
+
+    require_all_children: see extract_instances.
     """
     merge_subj_layered_feats(treebank)
     all_feats, all_lemma_freqs, all_deprel, all_pos = get_all_feats(treebank)
@@ -847,7 +856,8 @@ def extract_features(
                 agreement_feats=agreement_feats,
                 um_data=um_data,
                 ud_data=ud_data,
-                fetch_all=fetch_all
+                fetch_all=fetch_all,
+                require_all_children=require_all_children,
             )
         )
 
@@ -878,6 +888,7 @@ def create_word_order_df(
     um_data: pd.DataFrame | None = None,
     ud_data: pd.DataFrame | None = None,
     fetch_all: bool = False,
+    require_all_children: bool = True,
 ) -> pd.DataFrame:
     """
     Create a DataFrame with word order features for a given language and prediction target.
@@ -897,6 +908,8 @@ def create_word_order_df(
             column for every feat in this list (instead of just the one named
             in predictor_var).
         fetch_all: if True, try to enhance feature annotation via Unimorph
+        require_all_children: see extract_instances. Default True matches
+            prior behaviour (e.g. dnan_target's co-occurrence requirement).
 
     Returns:
         DataFrame with extracted features
@@ -915,6 +928,7 @@ def create_word_order_df(
         agreement_feats=agreement_feats,
         lexicalize=lexicalize,
         batch_size=batch_size,
+        require_all_children=require_all_children,
         um_data=um_data,
         ud_data=ud_data,
         fetch_all=fetch_all
@@ -940,10 +954,7 @@ def create_word_order_df(
             always_keep.update({f"head_{feat}" for feat in target.head_feats})
         cols_to_check = df.columns.difference(list(always_keep))
         # dropna=False: a column that alternates between one real value and
-        # "not annotated" (NaN) is informative -- e.g. head_Person being 3 on
-        # some rows and unset on others is exactly what drives a Yes/unk
-        # agreement split -- so plain nunique() (which ignores NaN) would
-        # wrongly treat it as a constant singleton and drop it.
+        # "not annotated" (NaN) is informative
         keep = df[cols_to_check].nunique(dropna=False) > 1
         kept_always = [c for c in always_keep if c in df.columns]
         df = df[[*kept_always, *keep.index[keep]]].copy()

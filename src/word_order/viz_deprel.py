@@ -58,6 +58,20 @@ def _dtype_coerced_metrics(dt, df, target_col, binary_entropy, smoothing):
     return base_ent, reduced_ent, delta_ent, accuracy
 
 
+def _metrics_df(metrics: list, columns: list) -> pd.DataFrame:
+    """pd.DataFrame(metrics).sort_values("language"), but safe when `metrics`
+    is empty -- e.g. every language for this deprel turned out trivial (no
+    fitted tree at all), which happens for real: French participles don't
+    inflect for Person, so head_nsubj_Person_agreement over VerbForm=Part
+    heads is degenerate for every French row. pd.DataFrame([]) has no
+    columns at all, so .sort_values("language") on it raises KeyError
+    instead of just yielding an empty (but correctly shaped) table.
+    """
+    if not metrics:
+        return pd.DataFrame(columns=columns)
+    return pd.DataFrame(metrics).sort_values("language")
+
+
 def calculate_metrics(
     language_data: Dict[str, Tuple[Pipeline, pd.DataFrame]],
     target_col: str = "deprel_order",
@@ -108,7 +122,10 @@ def calculate_metrics(
             }
         )
 
-    return pd.DataFrame(metrics).sort_values("language")
+    return _metrics_df(metrics, [
+        "language", "base_entropy", "reduced_entropy", "delta_entropy", "accuracy",
+        "n_items", "n_flexible", "n_fully_flexible", "total_pairs",
+    ])
 
 
 def _agreement_row_stats(df, target_col, leaf_threshold, pairs_dir, lang_name):
@@ -185,7 +202,10 @@ def calculate_agreement_metrics(
             }
         )
 
-    return pd.DataFrame(metrics).sort_values("language")
+    return _metrics_df(metrics, [
+        "language", "base_entropy", "reduced_entropy", "delta_entropy", "accuracy",
+        "n_raw", "n_keep", "n_pairs",
+    ])
 
 
 def scatter_color(metrics_row, language_data, target_col, exclude_labels=None):
@@ -201,30 +221,25 @@ def scatter_color(metrics_row, language_data, target_col, exclude_labels=None):
     return "#2563eb"
 
 
-def extract_trivial_label(html_path: Path) -> str | None:
-    """Extract the sole label from a placeholder HTML file, or None if it's a real tree page."""
-    content = html_path.read_text(encoding="utf-8")
-    match = re.search(r'<div class="label">(.+?)</div>', content)
-    if match and "No decision tree to display" in content:
-        return match.group(1).strip()
-    return None
+def extract_trivial_distribution(html_path: Path) -> dict[str, int] | None:
+    """Extract the {value: count} label distribution write_placeholder_html embeds
+    as a <script id="label-distribution"> JSON island, or None if this isn't a
+    placeholder page (e.g. it's a real fitted-tree page).
 
-def extract_trivial_sample_count(html_path: Path) -> int:
-    """Extract the "Training samples" count write_placeholder_html wrote into a
-    placeholder page's meta panel, e.g. '<span class="meta-val">4,486</span>'.
-    0 if the page has no such row (shouldn't normally happen for a placeholder).
-
-    A trivial language never gets a fitted tree, so it has no data_dir/{lang}.parquet
-    for row-count fallbacks to read (fit_dt is what writes that file) — this reuses
-    the count tree2html already computed and embedded in the one file we do have.
+    A trivial/too-small language never gets a fitted tree, so it has no
+    data_dir/{lang}.parquet for row-count fallbacks to read (fit_dt is what
+    writes that file) — this is the only place that distribution survives.
     """
     content = html_path.read_text(encoding="utf-8")
+    if "No decision tree to display" not in content:
+        return None
     match = re.search(
-        r'<span class="meta-key">Training samples</span>\s*'
-        r'<span class="meta-val">([\d,]+)</span>',
-        content,
+        r'<script type="application/json" id="label-distribution">(.*?)</script>',
+        content, re.DOTALL,
     )
-    return int(match.group(1).replace(",", "")) if match else 0
+    if not match:
+        return None
+    return {str(k): int(v) for k, v in json.loads(match.group(1)).items()}
 
 
 
@@ -236,9 +251,9 @@ def generate_html_deprel_index(
     smoothing: float = 0.5,
     exclude_labels: set | None = None,
     include_trivial_labels: set | None = None,
-    flowchart_dir: str | None = None,
     leaf_threshold: float = 0.1,
     pairs_dir: str | None = None,
+    diagnostics_by_lang: dict | None = None,
 ) -> None:
     """Generate interactive overview page with metrics and language links.
 
@@ -253,11 +268,6 @@ def generate_html_deprel_index(
         include_trivial_labels: Trivial labels that are still linguistically interesting
             and should be kept in the table/scatter plot with a green marker instead of
             being omitted (e.g. {"Yes"}).
-        flowchart_dir: directory holding per-language flowchart HTML files named
-            "<language>.html", e.g. sva_trees.create_pairs.create_pairs's flowchart_path
-            directory. When given, languages with a matching file get a "Flowchart"
-            column link; languages without one (no qualifying rows, or the pairs step
-            hasn't been run yet) show a plain dash. None disables the column entirely.
         leaf_threshold, pairs_dir: only used when "agreement" is in target_col (the
             SVA pipeline). In that case the word-order "N 1 swap"/"N 4 swap"/"N Pairs"
             columns (based on get_all_orders word-order permutation codes, meaningless
@@ -265,21 +275,29 @@ def generate_html_deprel_index(
             with N RAW / N KEEP / N PAIRS. leaf_threshold must match the leaf_threshold
             create_pairs was/will be run with, and pairs_dir must match its save_to
             parent directory (i.e. "<save_to>/../"), for the counts to be accurate.
+        diagnostics_by_lang: dict mapping raw language name -> the JSON-shaped dict from
+            sva_trees.diagnostics.diagnostics_row_to_json, one entry per language that
+            create_pairs successfully produced diagnostics for. Only meaningful alongside
+            "agreement" in target_col; when given (and non-empty) for an agreement target,
+            the page renders with an expandable per-language diagnostics panel instead of
+            the plain table. A language present in the metrics but missing from this dict
+            (e.g. create_pairs raised on it) still gets a row, just without a diagnostics
+            panel. None/empty falls back to the plain table, same as before this existed.
     """
     html_path = Path(html_directory)
     include_trivial_labels = include_trivial_labels or set()
     is_agreement = "agreement" in target_col
 
-    # Detect trivial langs from placeholder HTML files — keys are stem strings
+    # Detect trivial/too-small langs from placeholder HTML files;
+    # placeholder page also covers "too few samples to fit a tree" for a
+    # mixed label set, not just a genuine single label).
     trivial_langs = {}
-    trivial_counts = {}
     for html_file in html_path.glob("*.html"):
         if html_file.name.lower() == "index.html":
             continue
-        label = extract_trivial_label(html_file)
-        if label is not None:
-            trivial_langs[html_file.stem] = label  # ← stem string, not Path
-            trivial_counts[html_file.stem] = extract_trivial_sample_count(html_file)
+        dist = extract_trivial_distribution(html_file)
+        if dist is not None:
+            trivial_langs[html_file.stem] = dist  # ← stem string, not Path
 
     if language_data is None:
         language_data = {}
@@ -320,14 +338,16 @@ def generate_html_deprel_index(
 
     # Pick up any trivial langs not yet covered by placeholder files
     for l in metrics_six[metrics_six["base_entropy"] == 0.0]["language"]:
-        trivial_langs[l] = list(set(language_data[l][1][target_col].values))[0]
+        trivial_langs[l] = dict(language_data[l][1][target_col].value_counts())
 
-    # Split trivial langs: include_trivial_labels go back into the main table/plot
+    # Split trivial langs: any language with at least one row in an
+    # include_trivial_labels value (e.g. "Yes") goes back into the main
+    # table/plot, even if the rest of its rows carry other values.
     include_trivial_langs = {
-        k: v for k, v in trivial_langs.items() if v in include_trivial_labels
+        k: v for k, v in trivial_langs.items() if set(v) & include_trivial_labels
     }
     omit_langs = {
-        k: v for k, v in trivial_langs.items() if v not in include_trivial_labels
+        k: v for k, v in trivial_langs.items() if not (set(v) & include_trivial_labels)
     }
 
     # Remove omitted langs from metrics; include_trivial_langs are re-added below
@@ -344,11 +364,16 @@ def generate_html_deprel_index(
     # Add include_trivial_langs back as synthetic rows
     if include_trivial_langs:
         trivial_rows = []
-        for lang, label in include_trivial_langs.items():
+        for lang, dist in include_trivial_langs.items():
             if lang in language_data:
                 lang_df = language_data[lang][1]
             else:
-                lang_df = pd.DataFrame({target_col: [label] * trivial_counts.get(lang, 0)})
+                # Reconstruct a df with the real per-value counts (not just the
+                # dominant value repeated), so _agreement_row_stats' n_raw
+                # correctly counts only the "Yes" rows for a mixed-label,
+                # too-few-samples language.
+                values = [v for v, n in dist.items() for _ in range(n)]
+                lang_df = pd.DataFrame({target_col: values})
 
             if is_agreement:
                 n_raw, n_keep, n_pairs = _agreement_row_stats(
@@ -417,16 +442,6 @@ def generate_html_deprel_index(
             else:
                 lang_link = f"<span{name_style}>{lang_name}</span>"
 
-            if flowchart_dir is not None:
-                flowchart_path = os.path.join(flowchart_dir, f"{row['language']}.html")
-                if os.path.exists(flowchart_path):
-                    flowchart_href = os.path.relpath(flowchart_path, start=html_directory)
-                    flowchart_cell = f'<td data-sort="1"><a href="{quote(flowchart_href)}">flowchart</a></td>'
-                else:
-                    flowchart_cell = '<td data-sort="0">—</td>'
-            else:
-                flowchart_cell = ""
-
             if is_agreement:
                 count_cells = f"""
                 <td data-sort="{row['n_raw']}">{row['n_raw']:,}</td>
@@ -447,7 +462,6 @@ def generate_html_deprel_index(
                 <td data-sort="{row['reduced_entropy']:.4f}">{row['reduced_entropy']:.3f}</td>
                 <td data-sort="{row['delta_entropy']:.4f}">{row['delta_entropy']:.3f}</td>
                 <td data-sort="{row['accuracy']:.4f}">{row['accuracy']:.1%}</td>{count_cells}
-                {flowchart_cell}
             </tr>
             """
             )
@@ -464,8 +478,52 @@ def generate_html_deprel_index(
                 row, language_data, target_col, exclude_labels=exclude_labels
             )
 
-    rows_six = generate_rows(metrics_six, lang_colors)
-    rows_binary = generate_rows(metrics_binary, lang_colors)
+    # Only meaningful for the agreement/SVA target — word-order pages (and
+    # agreement pages nobody bothered to pass diagnostics for) keep the
+    # plain, table-based page unchanged.
+    diagnostics_by_lang = diagnostics_by_lang or {}
+    diagnostics_enabled = is_agreement and bool(diagnostics_by_lang)
+
+    def build_languages(metrics_df, lang_colors):
+        """Per-language dicts for the diagnostics page's client-side
+        renderer (word_order.html.html_deprel's LANGUAGES blob) — the same
+        data generate_rows() renders as HTML, just kept as JSON so colours
+        (which read CSS custom properties for light/dark theming) and
+        sorting can both happen client-side instead of being baked in here.
+        A language with no diagnostics_by_lang entry (e.g. create_pairs
+        raised on it) still gets a row, with "diag": null — the page's JS
+        renders that as a "no diagnostics available" state rather than
+        failing.
+        """
+        languages = []
+        for _, row in metrics_df.iterrows():
+            lang_name = row["language"].replace("_", " ")
+            lang_file = html_files.get(row["language"])  # ← stem matches directly
+            color = lang_colors.get(lang_name, "#2563eb")
+
+            languages.append({
+                "name": lang_name,
+                "langUrl": f"/multiblimp/{deprel}/{quote(lang_file.stem)}" if lang_file else None,
+                "color": color if color != "#2563eb" else None,
+                "base": row["base_entropy"],
+                "reduced": row["reduced_entropy"],
+                "delta": row["delta_entropy"],
+                "acc": row["accuracy"],
+                "nRaw": int(row["n_raw"]),
+                "nKeep": int(row["n_keep"]),
+                "nPairs": int(row["n_pairs"]),
+                "diag": diagnostics_by_lang.get(row["language"]),
+            })
+        return languages
+
+    if diagnostics_enabled:
+        languages_six_json = json.dumps(build_languages(metrics_six, lang_colors))
+        languages_binary_json = json.dumps(build_languages(metrics_binary, lang_colors))
+        rows_six = rows_binary = ""
+    else:
+        languages_six_json = languages_binary_json = "[]"
+        rows_six = generate_rows(metrics_six, lang_colors)
+        rows_binary = generate_rows(metrics_binary, lang_colors)
 
     # Generate scatter plot data for both entropy types
     def generate_plot_data(metrics_df):
@@ -558,7 +616,6 @@ def generate_html_deprel_index(
             '<th class="sortable" data-column="6">N KEEP</th>',
             '<th class="sortable" data-column="7">N PAIRS</th>',
         ]
-        next_col = 8
     else:
         header_cells += [
             '<th class="sortable" data-column="5">N Items</th>',
@@ -566,11 +623,6 @@ def generate_html_deprel_index(
             '<th class="sortable" data-column="7">N 4 swap</th>',
             '<th class="sortable" data-column="8">N Pairs</th>',
         ]
-        next_col = 9
-    if flowchart_dir is not None:
-        header_cells.append(
-            f'<th class="sortable" data-column="{next_col}">Flowchart</th>'
-        )
 
     html_content = create_html(
         rows_six,
@@ -579,6 +631,9 @@ def generate_html_deprel_index(
         plot_data_binary_json,
         trivial_note=notes,
         header_cells="".join(header_cells),
+        diagnostics_enabled=diagnostics_enabled,
+        languages_six_json=languages_six_json,
+        languages_binary_json=languages_binary_json,
     )
 
     output_path = html_path / "index.html"

@@ -1,4 +1,5 @@
 import joblib
+import json
 import os
 import re
 
@@ -22,6 +23,7 @@ from .utils import get_all_orders
 RND = 42
 
 #OMIT_FEATURES = []#["subject_idx", "object_idx", "verb_idx"]
+UNK_LABELS = {"unk", "+-", "--"}
 
 
 def _infer_column_types(cols: list[str]) -> tuple[list[str], list[str]]:
@@ -279,18 +281,39 @@ def fit_dt(
     min_df_len=10,
     leaf_threshold=0.1,
     predictor_var="deprel_order",
+    drop_unk=True,
 ):
     sub_df = full_df.copy()
     if deprel_kwargs is not None:
         for k, v in deprel_kwargs.items():
             sub_df = sub_df[sub_df[k] == v]
 
-    if len(sub_df) < min_df_len:
-        return None, None, None
+    unk_counts = {"head_unk": 0, "nsubj_unk": 0, "both_unk": 0}
+    if "agreement" in predictor_var:
+        unk_mask = sub_df[predictor_var].isin(UNK_LABELS)
+        if unk_mask.any():
+            feat_match = re.match(r".*_([A-Z][a-z]+)_.*", predictor_var)
+            child_deprel = target.child_deprels[0] if target is not None else None
+            head_col = f"head_{feat_match.group(1)}" if feat_match else None
+            child_col = (
+                f"{child_deprel}_{feat_match.group(1)}"
+                if feat_match and child_deprel else None
+            )
+            if head_col in sub_df.columns and child_col in sub_df.columns:
+                head_missing = sub_df[head_col].isna()
+                child_missing = sub_df[child_col].isna()
+                unk_counts["both_unk"] = int((unk_mask & head_missing & child_missing).sum())
+                unk_counts["head_unk"] = int((unk_mask & head_missing & ~child_missing).sum())
+                unk_counts["nsubj_unk"] = int((unk_mask & ~head_missing & child_missing).sum())
+            # drop_unk=False keeps unk rows in the fit (counts above still
+            # report what WOULD be dropped)
+            if drop_unk:
+                sub_df = sub_df[~unk_mask]
 
-    omit_feats = (
-        (omit_feats or set()).union(set(META_FEATURES)).union(set(omit_feats))
-    )
+    if len(sub_df) < min_df_len:
+        return None, None, None, unk_counts
+
+    omit_feats = (omit_feats or set()).union(set(META_FEATURES))
     omit_feats.update({col for col in full_df.columns if "idx" in col})
     omit_feats.update({col for col in full_df.columns if "_dir" in col})
     omit_feats.update(
@@ -344,13 +367,15 @@ def fit_dt(
         os.makedirs(os.path.dirname(save_to), exist_ok=True)
         joblib.dump(model, save_to + ".joblib")
         X_train.to_parquet(save_to + ".parquet")
+        with open(save_to + "_unk_counts.json", "w") as f:
+            json.dump(unk_counts, f)
 
     if verbose > 0:
         print("Train acc", model.score(X_train, y_train))
         if X_test is not None:
             print("Test acc ", model.score(X_test, y_test))
 
-    return model, X_train, y_train
+    return model, X_train, y_train, unk_counts
 
 
 def set_dt_features_in_df(

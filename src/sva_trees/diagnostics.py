@@ -26,11 +26,20 @@ BUCKET_LABELS = {
     "ambiguous_subjects": "ambiguous subject",
 }
 
-# Buckets whose rows carry a "feature_vals" ("FROM -> TO") column, i.e. every
-# row that reached process_item's feature comparison step. Excludes
-# multi_now_valid (a logging duplicate of some correct_swaps rows) so nothing
+_BUCKET_JSON_KEYS = {
+    "no_candidates": "no_match",
+    "no_inflections": "no_inflection",
+    "same_forms": "same_inflection",
+    "same_features": "same_feature",
+    "undefined_features": "undefined_feature",
+    "ambiguous_subjects": "ambiguous_subject",
+}
+
+# We excludes multi_now_valid (a logging duplicate of some correct_swaps rows) so nothing
 # is double-counted.
 DISTRIBUTION_BUCKETS = ["correct_swaps", "same_features", "ambiguous_subjects", "undefined_features"]
+
+ROW_SCOPED_BUCKETS = {"no_candidates", "no_inflections"}
 
 
 def _read_bucket(lang_dir: str, item_type: str) -> pd.DataFrame:
@@ -92,33 +101,49 @@ def language_diagnostics_row(lang: str, lang_dir: str) -> dict:
     bucket_names = list(BUCKET_LABELS) + ["correct_swaps", "multi_now_valid"]
     buckets = {name: _read_bucket(lang_dir, name) for name in bucket_names}
     counts = {name: len(df) for name, df in buckets.items()}
-    meta = _read_meta(lang_dir)
 
-    num_ud_candidates = meta.get("num_ud_candidates")
+    meta = _read_meta(lang_dir)
+    n_raw = meta.get("num_ud_candidates_raw") or 0
+    n_keep = meta.get("num_ud_candidates_keep") or 0
+    items_seen = meta.get("items_seen") or 0
+    swap_items = items_seen - counts["no_candidates"] - counts["no_inflections"]
     n_pairs = counts["correct_swaps"]
 
-    def pct(n):
-        return round(n / num_ud_candidates * 100, 1) if num_ud_candidates else None
+    def pct(n, denom):
+        return round(n / denom * 100, 1) if denom else 0
+
+    def bucket_pct(item_type, n):
+        return pct(n, n_keep if item_type in ROW_SCOPED_BUCKETS else swap_items)
+
+    # UM/UM+UD coverage over every distinct head/child form that's a candidate
+    # for this prediction target at all (not just the "Yes"-labeled ones)
+    num_forms_of_interest = meta.get("num_forms_of_interest") or 0
+    num_covered_um = meta.get("num_covered_um") or 0
+    num_covered_um_ud = meta.get("num_covered_um_ud") or 0
 
     dist, probs = _distribution_and_probs(buckets)
 
     row = {
         "Language": lang,
         "# minimal pairs": n_pairs,
-        "% covered by UniMorph": (
-            round((num_ud_candidates - counts["no_candidates"]) / num_ud_candidates * 100, 1)
-            if num_ud_candidates else None
-        ),
-        "# UD candidates": num_ud_candidates,
+        "# forms of interest": num_forms_of_interest,
+        "% covered by UM": pct(num_covered_um, num_forms_of_interest),
+        "% covered by UM+UD": pct(num_covered_um_ud, num_forms_of_interest),
+        "# UD candidates (raw)": n_raw,
+        "# UD candidates (kept)": n_keep,
         "# UM lemmas": meta.get("num_lemma"),
         "# UM Forms": meta.get("num_form"),
+        # unk ≈ missing annotation, can be dropped from fit_dt
+        "# head unk": meta.get("head_unk") or 0,
+        "# nsubj unk": meta.get("nsubj_unk") or 0,
+        "# both unk": meta.get("both_unk") or 0,
     }
     for item_type, label in BUCKET_LABELS.items():
         row[f"# {label}"] = counts[item_type]
-        row[f"% {label}"] = pct(counts[item_type])
+        row[f"% {label}"] = bucket_pct(item_type, counts[item_type])
     row["# valid from multi"] = counts["multi_now_valid"]
     row["#valid_from_multi / #valid"] = (
-        round(counts["multi_now_valid"] / n_pairs, 3) if n_pairs else None
+        round(counts["multi_now_valid"] / n_pairs, 3) if n_pairs else 0
     )
     row["distribution"] = _format_distribution(dist)
     for value, prob in sorted(probs.items()):
@@ -132,8 +157,11 @@ def generate_diagnostics_table(pairs_dir: str) -> pd.DataFrame:
     (e.g. '../../minimal_pairs/svNa/svNa_nsubj'), sorted by language name.
     """
     base_cols = [
-        "Language", "# minimal pairs", "% covered by UniMorph", "# UD candidates",
+        "Language", "# minimal pairs", "# forms of interest",
+        "% covered by UM", "% covered by UM+UD",
+        "# UD candidates (raw)", "# UD candidates (kept)",
         "# UM lemmas", "# UM Forms",
+        "# head unk", "# nsubj unk", "# both unk",
     ]
     for label in BUCKET_LABELS.values():
         base_cols += [f"# {label}", f"% {label}"]
@@ -159,3 +187,95 @@ def write_diagnostics_csv(df: pd.DataFrame, out_path: str) -> None:
     """Write a Google Sheets-importable CSV (File > Import > Upload)."""
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
     df.to_csv(out_path, index=False)
+
+
+def _num(row, key, default=0):
+    """row.get(key, default), but also treats NaN as `default`. Plain `or
+    default` doesn't work for this: NaN is truthy in Python, so `nan or 0`
+    evaluates to nan, not 0 -- and generate_diagnostics_table's DataFrame
+    construction fills any column a given language's row didn't set (e.g. a
+    P(value|value) column only some languages have) with NaN, not None.
+    """
+    val = row.get(key, default)
+    if val is None or (isinstance(val, float) and pd.isna(val)):
+        return default
+    return val
+
+
+def _read_examples(lang_dir: str) -> dict:
+    """{item_type: html_fragment}, sva_trees.create_pairs.create_pairs's
+    "examples" key inside meta.json (via create_pairs.bucket_examples_html). {}
+    for a language whose create_pairs run never reached the save_to block, or
+    predates "examples" living in meta.json rather than its own file.
+    """
+    return _read_meta(lang_dir).get("examples") or {}
+
+
+def _read_label_distribution(lang_dir: str) -> dict:
+    """{label: count} across the language's full predictor_var column, from
+    meta.json's "label_distribution" key (sva_trees.pipeline, computed before
+    fit_dt drops unk rows). {} for a language predating this, or one whose
+    create_pairs run never reached the save_to block.
+    """
+    return _read_meta(lang_dir).get("label_distribution") or {}
+
+
+def diagnostics_row_to_json(row, lang_dir: str | None = None) -> dict:
+    """Reshape one row of generate_diagnostics_table's DataFrame (pretty,
+    spreadsheet-facing column names, e.g. "# same feature") into the compact
+    structure word_order.html.html_deprel's report embeds per language --
+    bucket counts/percents keyed by _BUCKET_JSON_KEYS, and probs keyed by
+    bare feature value ("P(SG|SG)" -> "SG": 0.041).
+
+    `row` is anything supporting .get() with default -- a pandas Series (from
+    df.iterrows()) or a plain dict both work.
+
+    lang_dir: that language's "<pairs_dir>/<language>" directory. When given,
+    also reads meta.json's "examples" key and includes it (remapped to the
+    same _BUCKET_JSON_KEYS as "buckets") as "examples" -- kept out of the
+    DataFrame/CSV path entirely (generate_diagnostics_table never sees this
+    function), so the spreadsheet export never ends up with raw HTML in a
+    cell.
+    """
+    buckets = {}
+    for item_type, label in BUCKET_LABELS.items():
+        n = _num(row, f"# {label}")
+        pct = _num(row, f"% {label}")
+        buckets[_BUCKET_JSON_KEYS[item_type]] = [int(n), float(pct)]
+
+    probs = {}
+    for col, val in dict(row).items():
+        if col.startswith("P(") and pd.notna(val):
+            value = col[2:-1].split("|")[0]  # "P(SG|SG)" -> "SG"
+            probs[value] = round(float(val), 3)
+
+    result = {
+        "nPairs": int(_num(row, "# minimal pairs")),
+        "nForms": int(_num(row, "# forms of interest")),
+        "pctUM": float(_num(row, "% covered by UM")),
+        "pctUMUD": float(_num(row, "% covered by UM+UD")),
+        "nRaw": int(_num(row, "# UD candidates (raw)")),
+        "nKeep": int(_num(row, "# UD candidates (kept)")),
+        "nLemma": int(_num(row, "# UM lemmas")),
+        "nForm": int(_num(row, "# UM Forms")),
+        "nValidFromMulti": int(_num(row, "# valid from multi")),
+        "ratioValidFromMulti": float(_num(row, "#valid_from_multi / #valid")),
+        "buckets": buckets,
+        "distribution": row.get("distribution") or "",
+        "probs": probs,
+        "headUnk": int(_num(row, "# head unk")),
+        "nsubjUnk": int(_num(row, "# nsubj unk")),
+        "bothUnk": int(_num(row, "# both unk")),
+    }
+
+    if lang_dir is not None:
+        raw_examples = _read_examples(lang_dir)
+        # The 6 problem buckets remap to _BUCKET_JSON_KEYS
+        result["examples"] = {
+            _BUCKET_JSON_KEYS.get(item_type, item_type): html
+            for item_type, html in raw_examples.items()
+        }
+        # Kept out of the DataFrame/CSV path
+        result["labelDistribution"] = _read_label_distribution(lang_dir)
+
+    return result

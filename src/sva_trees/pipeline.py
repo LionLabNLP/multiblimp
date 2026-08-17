@@ -3,6 +3,7 @@ import sys
 import random
 import math
 import gc
+import json
 import joblib
 
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -22,7 +23,7 @@ from word_order.viz_overview import generate_html_overview_index
 from multiblimp.languages import lang2langcode, gblang2udlang
 from multiblimp.unimorph import load_inflector
 from sva_trees.create_pairs import create_pairs
-from sva_trees.diagnostics import generate_diagnostics_table, write_diagnostics_csv
+from sva_trees.diagnostics import generate_diagnostics_table, write_diagnostics_csv, diagnostics_row_to_json
 
 random.seed(42)
 
@@ -117,13 +118,27 @@ def _find_other_running_instances(script_name):
     return [p for p in pids if p != os.getpid()]
 
 
+def _read_unk_counts(decision_trees_dir, lang):
+    """word_order.decision_tree.fit_dt's <lang>_unk_counts.json ({"head_unk":
+    n, "nsubj_unk": n, "both_unk": n}), the same shape fit_dt returns directly
+    on a fresh fit. {} for languages with no file yet (never fit a tree, e.g.
+    trivial single-class languages, or too few post-drop rows) -- create_pairs
+    treats a falsy unk_counts the same as None.
+    """
+    fn = os.path.join(decision_trees_dir, f"{lang}_unk_counts.json")
+    if not os.path.exists(fn):
+        return {}
+    with open(fn) as f:
+        return json.load(f)
+
+
 class Pipeline:
     def __init__(self, target, predictor_var, langs, inflection_map, unimorph_args,
                  deprel_dir, resource_dir, word_order_dir,
                  max_treebank_len, never_skip=False, rm_columns=[], target_id=False,
                  threshold=0.12, simplify=False, n_jobs=1,
                  max_worker_mem_gb=None, mem_headroom=0.8, force=False,
-                 agreement_feats=None):
+                 agreement_feats=None, drop_unk=True):
         self.target = target
         self.predictor_var = predictor_var
         # Extract agreement var for all of these, df's can be shared between similar scripts.
@@ -143,6 +158,9 @@ class Pipeline:
         self.target_id = target_id if target_id else predictor_var.split("_")[2][0]
         self.leaf_threshold = threshold
         self.simplify = simplify  # collapse +-/-- to "unk" for decision tree
+        # If False, unk-labeled rows stay in the DT fit instead of being
+        # dropped (word_order.decision_tree.fit_dt's UNK_LABELS drop).
+        self.drop_unk = drop_unk
         self.n_jobs = n_jobs # parallelise language computation across this many processes; 1=serial, >1=parallel
         # Per-worker RLIMIT_AS cap, in GB. None (default) auto-derives.
         self.max_worker_mem_gb = max_worker_mem_gb
@@ -199,24 +217,34 @@ class Pipeline:
                 self._process_language(lang)
 
         for deprel in self.target.child_deprels:
-            print("Generating deprel index for", deprel)
-            flowchart_dir = f"../../decision_trees/{self.target_id}/{self.target_id}_{deprel}/flowcharts/"
             pairs_dir = f"../../minimal_pairs/{self.target_id}/{self.target_id}_{deprel}"
-            generate_html_deprel_index(data_dir=f"../../decision_trees/{self.target_id}/{self.target_id}_{deprel}",
-                            html_directory=f"../../decision_trees/{self.target_id}",
-                            target_col=self.predictor_var,
-                            exclude_labels={"unk"} if self.simplify else {"--", "+-"},
-                            include_trivial_labels={"Yes"},
-                            flowchart_dir=flowchart_dir,
-                            leaf_threshold=self.leaf_threshold,
-                            pairs_dir=pairs_dir,
-                            )
+            decision_trees_dir = f"../../decision_trees/{self.target_id}/{self.target_id}_{deprel}"
+
             print("Generating diagnostics table for", deprel)
             diagnostics_df = generate_diagnostics_table(pairs_dir)
             write_diagnostics_csv(
                 diagnostics_df,
                 f"../../diagnostics/{self.target_id}/{self.target_id}_{deprel}.csv",
             )
+            # Reshaped here (not inside word_order.viz_deprel) so that module
+            # doesn't need to depend on sva_trees.
+            diagnostics_by_lang = {
+                row["Language"]: diagnostics_row_to_json(
+                    row, lang_dir=os.path.join(pairs_dir, row["Language"])
+                )
+                for _, row in diagnostics_df.iterrows()
+            }
+
+            print("Generating deprel index for", deprel)
+            generate_html_deprel_index(data_dir=decision_trees_dir,
+                            html_directory=f"../../decision_trees/{self.target_id}",
+                            target_col=self.predictor_var,
+                            exclude_labels={"unk"} if self.simplify else {"--", "+-"},
+                            include_trivial_labels={"Yes"},
+                            leaf_threshold=self.leaf_threshold,
+                            pairs_dir=pairs_dir,
+                            diagnostics_by_lang=diagnostics_by_lang,
+                            )
         print("Generating overview index")
         generate_html_overview_index(html_directory=f"../../decision_trees/")
 
@@ -293,16 +321,20 @@ class Pipeline:
             )
 
         min_impurity_decrease = get_impurity(len(full_df))
+        # Raw label distribution across ALL of full_df (before fit_dt drops unk rows)
+        # for the deprel overview's per-language distribution bar.
+        label_distribution = { str(k): int(v) for k, v in full_df[self.predictor_var].value_counts().items()}
 
         for deprel in self.target.child_deprels:
             # Reset per-iteration: each deprel gets its own dt_df/model
-            dt_df, model, learn_dt = None, None, False
+            dt_df, model, learn_dt, unk_counts = None, None, False, None
+            decision_trees_dir = f"../../decision_trees/{self.target_id}/{self.target_id}_{deprel}"
 
             pred_values = set(full_df[self.predictor_var].values)
 
-            if self.never_skip or not os.path.exists(f"../../decision_trees/{self.target_id}/{self.target_id}_{deprel}/{lang}"):
+            if self.never_skip or not os.path.exists(f"{decision_trees_dir}/{lang}.joblib"):
                 if len(pred_values)>1:
-                    model, dt_df, predictor_df = fit_dt(
+                    model, dt_df, predictor_df, unk_counts = fit_dt(
                         full_df=full_df,
                         model_type="decision_tree",
                         target=self.target,
@@ -310,8 +342,9 @@ class Pipeline:
                         predictor_var=self.predictor_var,
                         min_impurity_decrease=min_impurity_decrease,
                         min_samples_leaf=10,
-                        save_to=f"../../decision_trees/{self.target_id}/{self.target_id}_{deprel}/{lang}",
-                        omit_feats=set([col for col in full_df if col.endswith(f"_{self.target.swap_feat}") and not col.startswith("swap_")])
+                        save_to=f"{decision_trees_dir}/{lang}",
+                        omit_feats=set([col for col in full_df if col.endswith(f"_{self.target.swap_feat}") and not col.startswith("swap_")]),
+                        drop_unk=self.drop_unk,
                         )
                     if model:
                         learn_dt=True
@@ -320,8 +353,9 @@ class Pipeline:
                     dt_df = full_df
                     learn_dt = False
             else:
-                dt_df = read_df(lang, word_order_dir=f"../../decision_trees/{self.target_id}/{self.target_id}_{deprel}")
-                model = joblib.load(f"../../decision_trees/{self.target_id}/{self.target_id}_{deprel}/{lang}.joblib")
+                dt_df = read_df(lang, word_order_dir=decision_trees_dir)
+                model = joblib.load(f"{decision_trees_dir}/{lang}.joblib")
+                unk_counts = _read_unk_counts(decision_trees_dir, lang)
 
             if self.never_skip or not os.path.exists(f"../../decision_trees/{self.target_id}/{lang}.html"):
                 tree2html(
@@ -348,9 +382,10 @@ class Pipeline:
                 create_pairs(dt_df, swap_feat=self.predictor_var , inflector=inflector,
                         leaf_threshold=self.leaf_threshold,
                         save_to=f"../../minimal_pairs/{self.target_id}/{self.target_id}_{deprel}/{lang}",
-                        flowchart_path = os.path.join(f"../../decision_trees/{self.target_id}/{self.target_id}_{deprel}/flowcharts/", f"{lang}.html"),
-                        verbose=True,
                         num_lemma=num_lemma,
-                        num_form=num_form)
+                        num_form=num_form,
+                        full_df=full_df,
+                        unk_counts=unk_counts,
+                        label_distribution=label_distribution)
             except KeyError:
                 print(f"Skipping {lang} for {deprel}, missing column")

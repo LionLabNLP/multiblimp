@@ -1088,10 +1088,19 @@ def create_html(meta, node_samples, node_data, hex_colors, classes, div_id):
 
 
 def write_placeholder_html(out_file, predictor_var, label, meta=None, sample_rows=None):
-    # `label` is a single value when every training sample genuinely shares
-    # one predictor value, or a {value: count} dict when the tree wasn't fit
-    # for some other reason (e.g. too few samples) despite a mixed label set.
-    if isinstance(label, dict):
+    # `label`: {value: count} across ALL training samples (build_placeholder_args
+    # always passes the full value_counts, not a subsample) -- a single key means
+    # every row genuinely shares one value; multiple keys means the tree wasn't
+    # fit for some other reason (e.g. too few samples) despite a mixed label set.
+    if len(label) == 1:
+        heading = "Single label"
+        description = (
+            f"All training samples for <b>{predictor_var}</b> share one "
+            "agreement label — no decision tree was needed."
+        )
+        (sole_label,) = label.keys()
+        label_html = f'<div class="label">{sole_label}</div>'
+    else:
         heading = "Too few samples to fit a tree"
         description = (
             f"Training samples for <b>{predictor_var}</b> don&rsquo;t share one "
@@ -1102,13 +1111,12 @@ def write_placeholder_html(out_file, predictor_var, label, meta=None, sample_row
             f'<div class="label">{cls}: {n}</div>'
             for cls, n in sorted(label.items(), key=lambda kv: -kv[1])
         )
-    else:
-        heading = "Single label"
-        description = (
-            f"All training samples for <b>{predictor_var}</b> share one "
-            "agreement label — no decision tree was needed."
-        )
-        label_html = f'<div class="label">{label}</div>'
+
+    # Machine-readable distribution for downstream consumers (e.g.
+    # viz_deprel.py's overview table) to read without regex-scraping label_html.
+    distribution_json = json.dumps(
+        {str(k): int(n) for k, n in label.items()}, ensure_ascii=False
+    )
 
     meta_rows = ""
     if meta:
@@ -1200,6 +1208,7 @@ def write_placeholder_html(out_file, predictor_var, label, meta=None, sample_row
   </style>
 </head>
 <body>
+  <script type="application/json" id="label-distribution">{distribution_json}</script>
   <div class="layout">
     <div class="sidebar">
       <div>

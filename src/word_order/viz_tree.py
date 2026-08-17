@@ -144,7 +144,8 @@ def get_sample_ids(prep, clf, dt_df, predictor_var, max_rows=100, seed=42):
 # ── Agreement swap highlighting (head <-> child feature, e.g. SVA) ────────────
 # Applies only when predictor_var is an agreement predictor (e.g.
 # "head_nsubj_Number_agreement") with a known target — mirrors the highlighting
-# built for sva_trees' create_pairs flowchart. No-op for plain word-order targets.
+# built for sva_trees.create_pairs's example tables. No-op for plain word-order
+# targets.
 
 def _agreement_context(predictor_var, target):
     """Returns (swap_feature, child_deprel) for an agreement predictor, else (None, None)."""
@@ -372,10 +373,9 @@ def build_placeholder_args(
     # dt_df's predictor values may not actually be uniform: this placeholder
     # path is also taken when fit_dt refuses to fit a tree for having too few
     # rows (below its min_df_len), regardless of how many distinct labels are
-    # present. Report the true distribution rather than assuming dt_df[0]
-    # speaks for every row.
-    value_counts = dt_df[predictor_var].value_counts()
-    label = value_counts.index[0] if len(value_counts) == 1 else dict(value_counts)
+    # present. Report the true full-count distribution (not a subsample)
+    # rather than assuming dt_df[0] speaks for every row.
+    label = dict(dt_df[predictor_var].value_counts())
 
     if meta is None:
         meta = {}

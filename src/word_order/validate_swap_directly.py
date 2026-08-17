@@ -400,7 +400,7 @@ def fit_joint_classifier(
     if not lexicalize:
         extra_omit |= {"child_form", "head_form"}
 
-    model, X_train, _ = fit_dt(
+    model, X_train, _, _ = fit_dt(
         train_df,
         model_type,
         target=None,

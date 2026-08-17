@@ -6,9 +6,24 @@ from .html.html_overview import create_html
 
 
 def _extract_plot_data(html_content: str) -> dict | None:
-    """Extract plotData.six and plotData.binary from a deprel index HTML page."""
+    """Extract plotData.six and plotData.binary from a deprel index HTML page.
+
+    Anchored to the "plotData" assignment specifically -- the diagnostics-
+    enabled page (_create_diagnostics_html, what every current sva_trees run
+    produces) also declares a LANGUAGES blob with its own six:/binary: keys
+    earlier in the page, holding much richer nested per-language dicts. A
+    bare "six:...binary:..." search matches that one first, and its nested
+    arrays (e.g. "buckets": {"no_match": [33, 19.3], ...}) break the
+    non-greedy [.+?] used here, which relies on plotData's own six/binary
+    arrays never containing a nested "[" (see word_order.viz_deprel.
+    generate_plot_data -- each entry is a flat dict of scalars).
+
+    \\s* alone (not a hardcoded \\n) between six/binary: the classic table page
+    (_create_classic_html) spreads plotData across lines; the diagnostics
+    page embeds it on one line, which a literal \\n requirement never matches.
+    """
     match = re.search(
-        r"six:\s*(\[.+?\]),\s*\n\s*binary:\s*(\[.+?\])",
+        r"plotData\s*=\s*\{\s*six:\s*(\[.+?\]),\s*binary:\s*(\[.+?\])\s*\}",
         html_content,
     )
     if not match:
