@@ -501,12 +501,22 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
     else:
         columns = list(swap_df.columns)
         # Precompute, once, which columns hold each swap kind's morphological
-        # features (was re-matched via regex on every row before).
+        # features (was re-matched via regex on every row before). One
+        # pattern for both the filter and the extraction -- a two-regex
+        # split (a loose filter, then a stricter one to pull the name out)
+        # used to live here and had two bugs: [A-Z][a-z]+ requires a
+        # lowercase run right after the capital, so any all-caps-run feature
+        # name (rare, but real -- broke on it for Madi) matched the loose
+        # filter but not the strict one, crashing on .group(1) of a None
+        # match; and un-anchored re.match silently truncated every ordinary
+        # two-word CamelCase feature (VerbForm, NumType, PronType, ...) to
+        # just its first capitalized run ("Verb", "Num", "Pron"), corrupting
+        # og_feats' keys for every language, not just edge-case ones.
         kind_feat_cols = {
             kind: [
-                (col, re.match(rf"^{kind}_([A-Z][a-z]+)", col).group(1))
+                (col, m.group(1))
                 for col in columns
-                if re.match(rf"^{kind}_[A-Z]", col)
+                if (m := re.match(rf"^{kind}_([A-Z][a-zA-Z]*)$", col))
             ]
             for kind in swap_target
         }
