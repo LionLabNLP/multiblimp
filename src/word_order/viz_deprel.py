@@ -580,23 +580,35 @@ def generate_html_deprel_index(
     color_note = "".join(color_note_parts)
 
     if omit_langs:
+        def _fmt_dist(dist):
+            # A single-value distribution IS the "uninformative label" the
+            # intro sentence already names as the reason for omission -- just
+            # show its count. Only mixed distributions need the value labeled.
+            if len(dist) == 1:
+                (n,) = dist.values()
+                return str(n)
+            return "; ".join(
+                f"{value}: {n}" for value, n in sorted(dist.items(), key=lambda kv: -kv[1])
+            )
+
         skipped_links = []
-        for lang, pred_tag in sorted(omit_langs.items()):
+        for lang, dist in sorted(omit_langs.items()):
             lang_display = lang.replace("_", " ")
+            dist_str = _fmt_dist(dist)
             lang_file = html_files.get(lang)  # ← stem matches directly
             if lang_file:
                 url = f"/multiblimp/{deprel}/{quote(lang_file.stem)}"
                 skipped_links.append(
-                    f'<a href="{url}" style="color:#b893de;font-weight:600;">{lang_display}</a> ({pred_tag})'
+                    f'<a href="{url}" style="color:#b893de;font-weight:600;">{lang_display}</a> ({dist_str})'
                 )
             else:
                 skipped_links.append(
-                    f'<span style="color:#b893de;font-weight:600;">{lang_display}</span> ({pred_tag})'
+                    f'<span style="color:#b893de;font-weight:600;">{lang_display}</span> ({dist_str})'
                 )
 
         trivial_note = (
-            f'<p class="trivial-note">The following languages were omitted because '
-            f'all samples share a single uninformative agreement label: {", ".join(skipped_links)}.</p>'
+            f'<p class="trivial-note">The following languages were omitted for having too few or '
+            f'uninformative agreement labels (label distribution shown): {", ".join(skipped_links)}.</p>'
         )
     else:
         trivial_note = ""

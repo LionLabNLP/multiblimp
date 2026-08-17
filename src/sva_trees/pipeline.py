@@ -138,7 +138,7 @@ class Pipeline:
                  max_treebank_len, never_skip=False, rm_columns=[], target_id=False,
                  threshold=0.12, simplify=False, n_jobs=1,
                  max_worker_mem_gb=None, mem_headroom=0.8, force=False,
-                 agreement_feats=None, drop_unk=True):
+                 agreement_feats=None, drop_unk=True, max_tasks_per_child=1):
         self.target = target
         self.predictor_var = predictor_var
         # Extract agreement var for all of these, df's can be shared between similar scripts.
@@ -165,6 +165,18 @@ class Pipeline:
         # Per-worker RLIMIT_AS cap, in GB. None (default) auto-derives.
         self.max_worker_mem_gb = max_worker_mem_gb
         self.mem_headroom = mem_headroom
+        # Recycle each worker after this many languages (ProcessPoolExecutor's
+        # max_tasks_per_child). Default 1 == a fresh process per language, not
+        # a long-lived one reused across the whole corpus. Matters even at
+        # n_jobs=1: pandas/NumPy buffers and general heap fragmentation don't
+        # reliably get handed back to the OS between languages, so a language
+        # deep into a sorted 100+-language run can hit even a large fixed
+        # memory cap purely from what earlier languages left behind, never
+        # its own actual requirement -- a fresh process per language avoids
+        # this entirely, since the OS fully reclaims a worker's memory the
+        # moment it exits. Raise this (e.g. 5-10) to trade some of that
+        # safety back for less per-language interpreter-startup overhead.
+        self.max_tasks_per_child = max_tasks_per_child
         # If True, skip the startup check for other already-running instances
         # of this same script. Only meant for deliberate concurrent runs.
         self.force = force
@@ -197,24 +209,21 @@ class Pipeline:
         if worker_mem_bytes is None:
             print("Could not detect system RAM; running without a memory cap")
 
-        if self.n_jobs > 1:
-            if worker_mem_bytes is not None:
-                print(f"Capping each of {self.n_jobs} workers to "
-                      f"{worker_mem_bytes / 1024**3:.1f} GB RAM")
-                initializer, initargs = _limit_worker_memory, (worker_mem_bytes,)
-            else:
-                initializer, initargs = None, ()
-            with ProcessPoolExecutor(max_workers=self.n_jobs,
-                                      initializer=initializer, initargs=initargs) as executor:
-                futures = [executor.submit(self._process_language, lang) for lang in langs]
-                for future in as_completed(futures):
-                    future.result()  # re-raise any worker exception here
+        if worker_mem_bytes is not None:
+            print(f"Capping each of {self.n_jobs} worker(s) to "
+                  f"{worker_mem_bytes / 1024**3:.1f} GB RAM")
+            initializer, initargs = _limit_worker_memory, (worker_mem_bytes,)
         else:
-            if worker_mem_bytes is not None:
-                print(f"Capping this process to {worker_mem_bytes / 1024**3:.1f} GB RAM")
-                _limit_worker_memory(worker_mem_bytes)
-            for lang in langs:
-                self._process_language(lang)
+            initializer, initargs = None, ()
+        # Always through ProcessPoolExecutor, even at n_jobs=1 -- see
+        # max_tasks_per_child's docstring above for why a plain serial
+        # for-loop in this process isn't safe for a full-corpus run.
+        with ProcessPoolExecutor(max_workers=self.n_jobs,
+                                  max_tasks_per_child=self.max_tasks_per_child,
+                                  initializer=initializer, initargs=initargs) as executor:
+            futures = [executor.submit(self._process_language, lang) for lang in langs]
+            for future in as_completed(futures):
+                future.result()  # re-raise any worker exception here
 
         for deprel in self.target.child_deprels:
             pairs_dir = f"../../minimal_pairs/{self.target_id}/{self.target_id}_{deprel}"

@@ -41,6 +41,13 @@ if __name__=="__main__":
                              "minimal_pairs/<id>, ...). Default: this script's "
                              "filename (svPa). Useful for A/B runs that shouldn't "
                              "overwrite each other, e.g. --keep_unk comparisons.")
+    parser.add_argument("--max_tasks_per_child", type=int, default=1,
+                        help="Recycle each worker process after this many "
+                             "languages. Default: 1 (fresh process per "
+                             "language, so memory can't accumulate across a "
+                             "full-corpus run). Raise to trade some of that "
+                             "safety back for less per-language interpreter-"
+                             "startup overhead.")
     args = parser.parse_args()
 
     target = nsubj_target
@@ -77,5 +84,6 @@ if __name__=="__main__":
                         max_worker_mem_gb=args.max_worker_mem_gb,
                         force=args.force,
                         drop_unk=not args.keep_unk,
+                        max_tasks_per_child=args.max_tasks_per_child,
                         )
     pipeline()

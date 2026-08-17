@@ -547,8 +547,13 @@ def _finalize_tree_html(
 
         total_node = sum(dist_i) or 1
 
-        # Small dim style shared by node-id and stats
-        meta_style = "color:#44403c;font-size:9px"
+        # Small dim style shared by node-id and stats. direction:ltr +
+        # unicode-bidi:isolate: the rule/leaf-label line above this span can be
+        # an RTL script (e.g. a Hebrew lemma, "lemma = כל"), and
+        # without isolating this span the browser's bidi algorithm can let
+        # that RTL run bleed into "[i]  n=...  H=...", mirroring the brackets
+        # and reordering the digits (e.g. "[1]" rendering as "1]").
+        meta_style = "color:#44403c;font-size:9px;direction:ltr;unicode-bidi:isolate"
 
         if feature[i] != -2:
             # Internal node: rule on top, [n] n= H= on second line
@@ -558,7 +563,10 @@ def _finalize_tree_html(
                 is_binary=feature[i] in binary_feature_indices,
             )
             corr = correlated_features.get(i, [])
-            corr_note = " [+]" if corr else ""
+            # Isolated for the same reason as meta_style: appended directly
+            # after `rule` (possibly RTL) inside the same <b>, "[+]" would
+            # otherwise be vulnerable to the same bracket-mirroring.
+            corr_note = "<span style='direction:ltr;unicode-bidi:isolate'> [+]</span>" if corr else ""
             label = (
                 f"<b>{rule}{corr_note}</b><br>"
                 f"<span style='{meta_style}'>"
@@ -782,8 +790,15 @@ def tree2html(
     n_nodes = tree.node_count
     n_samples = tree.n_node_samples
     tree_values = tree.value
+    # np.round, not .astype(int) (which truncates toward zero): tree_values[i][0]
+    # is a float probability array, so the reconstructed count for a true integer
+    # class count can land a hair under it (e.g. 1.9999999997 for a true 2) due to
+    # ordinary floating-point noise -- truncating such values silently drops
+    # samples from the displayed leaf distribution (and anything computed from
+    # it, e.g. the on-node entropy annotation), diverging from the exact
+    # dataframe-derived counts calculate_base_entropy/leaf_top1_entropy use.
     label_distribution_model = [
-        (tree_values[i][0] * n_samples[i]).astype(int).tolist() for i in range(n_nodes)
+        np.round(tree_values[i][0] * n_samples[i]).astype(int).tolist() for i in range(n_nodes)
     ]
 
     # Pad to full classes permutation set so legend & nodes always show all classes.

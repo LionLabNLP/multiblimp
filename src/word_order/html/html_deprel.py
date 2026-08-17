@@ -676,7 +676,7 @@ def _create_diagnostics_html(
         .thead-row .cell.sort-asc::after {{ content: '↑'; opacity: 1; }}
         .thead-row .cell.sort-desc::after {{ content: '↓'; opacity: 1; }}
         .c-chev  {{ width: 2.25rem; padding-right: 0; }}
-        .c-lang  {{ width: 9rem; }}
+        .c-lang  {{ width: 9rem; overflow: hidden; text-overflow: ellipsis; }}
         .c-dist  {{ width: 6.5rem; }}
         .c-base  {{ width: 6.75rem; text-align: right; }}
         .c-reduced {{ width: 7.25rem; text-align: right; }}
@@ -1092,9 +1092,17 @@ def _create_diagnostics_html(
     // Delta entropy isn't meaningful in isolation -- 0.3 off a base of 0.4
     // is a much bigger win than 0.3 off a base of 2.0 -- so colour it by
     // what fraction of the base entropy got explained away instead.
+    //
+    // base == 0 means there was no entropy to explain in the first place
+    // (e.g. a single-sample or perfectly pure language) -- that's a
+    // trivial, not a meritorious, 0.000, and must not be painted the same
+    // "fully explained" colour as a language whose tree genuinely explained
+    // away 100% of a real base entropy. Returns null for that case; callers
+    // should fall back to a neutral/muted colour instead of colouring it.
     function deltaColor(base, delta) {{
-      const pct = base > 0 ? (delta / base) * 100 : 100;
-      return pctColor(Math.max(0, Math.min(100, pct)));
+      if (base <= 0) return null;
+      const pct = Math.max(0, Math.min(100, (delta / base) * 100));
+      return pctColor(pct);
     }}
 
     function chevronSvg() {{
@@ -1265,7 +1273,7 @@ def _create_diagnostics_html(
           <div class="cell c-dist">${{renderDistBar(lang.diag && lang.diag.labelDistribution)}}</div>
           <div class="cell c-base" style="color:${{entropyColor(lang.base, maxBaseEntropy)}}">${{lang.base.toFixed(3)}}</div>
           <div class="cell c-reduced" style="color:${{entropyColor(lang.reduced, Math.max(lang.base, 0.0001))}}">${{lang.reduced.toFixed(3)}}</div>
-          <div class="cell c-delta" style="color:${{deltaColor(lang.base, lang.delta)}}">${{lang.delta.toFixed(3)}}</div>
+          <div class="cell c-delta" style="color:${{deltaColor(lang.base, lang.delta) || "var(--text-muted)"}}">${{lang.delta.toFixed(3)}}</div>
           <div class="cell c-acc" style="color:${{pctColor(lang.acc * 100)}}">${{(lang.acc * 100).toFixed(1)}}%</div>
           <div class="cell c-raw">${{lang.nRaw.toLocaleString()}}</div>
           <div class="cell c-keep"${{dimColorStyle(investmentColor(lang.nKeep, lang.nRaw), lang.nRaw < MIN_N_FOR_COLOR, `N RAW is only ${{lang.nRaw}} — too small a sample for this ratio to be meaningful`)}}>${{lang.nKeep.toLocaleString()}}</div>

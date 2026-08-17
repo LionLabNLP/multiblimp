@@ -205,6 +205,23 @@ class UnimorphInflector:
                 prefer_tight_match=prefer_tight_match,
                 remove_multiword_forms=remove_multiword_forms,
             )
+            # update_inflection_map() above resolved self.inflection_map against
+            # self.unimorph_df alone -- for a list-valued ufeat (e.g. Number vs.
+            # Number[subj]), an empty/POS-filtered-to-nothing self.unimorph_df
+            # (e.g. a language with zero UniMorph-proper verb entries) leaves it
+            # unresolved (None), even when self.ud_inflector's own copy, run
+            # against the UD-derived table, resolved it fine. Callers (e.g.
+            # sva_trees.create_pairs) read ufeat off this outer instance, so an
+            # unresolved None here silently breaks every get_form_features call
+            # for the whole language: the original (pre-swap) value never gets
+            # stripped from the match constraints, so the lookup for the
+            # swapped form (which necessarily differs) matches nothing.
+            if (self.inflection_map[0] is None) and (
+                self.ud_inflector.inflection_map[0] is not None
+            ):
+                self.inflection_map = (
+                    self.ud_inflector.inflection_map[0], self.inflection_map[1]
+                )
         else:
             self.ud_inflector = None
 
