@@ -32,6 +32,7 @@ def create_html(meta, node_samples, node_data, hex_colors, classes, div_id):
       *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
 
       :root {{
+        color-scheme: light;
         --bg: #f5f5f4;
         --surface: #ffffff;
         --surface-raised: #fafaf9;
@@ -48,6 +49,24 @@ def create_html(meta, node_samples, node_data, hex_colors, classes, div_id):
         --shadow-sm: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
         --shadow-md: 0 4px 12px rgba(0,0,0,0.08), 0 2px 4px rgba(0,0,0,0.04);
         --shadow-lg: 0 8px 24px rgba(0,0,0,0.10), 0 4px 8px rgba(0,0,0,0.04);
+      }}
+      /* Same palette as viz_deprel.py's html_deprel.py, for a consistent
+         look across the deprel index and every tree page it links to. */
+      :root[data-theme="dark"] {{
+        color-scheme: dark;
+        --bg: #16140f; --surface: #221f19; --surface-raised: #1c1a15;
+        --border: #38332a; --border-subtle: #2a261e;
+        --text-primary: #f0ede6; --text-secondary: #a39a8a; --text-tertiary: #766d5e;
+        --accent: #6ea8ff; --accent-light: #1c2a42;
+      }}
+      @media (prefers-color-scheme: dark) {{
+        :root:not([data-theme="light"]) {{
+          color-scheme: dark;
+          --bg: #16140f; --surface: #221f19; --surface-raised: #1c1a15;
+          --border: #38332a; --border-subtle: #2a261e;
+          --text-primary: #f0ede6; --text-secondary: #a39a8a; --text-tertiary: #766d5e;
+          --accent: #6ea8ff; --accent-light: #1c2a42;
+        }}
       }}
 
       body {{
@@ -141,7 +160,11 @@ def create_html(meta, node_samples, node_data, hex_colors, classes, div_id):
 
       .info-panel-header {{
         padding: 10px 14px;
-        background: var(--text-primary);
+        /* Deliberately NOT var(--text-primary): this is a fixed inverted
+           dark bar (white text) regardless of theme, not a themed surface --
+           --text-primary flips to a light colour in dark mode, which would
+           turn this into a light bar with barely-visible white text. */
+        background: #1c1917;
         color: white;
         position: relative;
       }}
@@ -345,7 +368,7 @@ def create_html(meta, node_samples, node_data, hex_colors, classes, div_id):
 
       .node-dist-card {{
         position: absolute;
-        background: #ffffff;
+        background: var(--surface);
         border: 1px solid rgba(0,0,0,0.13);
         border-radius: 4px;
         padding: 4px 5px 3px;
@@ -391,7 +414,7 @@ def create_html(meta, node_samples, node_data, hex_colors, classes, div_id):
 
       .node-dist-count {{
         font-size: 7px;
-        color: #44403c;
+        color: var(--text-secondary);
         font-family: var(--font-mono);
         text-align: center;
         line-height: 1.2;
@@ -400,7 +423,7 @@ def create_html(meta, node_samples, node_data, hex_colors, classes, div_id):
 
       .node-dist-label {{
         font-size: 8.5px;
-        color: #78716c;
+        color: var(--text-secondary);
         font-family: var(--font-mono);
         text-align: center;
         line-height: 1.2;
@@ -458,7 +481,7 @@ def create_html(meta, node_samples, node_data, hex_colors, classes, div_id):
 
       .node-dist-panel-count {{
         font-size: 12px;
-        color: #44403c;
+        color: var(--text-secondary);
         font-family: var(--font-mono);
         text-align: center;
         line-height: 1.3;
@@ -467,7 +490,7 @@ def create_html(meta, node_samples, node_data, hex_colors, classes, div_id):
 
       .node-dist-panel-label {{
         font-size: 9px;
-        color: #78716c;
+        color: var(--text-secondary);
         font-family: var(--font-mono);
         text-align: center;
         line-height: 1.3;
@@ -1170,41 +1193,74 @@ def write_placeholder_html(out_file, predictor_var, label, meta=None, sample_row
   <title>No decision tree to display</title>
   <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
-    body {{ font-family: "DM Sans", sans-serif; margin: 0; background: #f5f5f4; color: #1c1917; }}
-    .layout {{ display: flex; height: 100vh; }}
+    :root {{
+      color-scheme: light;
+      --bg: #f5f5f4; --surface: #ffffff; --surface-raised: #fafaf9;
+      --border: #e7e5e4; --border-subtle: #f0efee;
+      --text-primary: #1c1917; --text-secondary: #78716c; --text-tertiary: #a8a29e;
+      --accent: #2563eb; --accent-light: #eff6ff;
+    }}
+    :root[data-theme="dark"] {{
+      color-scheme: dark;
+      --bg: #16140f; --surface: #221f19; --surface-raised: #1c1a15;
+      --border: #38332a; --border-subtle: #2a261e;
+      --text-primary: #f0ede6; --text-secondary: #a39a8a; --text-tertiary: #766d5e;
+      --accent: #6ea8ff; --accent-light: #1c2a42;
+    }}
+    @media (prefers-color-scheme: dark) {{
+      :root:not([data-theme="light"]) {{
+        color-scheme: dark;
+        --bg: #16140f; --surface: #221f19; --surface-raised: #1c1a15;
+        --border: #38332a; --border-subtle: #2a261e;
+        --text-primary: #f0ede6; --text-secondary: #a39a8a; --text-tertiary: #766d5e;
+        --accent: #6ea8ff; --accent-light: #1c2a42;
+      }}
+    }}
+    body {{ font-family: "DM Sans", sans-serif; margin: 0; background: var(--bg); color: var(--text-primary); }}
+    /* Stacked (top: title/caption/label/distribution card, bottom: example
+       items), mirroring the real tree pages' layout -- there, a compact
+       floating info-panel card sits above the (much larger) tree diagram
+       area, with the examples section below that. This placeholder has no
+       diagram to show, so the card just sits in normal flow at the top
+       instead of floating, but keeps the same "compact bordered/shadowed
+       card, not a full-width band" treatment -- that's what makes the
+       meta-rows' space-between layout read as compact key-value pairs
+       rather than stretching key and value apart across the full page. */
+    .layout {{ display: flex; flex-direction: column; min-height: 100vh; }}
     .sidebar {{
-        width: 260px; flex-shrink: 0; background: white;
-        border-right: 1px solid #e7e5e4; padding: 1.5rem; display: flex;
-        flex-direction: column; gap: 1rem;
+        max-width: 420px; margin: 1.5rem 1.5rem 0; background: var(--surface);
+        border: 1px solid var(--border); border-radius: 12px;
+        box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+        padding: 1.5rem; display: flex; flex-direction: column; gap: 1rem;
     }}
     h2 {{ font-size: 1.1rem; margin: 0; }}
-    p  {{ color: #78716c; font-size: 0.875rem; margin: 0; line-height: 1.5; }}
+    p  {{ color: var(--text-secondary); font-size: 0.875rem; margin: 0; line-height: 1.5; }}
     .label {{ display: inline-block; padding: 0.3rem 0.9rem;
-              background: #f5f5f4; border-radius: 999px; font-weight: 600;
-              font-size: 1rem; border: 1px solid #e7e5e4;
+              background: var(--bg); border-radius: 999px; font-weight: 600;
+              font-size: 1rem; border: 1px solid var(--border);
               margin: 0 0.4rem 0.4rem 0; }}
     .labels {{ display: flex; flex-wrap: wrap; }}
     .meta {{ font-size: 0.8rem; }}
     .meta-row {{ display: flex; justify-content: space-between; padding: 0.2rem 0;
-                 border-bottom: 1px solid #e7e5e4; }}
-    .meta-key {{ color: #a8a29e; }}
-    .meta-val {{ font-family: "JetBrains Mono", monospace; color: #78716c; }}
-    .main {{ flex: 1; overflow-y: auto; padding: 1.5rem; }}
+                 border-bottom: 1px solid var(--border); }}
+    .meta-key {{ color: var(--text-tertiary); }}
+    .meta-val {{ font-family: "JetBrains Mono", monospace; color: var(--text-secondary); }}
+    .main {{ padding: 1.5rem; }}
     .main h3 {{ font-size: 0.8rem; font-weight: 600; text-transform: uppercase;
-                letter-spacing: 0.05em; color: #78716c; margin: 0 0 0.75rem; }}
+                letter-spacing: 0.05em; color: var(--text-secondary); margin: 0 0 0.75rem; }}
     .ex-table {{ border-collapse: collapse; width: 100%; font-size: 0.8rem;
-                 border: 1px solid #e7e5e4; border-radius: 8px; overflow: hidden; }}
-    .ex-table th {{ background: #fafaf9; color: #78716c; font-size: 0.7rem; font-weight: 600;
+                 border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }}
+    .ex-table th {{ background: var(--surface-raised); color: var(--text-secondary); font-size: 0.7rem; font-weight: 600;
                     text-transform: uppercase; letter-spacing: 0.04em; padding: 6px 10px;
-                    text-align: left; border-bottom: 1px solid #e7e5e4; white-space: nowrap; }}
-    .ex-table td {{ padding: 5px 10px; border-bottom: 1px solid #f0efee; vertical-align: top;
+                    text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }}
+    .ex-table td {{ padding: 5px 10px; border-bottom: 1px solid var(--border-subtle); vertical-align: top;
                     white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 200px; }}
     .ex-table td:first-child {{ white-space: normal; word-break: break-word; max-width: none; }}
-    .ex-table tbody tr:hover td {{ background: #eff6ff; }}
-    .ex-table a {{ color: #2563eb; text-decoration: none; font-weight: 500; }}
+    .ex-table tbody tr:hover td {{ background: var(--accent-light); }}
+    .ex-table a {{ color: var(--accent); text-decoration: none; font-weight: 500; }}
     .ex-table a:hover {{ text-decoration: underline; }}
     .ex-table tbody tr:last-child td {{ border-bottom: none; }}
-    .ex-table td strong {{ color: #2563eb; font-weight: 700; }}
+    .ex-table td strong {{ color: var(--accent); font-weight: 700; }}
   </style>
 </head>
 <body>

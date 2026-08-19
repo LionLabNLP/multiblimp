@@ -12,7 +12,7 @@ from unidecode import unidecode
 from bs4 import BeautifulSoup
 
 from .config import UD_PATH
-from .languages import udlang2treebanks, convert_arabic_to_latin_langs
+from .languages import udlang2treebanks, convert_arabic_to_latin_langs, add_langs
 
 
 def has_typo(item):
@@ -167,10 +167,11 @@ class Treebank:
                 with open("error_log.txt", "a") as f:
                     f.write(f"Pickle not found for {lang} at {pickle_path}\n")
 
+        match_on = f"UD_{lang}*" if lang not in add_langs else add_langs[lang]
         if test_files_only:
-            treebank_glob = os.path.join(UD_PATH, f"UD_{lang}*/*test*.conllu")
+            treebank_glob = os.path.join(UD_PATH, f"{match_on}/*test*.conllu")
         else:
-            treebank_glob = os.path.join(UD_PATH, f"UD_{lang}*/*.conllu")
+            treebank_glob = os.path.join(UD_PATH, f"{match_on}/*.conllu")
         treebank_glob = os.path.join(resource_dir, treebank_glob)
         treebank_paths = glob(treebank_glob)
 

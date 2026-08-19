@@ -313,7 +313,9 @@ def fit_dt(
     if len(sub_df) < min_df_len:
         return None, None, None, unk_counts
 
-    omit_feats = (omit_feats or set()).union(set(META_FEATURES))
+    # "treebank" is otherwise pure per-row metadata (META_FEATURES), but the
+    # tree is allowed to split on it as a feature here.
+    omit_feats = (omit_feats or set()).union(set(META_FEATURES) - {"treebank"})
     omit_feats.update({col for col in full_df.columns if "idx" in col})
     omit_feats.update({col for col in full_df.columns if "_dir" in col})
     omit_feats.update(
@@ -420,7 +422,14 @@ def set_dt_features_in_df(
     additional_vars = (additional_vars or set()).union(META_FEATURES).union(omit_feats)
     additional_vars.add(predictor_var)
 
-    new_cols = {col: full_df[col] for col in additional_vars if col in full_df.columns}
+    # Skip anything already in df (e.g. "treebank", when it was fit on as a
+    # real feature rather than omitted) -- pd.concat below would otherwise
+    # duplicate the column name.
+    new_cols = {
+        col: full_df[col]
+        for col in additional_vars
+        if col in full_df.columns and col not in df.columns
+    }
     new_cols["leaf_id"] = pd.Series(leaf_ids, index=df.index)
     new_cols["leaf_full_entropy"] = pd.Series(leaf_full_entropy, index=df.index)
 

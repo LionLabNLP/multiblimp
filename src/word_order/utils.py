@@ -1,5 +1,6 @@
 import html as html_lib
 import itertools
+import re
 from urllib.parse import quote
 
 import pandas as pd
@@ -10,6 +11,33 @@ from .prediction_target import PredictionTarget
 ALL_CORE_ARGS = ["vos", "vso", "ovs", "svo", "osv", "sov"]
 
 MAX_TREEBANK_LEN = 30_000
+
+# A predictor_var can name an agreement relation two ways: SVA's own
+# "head_{child_deprel}_{Feature}_agreement" (e.g.
+# "head_nsubj_Number_agreement"), or the pairwise "{Role1}-{Role2}_{Feature}"
+# convention (e.g. NPA's "HEAD-DET_Number" -- "Yes" there means "HEAD-DET
+# Number agreement holds", the same underlying concept, just named
+# differently). SVA's own convention never contains "-", so checking for the
+# pairwise pattern first is unambiguous. Shared between word_order.viz_tree
+# (per-node sample highlighting) and word_order.viz_deprel (deciding whether
+# a predictor_var is an agreement predictor at all).
+_PAIRWISE_AGREEMENT_RE = re.compile(r"^([A-Za-z]+)-([A-Za-z]+)_([A-Z][a-zA-Z]+)$")
+
+
+def split_pairwise_predictor(predictor_var: str) -> tuple[str, str, str] | None:
+    """(role1, role2, feature) for a "{Role1}-{Role2}_{Feature}" predictor_var,
+    or None if it doesn't match that convention."""
+    m = _PAIRWISE_AGREEMENT_RE.match(predictor_var)
+    return m.groups() if m else None
+
+
+def is_agreement_predictor(predictor_var: str) -> bool:
+    """True for either agreement predictor_var convention (see module
+    comment above): SVA's "..._agreement" suffix, or the pairwise
+    "{Role1}-{Role2}_{Feature}" convention."""
+    return bool(predictor_var) and (
+        "agreement" in predictor_var or split_pairwise_predictor(predictor_var) is not None
+    )
 
 
 def capitalize_first(word: str) -> str:

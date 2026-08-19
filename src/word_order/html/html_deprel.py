@@ -2,6 +2,8 @@ def create_html(
     rows_six, rows_binary, plot_data_six_json, plot_data_binary_json, trivial_note="",
     header_cells="", diagnostics_enabled=False,
     languages_six_json="[]", languages_binary_json="[]",
+    leaf_threshold=None, agreement_label="Subject-Verb", head_role_label="head",
+    subject_label="subject", nsubj_label="nsubj",
 ):
     """Dispatches to one of two full, independent page templates.
 
@@ -13,11 +15,35 @@ def create_html(
     SVA/agreement target, and only when the caller actually has per-language
     diagnostics JSON to give it (languages_six_json/languages_binary_json;
     rows_six/rows_binary/header_cells are unused on this path).
+
+    leaf_threshold: the entropy cutoff N KEEP/the bucket breakdown were computed
+    with (see sva_trees.create_pairs.create_pairs) -- shown as a header badge
+    and interpolated into the N KEEP legend text on the diagnostics-enabled
+    page only. None omits the badge (e.g. a caller that doesn't know it).
+
+    agreement_label: prose label for the page subtitle on the diagnostics-enabled
+    page (e.g. "Subject-Verb" / "Subject-Auxiliary"), so pages for different
+    agreement targets don't all say "Subject-Verb".
+
+    head_role_label: prose label standing in for the generic "head" role in the
+    diagnostics-enabled page's "Dropped before fitting" stats/tooltips and legend
+    text (e.g. "Verb" for SVA, "Aux" for subj_aux). "head" (default) is a no-op.
+
+    subject_label: prose label standing in for the generic "subject" role in the
+    "ambiguous subject" bucket's tooltips/legend text (e.g. "HEAD" for an NPA
+    target_col whose fixed/comparison role is the NP head). "subject" (default)
+    is a no-op.
+
+    nsubj_label: prose label standing in for the generic "nsubj" role in the
+    "{nsubj_label} unk" stat's label/tooltip (the fixed/comparison role's own
+    missing-feature count -- same underlying role as subject_label, just a
+    separate historical wording). "nsubj" (default) is a no-op.
     """
     if diagnostics_enabled:
         return _create_diagnostics_html(
             plot_data_six_json, plot_data_binary_json, trivial_note,
-            languages_six_json, languages_binary_json,
+            languages_six_json, languages_binary_json, leaf_threshold,
+            agreement_label, head_role_label, subject_label, nsubj_label,
         )
     return _create_classic_html(
         rows_six, rows_binary, plot_data_six_json, plot_data_binary_json,
@@ -416,7 +442,9 @@ def _create_classic_html(
 
 def _create_diagnostics_html(
     plot_data_six_json, plot_data_binary_json, trivial_note,
-    languages_six_json, languages_binary_json,
+    languages_six_json, languages_binary_json, leaf_threshold=None,
+    agreement_label="Subject-Verb", head_role_label="head",
+    subject_label="subject", nsubj_label="nsubj",
 ):
     """Language-overview page for the SVA/agreement pipeline: same scatter
     plot, six/binary toggle and sortable columns as the classic page, plus an
@@ -428,6 +456,13 @@ def _create_diagnostics_html(
     properties for light/dark theming -- and sorting can both work without a
     server round-trip.
     """
+    threshold_badge = (
+        f'<span class="threshold-badge" title="The entropy cutoff N KEEP and the '
+        f'bucket breakdown were computed with -- a row is only “kept” if its '
+        f'leaf entropy is below this.">Keep threshold: entropy &lt; {leaf_threshold:g}</span>'
+        if leaf_threshold is not None else ""
+    )
+    threshold_text = f"entropy &lt; {leaf_threshold:g}" if leaf_threshold is not None else "the run's leaf-confidence filter"
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -438,6 +473,7 @@ def _create_diagnostics_html(
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
     <style>
         :root {{
+            color-scheme: light;
             --bg: #f5f5f4;
             --card: #ffffff;
             --text: #1c1917;
@@ -468,6 +504,7 @@ def _create_diagnostics_html(
             --pct-q3-h: 222;  --pct-q3-s: 60%; --pct-q3-l: 39%;
         }}
         :root[data-theme="dark"] {{
+            color-scheme: dark;
             --bg: #16140f; --card: #221f19; --text: #f0ede6; --text-muted: #a39a8a;
             --accent: #6ea8ff; --accent-soft: #1c2a42; --border: #38332a; --hover: #2a261e;
             --detail-bg: #1c1a15; --detail-border: #38332a; --warn: #fbbf24;
@@ -476,6 +513,7 @@ def _create_diagnostics_html(
         }}
         @media (prefers-color-scheme: dark) {{
             :root:not([data-theme="light"]) {{
+                color-scheme: dark;
                 --bg: #16140f; --card: #221f19; --text: #f0ede6; --text-muted: #a39a8a;
                 --accent: #6ea8ff; --accent-soft: #1c2a42; --border: #38332a; --hover: #2a261e;
                 --detail-bg: #1c1a15; --detail-border: #38332a; --warn: #fbbf24;
@@ -543,7 +581,12 @@ def _create_diagnostics_html(
             padding: 0.6rem 0.875rem; background: var(--detail-bg); border: 1px solid var(--border); border-radius: 6px;
         }}
 
-        .legend-row {{ display: flex; margin-bottom: 1rem; }}
+        .legend-row {{ display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem; }}
+        .threshold-badge {{
+            font-size: 0.78rem; font-weight: 500; color: var(--text-muted);
+            background: var(--detail-bg); border: 1px solid var(--detail-border);
+            border-radius: 999px; padding: 0.3rem 0.75rem; cursor: default;
+        }}
         .controls {{ display: flex; align-items: center; gap: 0.9rem; flex-wrap: wrap; margin-bottom: 1.25rem; }}
         .btn {{
             display: inline-flex; align-items: center; gap: 0.4rem;
@@ -664,6 +707,23 @@ def _create_diagnostics_html(
 
         .table-scroll {{ overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; }}
         .grid-table {{ min-width: 760px; }}
+        /* Pinned to the viewport bottom (not the table's own bottom edge) so
+           horizontal scrolling stays reachable without first scrolling all
+           the way down a tall page -- e.g. once several rows have their
+           Results/Diagnostics panel expanded. left/width are set by JS to
+           match #tableScroll's own rect (see refreshFixedHscroll) -- NOT
+           left/right:0, which would span the full viewport and usually end
+           up wider than the table's actual content, leaving nothing for
+           this bar itself to scroll even while the real table overflows.
+           Hidden by default so it never flashes before JS decides the table
+           actually overflows horizontally. */
+        .fixed-hscroll {{
+            display: none; position: fixed; bottom: 0;
+            height: 14px; overflow-x: auto; overflow-y: hidden;
+            background: var(--card); border-top: 1px solid var(--border);
+            z-index: 40;
+        }}
+        .fixed-hscroll #fixedHscrollInner {{ height: 1px; }}
         .row {{ display: flex; align-items: center; width: max-content; min-width: 100%; }}
         .thead-row {{ background: var(--hover); border-bottom: 2px solid var(--border); }}
         .cell {{
@@ -810,7 +870,7 @@ def _create_diagnostics_html(
             <div class="title-section">
                 <h1>MultiBLiMP v2 - Language Overview</h1>
                 <div class="subtitle">
-                    Subject-Verb agreement prediction through decision trees. Click a language row
+                    {agreement_label} agreement prediction through decision trees. Click a language row
                     (or the <strong>Results</strong> button) to open its create_pairs results below.
                     The small chevron after N Keep (or the <strong>Diagnostics</strong> button) is
                     separate: it opens just the bucket breakdown, inline, right where those items
@@ -838,45 +898,48 @@ def _create_diagnostics_html(
 
         <div class="legend-row">
             <button class="btn" id="legendBtn" type="button">Legend</button>
+            {threshold_badge}
         </div>
         <div class="controls">
             <div class="legend-group">
-                <div class="scale-legend">
+                <div class="scale-legend" title="Vermilion at 0%, violet in the middle, teal at 100%. Used wherever a high percentage is good (UM/UM+UD coverage, DT Acc%, N KEEP/N RAW, N PAIRS/N KEEP, Δ Entropy/Base Entropy).">
                     <span class="legend-title">Coverage</span>
                     <span>0%</span><span class="bar"></span><span>100%</span>
                 </div>
-                <div class="scale-legend inverted">
+                <div class="scale-legend inverted" title="Teal at 0%, violet in the middle, vermilion at 100% — the same scale mirrored. Used in the bucket breakdown (a high % means more rows dropped out at that step) and for Base/Reduced Entropy.">
                     <span class="legend-title">Item loss</span>
                     <span>0%</span><span class="bar"></span><span>100%</span>
                 </div>
             </div>
-            <button class="btn toggle-btn" id="resultsBtn" type="button" aria-pressed="false">Results</button>
-            <button class="btn toggle-btn" id="diagnosticsBtn" type="button" aria-pressed="false">Diagnostics</button>
+            <button class="btn toggle-btn" id="resultsBtn" type="button" aria-pressed="false" title="Show the per-language coverage &amp; volume panel below each row (UD candidates, forms of interest, UM/UM+UD coverage, unk-drop counts).">Results</button>
+            <button class="btn toggle-btn" id="diagnosticsBtn" type="button" aria-pressed="false" title="Show the per-language bucket breakdown row (no match / no inflection / same inflection / same feature / undefined feature / ambiguous {subject_label}).">Diagnostics</button>
         </div>
 
-        <div class="table-scroll">
+        <div class="table-scroll" id="tableScroll">
             <div class="grid-table" id="gridTable">
                 <div class="row thead-row" id="theadRow">
                     <div class="cell c-chev"></div>
                     <div class="cell c-lang sortable" data-column="name">Language</div>
-                    <div class="cell c-dist">Distribution</div>
-                    <div class="cell c-base sortable" data-column="base">Base Entropy</div>
-                    <div class="cell c-reduced sortable" data-column="reduced">Reduced Entropy</div>
-                    <div class="cell c-delta sortable" data-column="delta">Δ Entropy</div>
-                    <div class="cell c-acc sortable" data-column="acc">DT Acc%</div>
-                    <div class="cell c-raw sortable" data-column="nRaw">N RAW</div>
-                    <div class="cell c-keep sortable" data-column="nKeep">N KEEP</div>
+                    <div class="cell c-dist" title="The language's full Yes / No / unk label mix, before the decision tree drops unk rows. Always ordered Yes → No → unk.">Distribution</div>
+                    <div class="cell c-base sortable" data-column="base" title="Entropy of the target label distribution before any splitting — the uninformed baseline.">Base Entropy</div>
+                    <div class="cell c-reduced sortable" data-column="reduced" title="Entropy remaining after fitting the decision tree; lower means the tree explains more of the outcome.">Reduced Entropy</div>
+                    <div class="cell c-delta sortable" data-column="delta" title="Base Entropy minus Reduced Entropy — how much uncertainty the tree removes, as a fraction of Base Entropy.">Δ Entropy</div>
+                    <div class="cell c-acc sortable" data-column="acc" title="The decision tree's accuracy scored on its own training data.">DT Acc%</div>
+                    <div class="cell c-raw sortable" data-column="nRaw" title="Candidate rows before the entropy/leaf-confidence filter is applied.">N RAW</div>
+                    <div class="cell c-keep sortable" data-column="nKeep" title="Of N RAW, the rows kept after the leaf-confidence filter — the ones actually attempted.">N KEEP</div>
                     <div class="cell c-bchev"></div>
                     <div class="bucket-zone">
-                        <div class="bucket-item"></div><div class="bucket-item"></div><div class="bucket-item"></div>
-                        <div class="bucket-item"></div><div class="bucket-item"></div><div class="bucket-item"></div>
+                        <div class="bucket-item" title="no match: no candidate swap form was found for this row at all."></div><div class="bucket-item" title="no inflection: a swap form was targeted, but the inflector had nothing to offer for it."></div><div class="bucket-item" title="same inflection: the re-inflected form came back identical to the original surface form."></div>
+                        <div class="bucket-item" title="same feature: the re-inflected form's feature value still overlapped the original — the swap didn't actually change it."></div><div class="bucket-item" title="undefined feature: the target feature was undefined or missing for this form."></div><div class="bucket-item" title="ambiguous {subject_label}: the row's {subject_label} couldn't be uniquely resolved."></div>
                     </div>
-                    <div class="cell c-pairs sortable" data-column="nPairs">N PAIRS</div>
+                    <div class="cell c-pairs sortable" data-column="nPairs" title="Rows that ended up as a correctly re-inflected minimal pair, as a fraction of N KEEP.">N PAIRS</div>
                 </div>
                 <div id="tableBody"></div>
             </div>
         </div>
     </div>
+
+    <div class="fixed-hscroll" id="fixedHscroll"><div id="fixedHscrollInner"></div></div>
 
     <div class="modal-overlay" id="legendOverlay">
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="legendTitle">
@@ -895,11 +958,11 @@ def _create_diagnostics_html(
           <dl class="legend-list">
             <div><dt>Distribution</dt><dd>The language's full Yes / No / unk label mix, before the decision tree drops unk rows. Always ordered Yes &rarr; No &rarr; unk, coloured to match the tree pages. Hover a bar for exact percentages.</dd></div>
             <div><dt>Base Entropy</dt><dd>Entropy of the target label distribution before any splitting. The uninformed baseline. Coloured on the item-loss scale (teal = low = good), relative to 1 bit or the highest base entropy in this table, whichever is larger.</dd></div>
-            <div><dt>Reduced Entropy</dt><dd>Entropy remaining after fitting the decision tree; lower means the tree explains more of the outcome. Coloured on the item-loss scale (teal = low = good), relative to that language's own Base Entropy (reduced can never exceed it) -- so this cell always matches Δ Entropy's colour for the same row.</dd></div>
+            <div><dt>Reduced Entropy</dt><dd>Entropy remaining after fitting the decision tree; lower means the tree explains more of the outcome. Coloured on the item-loss scale (teal = low = good), on the same 1-bit-or-highest-base-entropy scale as Base Entropy above, so the two columns are directly comparable -- teal here means a language landed on a meaningfully low absolute entropy, not just a low entropy relative to its own (possibly already-low) starting point.</dd></div>
             <div><dt>Δ Entropy</dt><dd>Base Entropy minus Reduced Entropy. How much uncertainty the tree removes. Coloured on the coverage scale (teal = good), by what fraction of the base entropy that delta represents, not the raw number. 0.3 off a base of 0.4 is a much bigger win than 0.3 off a base of 2.0.</dd></div>
             <div><dt>DT Acc%</dt><dd>The decision tree's accuracy scored on its own training data. Coloured on the coverage scale (teal = high = good).</dd></div>
             <div><dt>N RAW</dt><dd>Candidate rows before the entropy/leaf-confidence filter is applied. Not coloured. There's no cheap per-language reference point (like treebank size) to scale it against, and not informative enough to be worth adding one for.</dd></div>
-            <div><dt>N KEEP</dt><dd>Of those, the rows kept after the leaf-confidence filter. The ones actually attempted. Coloured on the coverage scale, as a fraction of N RAW &mdash; faded (with a hover tooltip) when N RAW is below 10, since that fraction is too noisy to mean much at that size (2/2 reads as a perfect 100% off pure small-sample luck). The colour still shows, just dimmed, rather than disappearing outright.</dd></div>
+            <div><dt>N KEEP</dt><dd>Of those, the rows kept after the leaf-confidence filter ({threshold_text}). The ones actually attempted. Coloured on the coverage scale, as a fraction of N RAW &mdash; faded (with a hover tooltip) when N RAW is below 10, since that fraction is too noisy to mean much at that size (2/2 reads as a perfect 100% off pure small-sample luck). The colour still shows, just dimmed, rather than disappearing outright.</dd></div>
             <div><dt>N PAIRS</dt><dd>Rows that ended up as a correctly re-inflected minimal pair. Coloured on the coverage scale, as a fraction of N KEEP, with the same under-10 fade as N KEEP above (checked against N KEEP this time, not N RAW). Clickable when example rows are available &mdash; opens the same examples modal as the bucket breakdown.</dd></div>
           </dl>
         </div>
@@ -909,7 +972,7 @@ def _create_diagnostics_html(
           <dl class="legend-list">
             <div><dt># UD candidates (raw)</dt><dd>Same value as N RAW above. Candidate rows before the entropy/leaf-confidence filter.</dd></div>
             <div><dt># UD candidates (kept)</dt><dd>Same value as N KEEP above. The rows kept after that filter.</dd></div>
-            <div><dt># forms of interest</dt><dd>Distinct head/child forms eligible for this prediction target at all, whether or not they ended up labelled "Yes".</dd></div>
+            <div><dt># forms of interest</dt><dd>Distinct {head_role_label}/{nsubj_label} forms eligible for this prediction target at all, whether or not they ended up labelled "Yes".</dd></div>
             <div><dt>% covered by UM</dt><dd>Share of those forms found directly in UniMorph's inflection tables.</dd></div>
             <div><dt>% covered by UM+UD</dt><dd>Share covered once the UD-derived fallback is added on top of UniMorph.</dd></div>
             <div><dt># UM lemmas / forms</dt><dd>Size of the UniMorph inflection table available for this language.</dd></div>
@@ -933,7 +996,7 @@ def _create_diagnostics_html(
             <div><dt>same inflection</dt><dd>The re-inflected form came back identical to the original surface form.</dd></div>
             <div><dt>same feature</dt><dd>The re-inflected form's feature value still overlapped the original. The swap didn't actually change it.</dd></div>
             <div><dt>undefined feature</dt><dd>The target feature was undefined or missing for this form.</dd></div>
-            <div><dt>ambiguous subject</dt><dd>The row's subject couldn't be uniquely resolved.</dd></div>
+            <div><dt>ambiguous {subject_label}</dt><dd>The row's {subject_label} couldn't be uniquely resolved.</dd></div>
           </dl>
         </div>
 
@@ -952,14 +1015,14 @@ def _create_diagnostics_html(
                 <tr><th>Column</th><th>Numerator</th><th>Denominator</th><th>Denominator comes from</th><th>Scope</th><th>Why</th></tr>
               </thead>
               <tbody>
-                <tr><td>% covered by UM</td><td><code>num_covered_um</code></td><td># forms of interest</td><td><code>num_forms_of_interest</code></td><td>forms</td><td>Distinct head/child forms found in UniMorph alone.</td></tr>
-                <tr><td>% covered by UM+UD</td><td><code>num_covered_um_ud</code></td><td># forms of interest</td><td><code>num_forms_of_interest</code></td><td>forms</td><td>Distinct head/child forms found via UniMorph or the UD-derived fallback.</td></tr>
+                <tr><td>% covered by UM</td><td><code>num_covered_um</code></td><td># forms of interest</td><td><code>num_forms_of_interest</code></td><td>forms</td><td>Distinct {head_role_label}/{nsubj_label} forms found in UniMorph alone.</td></tr>
+                <tr><td>% covered by UM+UD</td><td><code>num_covered_um_ud</code></td><td># forms of interest</td><td><code>num_forms_of_interest</code></td><td>forms</td><td>Distinct {head_role_label}/{nsubj_label} forms found via UniMorph or the UD-derived fallback.</td></tr>
                 <tr><td>% no match</td><td># no match (<code>no_candidates</code>)</td><td># UD candidates (kept)</td><td><code>n_keep</code></td><td>row</td><td>Fires once per candidate row, in place of the swap_form loop. The two are mutually exclusive.</td></tr>
                 <tr><td>% no inflection</td><td># no inflection (<code>no_inflections</code>)</td><td># UD candidates (kept)</td><td><code>n_keep</code></td><td>row</td><td>Same as "no match": fires instead of entering the swap_form loop.</td></tr>
                 <tr><td>% same inflection</td><td># same inflection (<code>same_forms</code>)</td><td>swap_items</td><td><code>items_seen &minus; no_match &minus; no_inflection</code></td><td>item</td><td>Fires once per attempted swap_form; a row can yield more than one item.</td></tr>
                 <tr><td>% same feature</td><td># same feature (<code>same_features</code>)</td><td>swap_items</td><td><code>items_seen &minus; no_match &minus; no_inflection</code></td><td>item</td><td>Fires once per attempted swap_form.</td></tr>
                 <tr><td>% undefined feature</td><td># undefined feature (<code>undefined_features</code>)</td><td>swap_items</td><td><code>items_seen &minus; no_match &minus; no_inflection</code></td><td>item</td><td>Fires once per attempted swap_form.</td></tr>
-                <tr><td>% ambiguous subject</td><td># ambiguous subject (<code>ambiguous_subjects</code>)</td><td>swap_items</td><td><code>items_seen &minus; no_match &minus; no_inflection</code></td><td>item</td><td>Fires once per attempted swap_form.</td></tr>
+                <tr><td>% ambiguous {subject_label}</td><td># ambiguous {subject_label} (<code>ambiguous_subjects</code>)</td><td>swap_items</td><td><code>items_seen &minus; no_match &minus; no_inflection</code></td><td>item</td><td>Fires once per attempted swap_form.</td></tr>
                 <tr><td>(not shown) extra_pairs</td><td><code>extra_pairs</code></td><td>swap_items</td><td><code>items_seen &minus; no_match &minus; no_inflection</code></td><td>item</td><td>Would collect otherwise-valid swaps (same eligibility as correct_swaps) that get capped once their FROM&rarr;TO combination hits the max_num_of_pairs limit. Always 0 today since create_pairs is never called with that limit set.</td></tr>
               </tbody>
             </table>
@@ -996,12 +1059,12 @@ def _create_diagnostics_html(
     const plotData = {{ six: {plot_data_six_json}, binary: {plot_data_binary_json} }};
 
     const BUCKETS = [
-      {{ key: "no_match", label: "no match" }},
-      {{ key: "no_inflection", label: "no inflection" }},
-      {{ key: "same_inflection", label: "same inflection" }},
-      {{ key: "same_feature", label: "same feature" }},
-      {{ key: "undefined_feature", label: "undefined feature" }},
-      {{ key: "ambiguous_subject", label: "ambiguous subject" }},
+      {{ key: "no_match", label: "no match", desc: "No candidate swap form was found for this row at all." }},
+      {{ key: "no_inflection", label: "no inflection", desc: "A swap form was targeted, but the inflector had nothing to offer for it." }},
+      {{ key: "same_inflection", label: "same inflection", desc: "The re-inflected form came back identical to the original surface form." }},
+      {{ key: "same_feature", label: "same feature", desc: "The re-inflected form's feature value still overlapped the original — the swap didn't actually change it." }},
+      {{ key: "undefined_feature", label: "undefined feature", desc: "The target feature was undefined or missing for this form." }},
+      {{ key: "ambiguous_subject", label: "ambiguous {subject_label}", desc: "The row's {subject_label} couldn't be uniquely resolved." }},
     ];
 
     // Fixed left-to-right order for the distribution bar -- matches
@@ -1010,9 +1073,18 @@ def _create_diagnostics_html(
     // whose predictor_var was never simplified (Pipeline.simplify=False)
     // carries "+-"/"--" instead of "unk"; both are covered here so either
     // convention renders, though a run only ever produces one or the other.
+    // Lowercase "yes"/"no" alongside SVA's own "Yes"/"No": NPA's pairwise
+    // target_cols (e.g. "HEAD-DET_Number") use lowercase labels throughout
+    // (see word_order.utils.is_agreement_predictor's module comment) --
+    // "unk" already happened to match both conventions, but "yes"/"no"
+    // didn't, so a label_distribution built from an NPA target_col only
+    // ever matched the "unk" entry here, silently dropping its Yes/No
+    // segments from the bar instead of rendering them.
     const LABEL_ORDER = [
       ["Yes", "#31cb9f"],
+      ["yes", "#31cb9f"],
       ["No", "#f16393"],
+      ["no", "#f16393"],
       ["unk", "#b893de"],
       ["+-", "#e5c64d"],
       ["--", "#b893de"],
@@ -1044,6 +1116,14 @@ def _create_diagnostics_html(
         h0: num("--pct-lo-h"), s0: num("--pct-lo-s"), l0: num("--pct-lo-l"),
         h1: num("--pct-hi-h"), s1: num("--pct-hi-s"), l1: num("--pct-hi-l"),
       }};
+    }})();
+
+    // Same rationale as PCT_SCALE: Plotly's layout takes plain colour
+    // strings, not CSS vars, so the scatter plot needs its own theme read.
+    const CHART_THEME = (() => {{
+      const root = getComputedStyle(document.documentElement);
+      const v = (name) => root.getPropertyValue(name).trim();
+      return {{ text: v("--text"), border: v("--border") }};
     }})();
 
     // Vermilion -> violet -> teal, and never green. Hue rotates steadily in
@@ -1081,10 +1161,11 @@ def _create_diagnostics_html(
 
     // Entropy has no fixed 0-100 scale (its ceiling depends on how many
     // labels the target has), so colour it relative to a ceiling rather
-    // than assuming a theoretical max -- maxBaseEntropy (table-wide) for
-    // base entropy, that row's own base entropy for reduced entropy (see
-    // renderAll/generate_rows below). invert stays at its default true for
-    // both: lower is better, teal at the low end.
+    // than assuming a theoretical max -- maxBaseEntropy (table-wide,
+    // computed in renderAll/generate_rows below), shared by both Base and
+    // Reduced Entropy so they're directly comparable at a glance. invert
+    // stays at its default true for both: lower is better, teal at the low
+    // end.
     function entropyColor(value, maxEntropy, invert = true) {{
       return pctColor(Math.min(100, (value / maxEntropy) * 100), invert);
     }}
@@ -1127,7 +1208,7 @@ def _create_diagnostics_html(
         const color = pctColor(pct, true);
         const hasExamples = n > 0 && diag.examples && diag.examples[b.key];
         return `
-          <div class="bucket-item">
+          <div class="bucket-item" title="${{escapeAttr(b.desc)}} (${{n.toLocaleString()}} rows, ${{pct.toFixed(1)}}% of swap attempts)">
             <span class="b-label">${{b.label}}</span>
             <span class="b-value" style="color:${{color}}">${{pct.toFixed(1)}}%</span>
             <span class="b-count">${{n.toLocaleString()}}</span>
@@ -1146,6 +1227,14 @@ def _create_diagnostics_html(
       return n_html + sub;
     }}
 
+    function unkValueHtml(lang, diag, bucketKey, count) {{
+      const n = count.toLocaleString();
+      const hasExamples = diag.examples && diag.examples[bucketKey] && count > 0;
+      return hasExamples
+        ? `<button class="cell-examples-btn" type="button" data-lang="${{escapeAttr(lang.name)}}" data-bucket="${{bucketKey}}">${{n}}</button>`
+        : n;
+    }}
+
     function renderDetail(lang) {{
       const diag = lang.diag;
       const probEntries = diag ? Object.entries(diag.probs) : [];
@@ -1154,26 +1243,26 @@ def _create_diagnostics_html(
           <div>
             <p class="section-label">Coverage &amp; volume</p>
             <div class="stat-rows">
-              <div class="stat" style="grid-column:1;grid-row:1;"><span class="label"># UD candidates (raw)</span><span class="value">${{lang.nRaw.toLocaleString()}}</span></div>
-              <div class="stat" style="grid-column:2;grid-row:1;"><span class="label"># forms of interest</span><span class="value">${{diag ? diag.nForms.toLocaleString() : "—"}}</span></div>
+              <div class="stat" style="grid-column:1;grid-row:1;"><span class="label" title="Candidate rows before the entropy/leaf-confidence filter is applied. Same value as N RAW in the table."># UD candidates (raw)</span><span class="value">${{lang.nRaw.toLocaleString()}}</span></div>
+              <div class="stat" style="grid-column:2;grid-row:1;"><span class="label" title="Distinct {head_role_label}/{nsubj_label} forms eligible for this prediction target at all, whether or not they ended up labelled &quot;Yes&quot;."># forms of interest</span><span class="value">${{diag ? diag.nForms.toLocaleString() : "—"}}</span></div>
 
-              <div class="stat" style="grid-column:1;grid-row:2;"><span class="label">% covered by UM+UD</span><span class="value"${{diag ? ` style="color:${{pctColor(diag.pctUMUD)}}"` : ""}}>${{diag ? diag.pctUMUD.toFixed(1) + "%" : "—"}}</span></div>
-              <div class="stat" style="grid-column:2;grid-row:2;"><span class="label">% covered by UM</span><span class="value"${{diag ? ` style="color:${{pctColor(diag.pctUM)}}"` : ""}}>${{diag ? diag.pctUM.toFixed(1) + "%" : "—"}}</span></div>
-              <div class="stat" style="grid-column:3;grid-row:2;"><span class="label"># UM lemmas</span><span class="value">${{diag ? diag.nLemma.toLocaleString() : "—"}}</span></div>
-              <div class="stat" style="grid-column:4;grid-row:2;"><span class="label"># UM forms</span><span class="value">${{diag ? diag.nForm.toLocaleString() : "—"}}</span></div>
+              <div class="stat" style="grid-column:1;grid-row:2;"><span class="label" title="Share of forms of interest covered once the UD-derived fallback is added on top of UniMorph.">% covered by UM+UD</span><span class="value"${{diag ? ` style="color:${{pctColor(diag.pctUMUD)}}"` : ""}}>${{diag ? diag.pctUMUD.toFixed(1) + "%" : "—"}}</span></div>
+              <div class="stat" style="grid-column:2;grid-row:2;"><span class="label" title="Share of forms of interest found directly in UniMorph's inflection tables.">% covered by UM</span><span class="value"${{diag ? ` style="color:${{pctColor(diag.pctUM)}}"` : ""}}>${{diag ? diag.pctUM.toFixed(1) + "%" : "—"}}</span></div>
+              <div class="stat" style="grid-column:3;grid-row:2;"><span class="label" title="Size of the UniMorph lemma inventory available for this language."># UM lemmas</span><span class="value">${{diag ? diag.nLemma.toLocaleString() : "—"}}</span></div>
+              <div class="stat" style="grid-column:4;grid-row:2;"><span class="label" title="Size of the UniMorph inflected-form inventory available for this language."># UM forms</span><span class="value">${{diag ? diag.nForm.toLocaleString() : "—"}}</span></div>
 
-              <div class="stat" style="grid-column:1;grid-row:3;"><span class="label"># UD candidates (kept)</span><span class="value">${{lang.nKeep.toLocaleString()}}</span></div>
-              <div class="stat" style="grid-column:2;grid-row:3;"><span class="label"># minimal pairs</span><span class="value">${{lang.nPairs.toLocaleString()}}</span></div>
-              <div class="stat" style="grid-column:3;grid-row:3;"><span class="label"># valid from multi</span><span class="value">${{diag ? multiValueHtml(lang, diag) : "—"}}</span></div>
+              <div class="stat" style="grid-column:1;grid-row:3;"><span class="label" title="Of N RAW, the rows kept after the leaf-confidence filter. Same value as N KEEP in the table."># UD candidates (kept)</span><span class="value">${{lang.nKeep.toLocaleString()}}</span></div>
+              <div class="stat" style="grid-column:2;grid-row:3;"><span class="label" title="Rows that ended up as a correctly re-inflected minimal pair. Same value as N PAIRS in the table."># minimal pairs</span><span class="value">${{lang.nPairs.toLocaleString()}}</span></div>
+              <div class="stat" style="grid-column:3;grid-row:3;"><span class="label" title="Minimal pairs that came from a row with more than one candidate swap form, as a share of all pairs."># valid from multi</span><span class="value">${{diag ? multiValueHtml(lang, diag) : "—"}}</span></div>
             </div>
           </div>
 
           <div>
-            <p class="section-label">Dropped before fitting (missing feature annotation)</p>
+            <p class="section-label" title="Rows dropped from the decision tree fit because the target feature was missing on the {head_role_label}, the {nsubj_label}, or both -- fit_dt's UNK_LABELS drop (see the --keep_unk script flag).">Dropped before fitting (missing feature annotation)</p>
             <div class="stat-rows">
-              <div class="stat" style="grid-column:1;grid-row:1;"><span class="label"># head unk</span><span class="value">${{diag ? diag.headUnk.toLocaleString() : "—"}}</span></div>
-              <div class="stat" style="grid-column:2;grid-row:1;"><span class="label"># nsubj unk</span><span class="value">${{diag ? diag.nsubjUnk.toLocaleString() : "—"}}</span></div>
-              <div class="stat" style="grid-column:3;grid-row:1;"><span class="label"># both unk</span><span class="value">${{diag ? diag.bothUnk.toLocaleString() : "—"}}</span></div>
+              <div class="stat" style="grid-column:1;grid-row:1;"><span class="label" title="Rows dropped because the {head_role_label}'s target feature was missing, but the {nsubj_label}'s was present."># {head_role_label} unk</span><span class="value">${{diag ? unkValueHtml(lang, diag, "head_unk", diag.headUnk) : "—"}}</span></div>
+              <div class="stat" style="grid-column:2;grid-row:1;"><span class="label" title="Rows dropped because the {nsubj_label}'s target feature was missing, but the {head_role_label}'s was present."># {nsubj_label} unk</span><span class="value">${{diag ? unkValueHtml(lang, diag, "nsubj_unk", diag.nsubjUnk) : "—"}}</span></div>
+              <div class="stat" style="grid-column:3;grid-row:1;"><span class="label" title="Rows dropped because both the {head_role_label}'s and the {nsubj_label}'s target feature were missing."># both unk</span><span class="value">${{diag ? unkValueHtml(lang, diag, "both_unk", diag.bothUnk) : "—"}}</span></div>
             </div>
           </div>
 
@@ -1216,6 +1305,64 @@ def _create_diagnostics_html(
     const tableBody = document.getElementById("tableBody");
     const theadRow = document.getElementById("theadRow");
 
+    // Pinned-to-viewport-bottom horizontal scrollbar, mirroring #tableScroll's
+    // native one -- see .fixed-hscroll's CSS comment for why. Kept correct
+    // through every width-changing event via a ResizeObserver -- but NOT one
+    // observing #gridTable itself: #gridTable is a plain block box (width:
+    // auto), so a child row overflowing it wider never resizes #gridTable's
+    // own box, and the observer would simply never fire for that. Each
+    // .row IS sized with width:max-content though, so it genuinely resizes
+    // as its bucket-zone's width transitions open/closed -- observing the
+    // rows themselves is what makes the bar track that animation live,
+    // frame by frame, not just snap to the right value sometime after.
+    const tableScrollEl = document.getElementById("tableScroll");
+    const fixedHscroll = document.getElementById("fixedHscroll");
+    const fixedHscrollInner = document.getElementById("fixedHscrollInner");
+    let syncingHscroll = false;
+
+    function refreshFixedHscroll() {{
+      // Match #tableScroll's own rect, not the viewport's: a fixed bar
+      // spanning the full window would (as here) usually be WIDER than the
+      // table's total content, even while the table itself -- inset by the
+      // page's padding/max-width -- genuinely overflows and needs to
+      // scroll. Anchoring to the same left offset and width as the real
+      // scroll container is what makes this bar's own overflow match it.
+      const rect = tableScrollEl.getBoundingClientRect();
+      fixedHscroll.style.left = rect.left + "px";
+      fixedHscroll.style.width = rect.width + "px";
+      fixedHscrollInner.style.width = gridTable.scrollWidth + "px";
+      fixedHscroll.style.display =
+        gridTable.scrollWidth > tableScrollEl.clientWidth ? "block" : "none";
+    }}
+    tableScrollEl.addEventListener("scroll", () => {{
+      if (syncingHscroll) return;
+      syncingHscroll = true;
+      fixedHscroll.scrollLeft = tableScrollEl.scrollLeft;
+      syncingHscroll = false;
+    }});
+    fixedHscroll.addEventListener("scroll", () => {{
+      if (syncingHscroll) return;
+      syncingHscroll = true;
+      tableScrollEl.scrollLeft = fixedHscroll.scrollLeft;
+      syncingHscroll = false;
+    }});
+    window.addEventListener("resize", refreshFixedHscroll);
+    // Re-pointed at each .row (see comment above) rather than #gridTable.
+    // #theadRow carries its own bucket-zone (see syncHeaderBuckets below) and
+    // is static markup that's never torn down, so it's observed once, here.
+    // The per-language rows ARE torn down and rebuilt on every renderAll(),
+    // so those are disconnected and re-observed there each time -- but that
+    // disconnect() call clears every observation this observer holds,
+    // #theadRow included, so renderAll re-observes it too, not just the rows.
+    const rowResizeObserver = new ResizeObserver(refreshFixedHscroll);
+    rowResizeObserver.observe(theadRow);
+    // Belt-and-suspenders alongside the observer above: guarantees one
+    // correct, final refresh once a bucket-zone's open/close transition
+    // (max-width/opacity/margin) actually finishes, regardless of any
+    // ResizeObserver timing quirk. transitionend bubbles, so one delegated
+    // listener here covers every row's bucket-zone.
+    gridTable.addEventListener("transitionend", refreshFixedHscroll);
+
     function syncHeaderBuckets() {{
       theadRow.classList.toggle("buckets-open", openBuckets.size > 0);
     }}
@@ -1230,15 +1377,21 @@ def _create_diagnostics_html(
       // real data exceeds 1 (possible for six-class entropy, never binary).
       // Lower is better, teal at the low end.
       //
-      // Reduced entropy: not a table-wide ceiling at all -- reduced can
-      // never exceed that same row's own base entropy (the tree only ever
-      // removes uncertainty, never adds it), so each row is scaled 0..its
-      // own base entropy, right where the cell is rendered below. Lower is
-      // better, same direction as base entropy -- reduced/base and
-      // delta/base are complementary fractions of the same number, so this
-      // makes a row's Reduced Entropy cell always match its Delta Entropy
-      // cell's colour exactly (t and 1-t cancel through the two invert
-      // directions), rather than contradicting it.
+      // Reduced entropy: scaled on the SAME table-wide ceiling as Base
+      // Entropy, deliberately not each row's own base (that was the
+      // previous scheme). reduced/base and delta/base are complementary
+      // fractions of the same number, so scaling Reduced per-row against
+      // its own base made its colour exactly reproduce Delta Entropy's (t
+      // and 1-t cancel through the two invert directions) -- zero
+      // additional information over the Δ Entropy column, since it's
+      // literally the same colour every time, not just visually similar.
+      // Scaling against maxBaseEntropy instead makes Base/Reduced/Delta
+      // three genuinely distinct reads: Base = absolute starting
+      // uncertainty, Delta = fraction of that language's own uncertainty
+      // explained away (relative effort), Reduced = absolute uncertainty
+      // actually left over -- so at a glance you can see which languages
+      // landed on a meaningfully low entropy in absolute terms, not just
+      // which ones improved a lot relatively.
       const maxBaseEntropy = Math.max(1, ...list.map(l => l.base));
       const acc = SORT_ACCESSORS[currentSort.column];
       const sorted = [...list].sort((a, b) => {{
@@ -1250,6 +1403,8 @@ def _create_diagnostics_html(
       }});
 
       tableBody.innerHTML = "";
+      rowResizeObserver.disconnect();
+      rowResizeObserver.observe(theadRow);
       sorted.forEach((lang) => {{
         const langRow = document.createElement("div");
         langRow.className = "row lang-row";
@@ -1272,7 +1427,7 @@ def _create_diagnostics_html(
           <div class="cell c-lang lang-name">${{nameHtml}}</div>
           <div class="cell c-dist">${{renderDistBar(lang.diag && lang.diag.labelDistribution)}}</div>
           <div class="cell c-base" style="color:${{entropyColor(lang.base, maxBaseEntropy)}}">${{lang.base.toFixed(3)}}</div>
-          <div class="cell c-reduced" style="color:${{entropyColor(lang.reduced, Math.max(lang.base, 0.0001))}}">${{lang.reduced.toFixed(3)}}</div>
+          <div class="cell c-reduced" style="color:${{entropyColor(lang.reduced, maxBaseEntropy)}}">${{lang.reduced.toFixed(3)}}</div>
           <div class="cell c-delta" style="color:${{deltaColor(lang.base, lang.delta) || "var(--text-muted)"}}">${{lang.delta.toFixed(3)}}</div>
           <div class="cell c-acc" style="color:${{pctColor(lang.acc * 100)}}">${{(lang.acc * 100).toFixed(1)}}%</div>
           <div class="cell c-raw">${{lang.nRaw.toLocaleString()}}</div>
@@ -1303,6 +1458,7 @@ def _create_diagnostics_html(
 
         tableBody.appendChild(langRow);
         tableBody.appendChild(detailRow);
+        rowResizeObserver.observe(langRow);
       }});
 
       syncHeaderBuckets();
@@ -1312,6 +1468,11 @@ def _create_diagnostics_html(
           h.classList.add(currentSort.ascending ? "sort-asc" : "sort-desc");
         }}
       }});
+      // Explicit call, not left to ResizeObserver's implicit initial fire
+      // alone: that fire is async and its exact timing isn't guaranteed
+      // across environments, so without this the bar can stay wrongly
+      // hidden until *something* later happens to trigger a resize.
+      refreshFixedHscroll();
     }}
 
     theadRow.querySelectorAll(".cell.sortable").forEach(header => {{
@@ -1361,20 +1522,30 @@ def _create_diagnostics_html(
     // by sva_trees.create_pairs.bucket_examples_html and dropped in as-is. One
     // shared overlay, content swapped in per click via a delegated listener
     // on tableBody (rows are re-created on every renderAll(), so per-button
-    // listeners would need re-attaching). Covers all 8 buckets, not just the
-    // 6 in the bucket zone -- correct_swaps (N PAIRS) and multi_now_valid
-    // ("valid from multi") link in from the Results panel instead. ----
+    // listeners would need re-attaching). Covers all 11 buckets, not just
+    // the 6 in the bucket zone -- correct_swaps (N PAIRS), multi_now_valid
+    // ("valid from multi"), and head_unk/nsubj_unk/both_unk (linked from
+    // the "Dropped before fitting" stats) link in from the Results panel
+    // instead. ----
     const examplesOverlay = document.getElementById("examplesOverlay");
     const examplesClose = document.getElementById("examplesClose");
     const examplesTitle = document.getElementById("examplesTitle");
     const examplesSubtitle = document.getElementById("examplesSubtitle");
     const examplesBody = document.getElementById("examplesBody");
 
-    // BUCKETS only covers the 6 "problem" buckets shown in the bucket zone;
-    // correct_swaps (linked from N PAIRS) and multi_now_valid (linked from
-    // "valid from multi") aren't in that list, so they need their own labels
-    // and their own way to look up a count (they're not in diag.buckets).
-    const EXTRA_BUCKET_LABELS = {{ correct_swaps: "minimal pairs", multi_now_valid: "valid from multi" }};
+    // BUCKETS only covers the 6 "problem" buckets shown in the bucket zone.
+    // correct_swaps (linked from N PAIRS), multi_now_valid (linked from
+    // "valid from multi"), and head_unk/nsubj_unk/both_unk (linked from the
+    // "Dropped before fitting" stats) aren't in that list, so they need
+    // their own labels and their own way to look up a count (they're not
+    // in diag.buckets).
+    const EXTRA_BUCKET_LABELS = {{
+      correct_swaps: "minimal pairs",
+      multi_now_valid: "valid from multi",
+      head_unk: "{head_role_label} unk",
+      nsubj_unk: "{nsubj_label} unk",
+      both_unk: "both unk",
+    }};
     function bucketLabel(key) {{
       const b = BUCKETS.find(b => b.key === key);
       return b ? b.label : (EXTRA_BUCKET_LABELS[key] || key);
@@ -1382,6 +1553,9 @@ def _create_diagnostics_html(
     function bucketCount(lang, key) {{
       if (key === "correct_swaps") return lang.nPairs;
       if (key === "multi_now_valid") return lang.diag.nValidFromMulti;
+      if (key === "head_unk") return lang.diag.headUnk;
+      if (key === "nsubj_unk") return lang.diag.nsubjUnk;
+      if (key === "both_unk") return lang.diag.bothUnk;
       return (lang.diag.buckets[key] || [0, 0])[0];
     }}
 
@@ -1426,11 +1600,11 @@ def _create_diagnostics_html(
         }},
       }};
       const layout = {{
-        title: {{ text: 'Base Entropy vs. Reduced Entropy', font: {{ family: 'DM Sans, system-ui, sans-serif', size: 16, color: '#1c1917' }} }},
-        xaxis: {{ title: 'Base Entropy', gridcolor: '#e7e5e4', zeroline: false }},
-        yaxis: {{ title: 'Reduced Entropy', gridcolor: '#e7e5e4', zeroline: false }},
-        plot_bgcolor: '#ffffff', paper_bgcolor: '#ffffff',
-        font: {{ family: 'DM Sans, system-ui, sans-serif', color: '#1c1917' }},
+        title: {{ text: 'Base Entropy vs. Reduced Entropy', font: {{ family: 'DM Sans, system-ui, sans-serif', size: 16, color: CHART_THEME.text }} }},
+        xaxis: {{ title: 'Base Entropy', gridcolor: CHART_THEME.border, zeroline: false }},
+        yaxis: {{ title: 'Reduced Entropy', gridcolor: CHART_THEME.border, zeroline: false }},
+        plot_bgcolor: 'rgba(0,0,0,0)', paper_bgcolor: 'rgba(0,0,0,0)',
+        font: {{ family: 'DM Sans, system-ui, sans-serif', color: CHART_THEME.text }},
         hovermode: 'closest', margin: {{ t: 50, r: 30, b: 50, l: 60 }},
       }};
       const config = {{ responsive: true, displayModeBar: true, modeBarButtonsToRemove: ['lasso2d', 'select2d'], displaylogo: false }};

@@ -99,3 +99,7 @@ sed "s/ARBAB3S/ARGAB3S/" ckt/ckt > ckt/ckt2; mv ckt/ckt2 ckt/ckt
 
 # Afrikaans
 sed "s/SUP/SPRL/" afr/afr > afr/afr2; mv afr/afr2 afr/afr
+
+# Swedish
+sed -E "/\tV;/s/;SG//" swe/swe > swe/swe2; mv swe/swe2 swe/swe
+sed -E "/\tV;/s/;PL//" swe/swe > swe/swe2; mv swe/swe2 swe/swe

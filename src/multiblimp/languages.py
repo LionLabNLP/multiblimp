@@ -125,6 +125,8 @@ gblang2udlang = {
     "Modern Hebrew": "Hebrew",
 }
 
+add_langs = {"Aromanian": "UD_Romanian-ArT"}
+
 # TODO: rewrite this as exclusion list rather than inclusion
 # Maps a language to all the treebanks that should be used for that language.
 # If a language is not in this dictionary we take all available treebanks.
@@ -333,7 +335,7 @@ def get_ud_langs(resource_dir, ud_dir=None, do_skip_langs=True):
 
     treebank_dirs = glob(os.path.join(resource_dir, ud_dir, "*"))
     treebank_langs = map(ud_dir2lang, treebank_dirs)
-    treebank_langs = sorted(set(treebank_langs))
+    treebank_langs = sorted(set(treebank_langs).union(set(add_langs.keys())))
 
     if do_skip_langs:
         treebank_langs = [lang for lang in treebank_langs if lang not in skip_langs]
@@ -341,3 +343,5 @@ def get_ud_langs(resource_dir, ud_dir=None, do_skip_langs=True):
     return treebank_langs
 
 
+if __name__=="__main__":
+    print(get_ud_langs("../../resources"))

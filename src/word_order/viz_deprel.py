@@ -13,6 +13,7 @@ from tqdm import tqdm
 
 from .entropy import calculate_base_entropy, calculate_tree_entropy
 from .html.html_deprel import create_html
+from .utils import is_agreement_predictor
 
 
 def _dtype_coerced_metrics(dt, df, target_col, binary_entropy, smoothing):
@@ -100,13 +101,18 @@ def calculate_metrics(
         # Number of items
         n_items = len(df)
 
-        # Swap statistics (if num_swaps column exists)
+        # Swap statistics (if num_swaps column exists -- only set_dt_features_
+        # in_df's word-order branch, i.e. target is not None, ever adds it;
+        # a target=None caller, e.g. NPA's pairwise agreement columns or
+        # viz_tree's own "binary attachment classifier" case, never has it)
         if "num_swaps" in df.columns:
             n_flexible = (df["num_swaps"] >= 1).sum()
             n_fully_flexible = (df["num_swaps"] == 4).sum()
+            total_pairs = sum(df["num_swaps"])
         else:
             n_flexible = 0
             n_fully_flexible = 0
+            total_pairs = 0
 
         metrics.append(
             {
@@ -118,7 +124,7 @@ def calculate_metrics(
                 "n_items": n_items,
                 "n_flexible": n_flexible,
                 "n_fully_flexible": n_fully_flexible,
-                "total_pairs": sum(df["num_swaps"]),
+                "total_pairs": total_pairs,
             }
         )
 
@@ -131,7 +137,10 @@ def calculate_metrics(
 def _agreement_row_stats(df, target_col, leaf_threshold, pairs_dir, lang_name):
     """(n_raw, n_keep, n_pairs) for one language's agreement dataframe.
 
-    n_raw: rows with target_col == "Yes" (candidates for a feature swap).
+    n_raw: rows with target_col's positive label (candidates for a feature
+        swap) -- SVA's convention is "Yes", NPA's pairwise columns (e.g.
+        "HEAD-DET_Number") use lowercase "yes" instead, so this matches
+        case-insensitively rather than "Yes" literally.
     n_keep: of those, how many pass the same leaf_top1_entropy < leaf_threshold
         and leaf_decision filter sva_trees.create_pairs.create_pairs uses to pick
         which rows to actually attempt to re-inflect. Trivial languages (no fitted
@@ -141,7 +150,7 @@ def _agreement_row_stats(df, target_col, leaf_threshold, pairs_dir, lang_name):
         read from "<pairs_dir>/<language>/correct_swaps.parquet". 0 if pairs_dir is
         None or that file doesn't exist yet (create_pairs not run, or n_keep was 0).
     """
-    is_yes = df[target_col] == "Yes"
+    is_yes = df[target_col].astype(str).str.lower() == "yes"
     n_raw = int(is_yes.sum())
 
     if "leaf_top1_entropy" in df.columns and "leaf_decision" in df.columns:
@@ -254,6 +263,11 @@ def generate_html_deprel_index(
     leaf_threshold: float = 0.1,
     pairs_dir: str | None = None,
     diagnostics_by_lang: dict | None = None,
+    agreement_label: str = "Subject-Verb",
+    head_role_label: str = "head",
+    subject_label: str = "subject",
+    nsubj_label: str = "nsubj",
+    url_path: str | None = None,
 ) -> None:
     """Generate interactive overview page with metrics and language links.
 
@@ -262,6 +276,31 @@ def generate_html_deprel_index(
         html_directory: Directory to save the index.html file
         target_col: Column name containing word order labels
         smoothing: Smoothing factor for entropy calculation
+        url_path: The "/multiblimp/{url_path}/..." prefix this page's own
+            per-language links (and word_order.viz_overview.
+            generate_html_overview_index's link back to this page) should
+            use. None (default) falls back to html_directory's own leaf
+            folder name, exactly what every pre-existing caller already
+            gets implicitly -- only needed when html_directory is nested
+            more than one level below wherever "/multiblimp/" is served
+            from (e.g. NPA's "decision_trees/npa/{ROLE1}-{ROLE2}_{Feat}",
+            where the correct link prefix is "npa/{ROLE1}-{ROLE2}_{Feat}",
+            not just the leaf folder name).
+        agreement_label: Prose label for the page subtitle on the diagnostics-enabled
+            page (e.g. "Subject-Verb" / "Subject-Auxiliary") -- only meaningful
+            alongside "agreement" in target_col. Defaults to "Subject-Verb" so every
+            pre-existing SVA call site is unaffected without passing it explicitly.
+        head_role_label: Prose label standing in for the generic "head" role in the
+            diagnostics-enabled page's "Dropped before fitting" stats/tooltips and
+            legend text (e.g. "Verb" for SVA, "Aux" for subj_aux) -- purely cosmetic,
+            same idea as agreement_label. "head" (default) is a no-op.
+        subject_label, nsubj_label: Prose labels standing in for the generic
+            "subject"/"nsubj" role in the "ambiguous subject" bucket and "# nsubj
+            unk" stat -- both name the same fixed/comparison role (the one
+            create_pairs keeps constant while reinflecting the other), just two
+            historically-different wordings for it. Defaults ("subject"/"nsubj")
+            are no-ops; a non-SVA caller (e.g. NPA, where the fixed role can be
+            any of its named roles, not just "the subject") should pass both.
         exclude_labels: Labels that, when they are the only labels present, mark a
             language as uninformative and cause it to be coloured yellow and omitted
             from the table (e.g. {"--", "+-"}).
@@ -286,7 +325,7 @@ def generate_html_deprel_index(
     """
     html_path = Path(html_directory)
     include_trivial_labels = include_trivial_labels or set()
-    is_agreement = "agreement" in target_col
+    is_agreement = is_agreement_predictor(target_col)
 
     # Detect trivial/too-small langs from placeholder HTML files;
     # placeholder page also covers "too few samples to fit a tree" for a
@@ -424,6 +463,7 @@ def generate_html_deprel_index(
         f.stem: f for f in html_path.glob("*.html") if f.name.lower() != "index.html"
     }
     deprel = html_path.name
+    url_path = url_path if url_path is not None else deprel
 
 
     # Generate table rows for both entropy types
@@ -438,7 +478,7 @@ def generate_html_deprel_index(
             )
 
             if lang_file:
-                lang_link = f'<a href="/multiblimp/{deprel}/{quote(lang_file.stem)}"{name_style}>{lang_name}</a>'
+                lang_link = f'<a href="/multiblimp/{url_path}/{quote(lang_file.stem)}"{name_style}>{lang_name}</a>'
             else:
                 lang_link = f"<span{name_style}>{lang_name}</span>"
 
@@ -503,7 +543,7 @@ def generate_html_deprel_index(
 
             languages.append({
                 "name": lang_name,
-                "langUrl": f"/multiblimp/{deprel}/{quote(lang_file.stem)}" if lang_file else None,
+                "langUrl": f"/multiblimp/{url_path}/{quote(lang_file.stem)}" if lang_file else None,
                 "color": color if color != "#2563eb" else None,
                 "base": row["base_entropy"],
                 "reduced": row["reduced_entropy"],
@@ -531,7 +571,7 @@ def generate_html_deprel_index(
         for _, row in metrics_df.iterrows():
             lang_name = row["language"].replace("_", " ")
             lang_file = html_files.get(row["language"])  # ← stem matches directly
-            url = f"/multiblimp/{deprel}/{quote(lang_file.stem)}" if lang_file else None
+            url = f"/multiblimp/{url_path}/{quote(lang_file.stem)}" if lang_file else None
 
             data.append(
                 {
@@ -597,7 +637,7 @@ def generate_html_deprel_index(
             dist_str = _fmt_dist(dist)
             lang_file = html_files.get(lang)  # ← stem matches directly
             if lang_file:
-                url = f"/multiblimp/{deprel}/{quote(lang_file.stem)}"
+                url = f"/multiblimp/{url_path}/{quote(lang_file.stem)}"
                 skipped_links.append(
                     f'<a href="{url}" style="color:#b893de;font-weight:600;">{lang_display}</a> ({dist_str})'
                 )
@@ -646,6 +686,11 @@ def generate_html_deprel_index(
         diagnostics_enabled=diagnostics_enabled,
         languages_six_json=languages_six_json,
         languages_binary_json=languages_binary_json,
+        leaf_threshold=leaf_threshold if is_agreement else None,
+        agreement_label=agreement_label,
+        head_role_label=head_role_label,
+        subject_label=subject_label,
+        nsubj_label=nsubj_label,
     )
 
     output_path = html_path / "index.html"

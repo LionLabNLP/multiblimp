@@ -16,7 +16,6 @@ from glob import glob
 
 import pandas as pd
 
-# item_type -> requested column label
 BUCKET_LABELS = {
     "no_candidates": "no match",
     "no_inflections": "no inflection",
@@ -125,6 +124,7 @@ def language_diagnostics_row(lang: str, lang_dir: str) -> dict:
 
     row = {
         "Language": lang,
+        "leaf_threshold": meta.get("leaf_threshold"),
         "# minimal pairs": n_pairs,
         "# forms of interest": num_forms_of_interest,
         "% covered by UM": pct(num_covered_um, num_forms_of_interest),
@@ -157,7 +157,7 @@ def generate_diagnostics_table(pairs_dir: str) -> pd.DataFrame:
     (e.g. '../../minimal_pairs/svNa/svNa_nsubj'), sorted by language name.
     """
     base_cols = [
-        "Language", "# minimal pairs", "# forms of interest",
+        "Language", "leaf_threshold", "# minimal pairs", "# forms of interest",
         "% covered by UM", "% covered by UM+UD",
         "# UD candidates (raw)", "# UD candidates (kept)",
         "# UM lemmas", "# UM Forms",
@@ -249,7 +249,9 @@ def diagnostics_row_to_json(row, lang_dir: str | None = None) -> dict:
             value = col[2:-1].split("|")[0]  # "P(SG|SG)" -> "SG"
             probs[value] = round(float(val), 3)
 
+    leaf_threshold = row.get("leaf_threshold")
     result = {
+        "leafThreshold": None if leaf_threshold is None or pd.isna(leaf_threshold) else float(leaf_threshold),
         "nPairs": int(_num(row, "# minimal pairs")),
         "nForms": int(_num(row, "# forms of interest")),
         "pctUM": float(_num(row, "% covered by UM")),

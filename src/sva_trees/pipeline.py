@@ -3,8 +3,8 @@ import sys
 import random
 import math
 import gc
-import json
 import joblib
+import traceback
 
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from pandas import DataFrame
@@ -22,47 +22,14 @@ from word_order.viz_deprel import generate_html_deprel_index
 from word_order.viz_overview import generate_html_overview_index
 from multiblimp.languages import lang2langcode, gblang2udlang
 from multiblimp.unimorph import load_inflector
+from multiblimp.agreement_pipeline_utils import (
+    available_system_memory_bytes, find_other_running_instances,
+    limit_process_memory, read_unk_counts,
+)
 from sva_trees.create_pairs import create_pairs
 from sva_trees.diagnostics import generate_diagnostics_table, write_diagnostics_csv, diagnostics_row_to_json
 
 random.seed(42)
-
-def _total_system_memory_bytes():
-    """Best-effort total physical RAM, POSIX only. None if undetectable
-    (e.g. Windows). Only used as a fallback when /proc/meminfo isn't
-    available — prefer _available_system_memory_bytes for anything
-    memory-cap-related.
-    """
-    try:
-        return os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES")
-    except (ValueError, OSError, AttributeError):
-        return None
-
-
-def _available_system_memory_bytes():
-    """Best-effort currently-available memory."""
-    try:
-        with open("/proc/meminfo") as f:
-            for line in f:
-                if line.startswith("MemAvailable:"):
-                    return int(line.split()[1]) * 1024
-    except (FileNotFoundError, OSError, ValueError, IndexError):
-        pass
-    return _total_system_memory_bytes()
-
-
-def _limit_worker_memory(max_bytes):
-    """ProcessPoolExecutor initializer: caps this worker's address space so a
-    runaway language (huge treebank/lookup tables) hits a catchable
-    MemoryError instead of letting the OS OOM-killer kill processes system-
-    wide (which is what takes down unrelated services, not just this pool).
-    """
-    try:
-        import resource
-        resource.setrlimit(resource.RLIMIT_AS, (max_bytes, max_bytes))
-    except (ImportError, ValueError, OSError):
-        pass
-
 
 def get_impurity(n, min_n=300, max_n=4000, max_val=0.1, min_val=0.01):
     if n <= min_n:
@@ -101,35 +68,6 @@ def get_ud_lookup_table(inflector):
     else:
         ud_data = None
     return ud_data
-
-
-def _find_other_running_instances(script_name):
-    """PIDs of other processes whose command line mentions script_name,
-    excluding this process itself. Uses pgrep -f; returns [] (skips the
-    check) if pgrep isn't available rather than blocking the run."""
-    import subprocess
-    try:
-        result = subprocess.run(
-            ["pgrep", "-f", script_name], capture_output=True, text=True
-        )
-    except (FileNotFoundError, OSError):
-        return []
-    pids = [int(p) for p in result.stdout.split() if p.strip().isdigit()]
-    return [p for p in pids if p != os.getpid()]
-
-
-def _read_unk_counts(decision_trees_dir, lang):
-    """word_order.decision_tree.fit_dt's <lang>_unk_counts.json ({"head_unk":
-    n, "nsubj_unk": n, "both_unk": n}), the same shape fit_dt returns directly
-    on a fresh fit. {} for languages with no file yet (never fit a tree, e.g.
-    trivial single-class languages, or too few post-drop rows) -- create_pairs
-    treats a falsy unk_counts the same as None.
-    """
-    fn = os.path.join(decision_trees_dir, f"{lang}_unk_counts.json")
-    if not os.path.exists(fn):
-        return {}
-    with open(fn) as f:
-        return json.load(f)
 
 
 class Pipeline:
@@ -184,7 +122,7 @@ class Pipeline:
     def _worker_mem_bytes(self):
         if self.max_worker_mem_gb is not None:
             return int(self.max_worker_mem_gb * 1024**3)
-        available_mem = _available_system_memory_bytes()
+        available_mem = available_system_memory_bytes()
         if available_mem is None:
             return None
         return int((available_mem * self.mem_headroom) / self.n_jobs)
@@ -195,7 +133,7 @@ class Pipeline:
 
         if not self.force:
             script_name = os.path.basename(sys.argv[0])
-            other_pids = _find_other_running_instances(script_name)
+            other_pids = find_other_running_instances(script_name)
             if other_pids:
                 raise RuntimeError(
                     f"Another instance of {script_name} appears to already be "
@@ -212,18 +150,33 @@ class Pipeline:
         if worker_mem_bytes is not None:
             print(f"Capping each of {self.n_jobs} worker(s) to "
                   f"{worker_mem_bytes / 1024**3:.1f} GB RAM")
-            initializer, initargs = _limit_worker_memory, (worker_mem_bytes,)
+            initializer, initargs = limit_process_memory, (worker_mem_bytes,)
         else:
             initializer, initargs = None, ()
         # Always through ProcessPoolExecutor, even at n_jobs=1 -- see
         # max_tasks_per_child's docstring above for why a plain serial
         # for-loop in this process isn't safe for a full-corpus run.
+        #
+        # Per-language error isolation (matches subj_aux.pipeline.
+        # SubjAuxPipeline): a failing language is caught and logged (message
+        # + full traceback) rather than re-raised, so one bad language in a
+        # long sweep doesn't take the diagnostics table/deprel index/
+        # overview index below down with it for every OTHER language that
+        # already succeeded -- those still get written to disk regardless
+        # of how many other languages failed alongside them.
         with ProcessPoolExecutor(max_workers=self.n_jobs,
                                   max_tasks_per_child=self.max_tasks_per_child,
                                   initializer=initializer, initargs=initargs) as executor:
-            futures = [executor.submit(self._process_language, lang) for lang in langs]
-            for future in as_completed(futures):
-                future.result()  # re-raise any worker exception here
+            future_to_lang = {
+                executor.submit(self._process_language, lang): lang for lang in langs
+            }
+            for future in as_completed(future_to_lang):
+                lang = future_to_lang[future]
+                try:
+                    future.result()
+                except Exception as e:
+                    print(f"  FAILED: {lang}: {e}")
+                    traceback.print_exc()
 
         for deprel in self.target.child_deprels:
             pairs_dir = f"../../minimal_pairs/{self.target_id}/{self.target_id}_{deprel}"
@@ -253,6 +206,7 @@ class Pipeline:
                             leaf_threshold=self.leaf_threshold,
                             pairs_dir=pairs_dir,
                             diagnostics_by_lang=diagnostics_by_lang,
+                            head_role_label="Verb",
                             )
         print("Generating overview index")
         generate_html_overview_index(html_directory=f"../../decision_trees/")
@@ -364,7 +318,7 @@ class Pipeline:
             else:
                 dt_df = read_df(lang, word_order_dir=decision_trees_dir)
                 model = joblib.load(f"{decision_trees_dir}/{lang}.joblib")
-                unk_counts = _read_unk_counts(decision_trees_dir, lang)
+                unk_counts = read_unk_counts(decision_trees_dir, lang)
 
             if self.never_skip or not os.path.exists(f"../../decision_trees/{self.target_id}/{lang}.html"):
                 tree2html(
@@ -385,7 +339,10 @@ class Pipeline:
                         if self.simplify else
                         {"Yes": "#31cb9f", "No": "#f16393",
                         "+-": "#e5c64d", "--": "#b893de"}
-                    )
+                    ),
+                    leaf_threshold=self.leaf_threshold,
+                    full_label_distribution=label_distribution,
+                    head_label="Verb",
                 )
             try:
                 create_pairs(dt_df, swap_feat=self.predictor_var , inflector=inflector,
@@ -395,6 +352,7 @@ class Pipeline:
                         num_form=num_form,
                         full_df=full_df,
                         unk_counts=unk_counts,
-                        label_distribution=label_distribution)
+                        label_distribution=label_distribution,
+                        head_label="Verb")
             except KeyError:
                 print(f"Skipping {lang} for {deprel}, missing column")

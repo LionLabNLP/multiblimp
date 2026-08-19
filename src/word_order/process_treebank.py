@@ -757,6 +757,23 @@ def extract_instances(
             for target_feature in target_features:
                 head_val = head_features.get(f"head_{target_feature}", None)
                 child_val = child_features.get(f"{deprel}_{target_feature}", None)
+
+                # Default assumption: a NOUN/PROPN token of interest without
+                # an explicit Person annotation is assumed 3rd person, but
+                # only when its paired counterpart in this relation (e.g.
+                # the verb head in SVA) does carry an explicit Person value
+                # -- i.e. Person is attested for this relation, just not
+                # marked on this particular token.
+                if target_feature == "Person":
+                    if head_val is None and child_val is not None and head["upos"] in ("NOUN", "PROPN"):
+                        head_val = "3"
+                        head_features[f"head_{target_feature}"] = head_val
+                        instance[f"head_{target_feature}"] = head_val
+                    elif child_val is None and head_val is not None and child["upos"] in ("NOUN", "PROPN"):
+                        child_val = "3"
+                        child_features[f"{deprel}_{target_feature}"] = child_val
+                        instance[f"{deprel}_{target_feature}"] = child_val
+
                 if head_val == child_val:
                     if head_val != None:
                         agreement_label = "Yes"  # both set and agreeing
@@ -873,6 +890,49 @@ def extract_features(
     return dfs
 
 
+def drop_singleton_cols(
+    df: pd.DataFrame, target: "PredictionTarget | None" = None, extra_always_keep=()
+) -> pd.DataFrame:
+    """Drop columns with only a single distinct value -- shared by
+    create_word_order_df's own drop_singleton_columns=True path and any
+    caller (e.g. subj_aux.pipeline) that needs the identical rule applied
+    to a dataframe it built or post-processed itself, so both stay
+    correct/in sync automatically rather than maintaining two copies that
+    can silently drift apart (a real divergence this fixed: an earlier
+    subj_aux-local copy used nunique() -- dropna=True by default -- so a
+    column alternating between one real value and NaN ["not annotated"]
+    was wrongly treated as a singleton and dropped; the dropna=False
+    behaviour here is the one that was always intended).
+
+    always_keep, regardless of uniqueness: deprel_order/sen/no_space_after/
+    treebank/sent_id/tree_idx, any column ending in "agreement"/"_idx"/
+    "_form", target.head_feats columns (e.g. SVA's spGa's "head_VerbForm"
+    filter value -- fit_dt filters real constants independently, so this
+    isn't papering over anything), and extra_always_keep (e.g. subj_aux's
+    "head_{AUX_COUNT_FEAT}", needed downstream to split single-vs-stacked-
+    aux instances even when every row in a given language happens to share
+    the same count).
+
+    No-op on an empty df (nunique/df[[]] on 0 rows is well-defined but
+    pointless work).
+    """
+    if len(df) == 0:
+        return df
+    always_keep = {"deprel_order", "sen", "no_space_after", "treebank", "sent_id", "tree_idx"}
+    always_keep.update(col for col in df.columns if col.endswith("agreement"))
+    always_keep.update(col for col in df.columns if col.endswith("_idx"))
+    always_keep.update(col for col in df.columns if col.endswith("_form"))
+    if target is not None and target.head_feats:
+        always_keep.update(f"head_{feat}" for feat in target.head_feats)
+    always_keep.update(extra_always_keep)
+    cols_to_check = df.columns.difference(list(always_keep))
+    # dropna=False: a column that alternates between one real value and
+    # "not annotated" (NaN) is informative, not a singleton.
+    keep = df[cols_to_check].nunique(dropna=False) > 1
+    kept_always = [c for c in always_keep if c in df.columns]
+    return df[[*kept_always, *keep.index[keep]]].copy()
+
+
 def create_word_order_df(
     target: PredictionTarget | None = None,
     treebank: Treebank | None = None,
@@ -944,20 +1004,7 @@ def create_word_order_df(
     df = _categorize(df)
 
     if drop_singleton_columns and len(df) > 0:
-        always_keep = {"deprel_order", "sen", "no_space_after", "treebank", "sent_id", "tree_idx"}
-        always_keep.update(set([col for col in df.columns if col.endswith("agreement")]))
-        always_keep.update(set([col for col in df.columns if col.endswith("_idx")]))
-        always_keep.update(set([col for col in df.columns if col.endswith("_form")]))
-        # Keep target.head_feats columns even if singletons (e.g. spGa's
-        # VerbForm=Part) -- fit_dt filters constants independently.
-        if target is not None and target.head_feats:
-            always_keep.update({f"head_{feat}" for feat in target.head_feats})
-        cols_to_check = df.columns.difference(list(always_keep))
-        # dropna=False: a column that alternates between one real value and
-        # "not annotated" (NaN) is informative
-        keep = df[cols_to_check].nunique(dropna=False) > 1
-        kept_always = [c for c in always_keep if c in df.columns]
-        df = df[[*kept_always, *keep.index[keep]]].copy()
+        df = drop_singleton_cols(df, target=target)
 
     if save_to is not None and len(df) > 0:
         output_lang = gblang2udlang.get(lang, lang).replace(" ", "_")

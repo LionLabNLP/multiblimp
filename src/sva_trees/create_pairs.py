@@ -13,6 +13,7 @@ sys.path.append("../")
 from multiblimp.swap_features import *
 from word_order.prediction_target import PredictionTarget, nsubj_target
 from word_order.utils import build_grew_link
+from word_order.decision_tree import UNK_LABELS
 from multiblimp.unimorph import load_inflector
 
 
@@ -108,11 +109,6 @@ def _detect_swap_col(row):
     return None, None
 
 
-def _resolve_kind(row, default_kind="head"):
-    _, kind = _detect_swap_col(row)
-    return kind or default_kind
-
-
 # ── Metadata: feats + treebank link ──────────────────────────────────────────
 
 def _feats_summary(row, prefix, highlight_feat=None) -> str:
@@ -123,6 +119,12 @@ def _feats_summary(row, prefix, highlight_feat=None) -> str:
     extract_node_features's f"{prefix}_{feat}" convention; excludes the many other
     {prefix}_-prefixed columns (form, idx, deprel, sibling-*, child-*, ...) since
     those never look like a bare CamelCase feature name.
+
+    Also includes the node's upos (extract_node_features's "{prefix}_pos" column
+    -- displayed as "upos=..." rather than the column's own "pos" label, first
+    in the list, ahead of the morphological feats) -- same convention word_order/
+    viz_tree.py's _build_feat_columns uses for the tree page's own per-token
+    feature list, so the two stay consistent.
 
     highlight_feat: the feature actually being swapped/compared (e.g. "Number"),
     bolded in the list so it's easy to spot among the node's other features."""
@@ -144,10 +146,15 @@ def _feats_summary(row, prefix, highlight_feat=None) -> str:
             highlight_val = val_str
         pairs.append((feat, line))
 
+    pairs.sort(key=lambda p: p[0])
+
+    upos_val = row.get(f"{prefix}_pos")
+    if pd.notna(upos_val) and upos_val not in (None, "None", "", "_missing", "_"):
+        pairs.insert(0, ("upos", f"upos={html_lib.escape(str(upos_val))}"))
+
     if not pairs:
         return "&mdash;"
 
-    pairs.sort(key=lambda p: p[0])
     items = "<br>".join(line for _, line in pairs)
     badge = (
         f' &middot; <span class="swap-feat-badge">{html_lib.escape(highlight_feat)}={highlight_val}</span>'
@@ -165,11 +172,23 @@ def _treebank_link(row) -> str:
     return link if link is not None else "&mdash;"
 
 
-def _highlight_indices(row, kind, child_deprel=None) -> set:
-    """0-based positions in `sen` of the agreement-relevant tokens: the swapped
-    node (e.g. head) and, when known, its agreement partner (e.g. nsubj)."""
+def _highlight_indices(row, default_kind, child_deprel=None) -> set:
+    """0-based positions in `sen` of the agreement-relevant tokens: the
+    swap-role's own token (e.g. head) and, when known, its agreement
+    partner's (e.g. nsubj) -- always BOTH literal roles' own positions, not
+    just whichever one this particular row actually swapped. For SVA/
+    subj_aux (create_pairs' default swap_target=["head"], always the same
+    single swap role for every row) that's the only role that could ever be
+    swapped anyway, so this is equivalent to highlighting just the swapped
+    one. For NPA's non-head pairs (npa.agreement.create_npa_pairs_for_target_col,
+    which reinflects EITHER role depending on direction, merging both into
+    one bucket) a row's "swap" and "fixed" role differ from row to row, so
+    highlighting only one literal side would silently miss the other token
+    on whichever rows swapped it instead -- highlighting both, always,
+    means every example's two agreement-relevant tokens get bolded
+    regardless of which one that particular row happened to reinflect."""
     idx = set()
-    idx_col = f"{kind}_idx"
+    idx_col = f"{default_kind}_idx"
     if idx_col in row.index and pd.notna(row.get(idx_col)):
         idx.add(int(row[idx_col]) - 1)
     if child_deprel:
@@ -196,7 +215,10 @@ def _sentence_pair(row, treebank=None, child_deprel=None, default_kind="head"):
     swap_col, kind = _detect_swap_col(row)
     kind = kind or default_kind
     idx_col = f"{kind}_idx"
-    highlight_idx = _highlight_indices(row, kind, child_deprel)
+    # default_kind (not the row-resolved `kind`) -- see _highlight_indices'
+    # docstring: both known roles' tokens get bolded regardless of which
+    # one this row actually swapped.
+    highlight_idx = _highlight_indices(row, default_kind, child_deprel)
 
     swapped_tokens = None
     if swap_col is not None and idx_col in row.index and pd.notna(row.get(idx_col)):
@@ -265,33 +287,99 @@ def _diverse_sample(item_df: pd.DataFrame, max_examples: int, by: str = "feature
     return pd.DataFrame(picks) if picks else item_df.head(max_examples)
 
 
+def _display_kind(col: str, default_kind: str, head_label: str | None) -> str:
+    """Cosmetic-only relabeling of a column-name string's leading
+    "{default_kind}_" prefix (or a bare default_kind) to head_label, for
+    header display -- same idea as word_order.viz_tree.py's
+    _relabel_head_columns/_display_predictor_var (e.g. "Verb" for SVA,
+    "Aux" for subj_aux), kept as its own small copy here since these tables
+    key off default_kind/child_deprel rather than viz_tree's head_label
+    plumbing. head_label=None (the default) or equal to default_kind is a
+    no-op -- actual column lookups always use default_kind/col as-is, never
+    this relabeled string.
+    """
+    if not head_label or head_label == default_kind:
+        return col
+    if col == default_kind:
+        return head_label
+    if col.startswith(f"{default_kind}_"):
+        return head_label + col[len(default_kind):]
+    return col
+
+
 def _examples_table_html(item_df: pd.DataFrame, max_examples: int, treebank=None,
-                          child_deprel=None, default_kind="head", swap_feature=None) -> str:
+                          child_deprel=None, default_kind="head", swap_feature=None,
+                          head_label=None) -> str:
     """Small HTML table with up to max_examples sample rows from one diagnostics bucket,
     covering as many distinct feature_vals categories (e.g. SG -> PL vs PL -> SG) as
-    the example budget allows."""
+    the example budget allows.
+
+    child_deprel's and default_kind's own "_feats"/"_feats_after" columns
+    are always populated from THAT literal role's own row data -- never
+    resolved per row to "whichever one this row actually swapped" (a prior
+    version did that for default_kind's column, which mislabeled rows for
+    npa.agreement.create_npa_pairs_for_target_col's merged two-direction
+    buckets: a row that reinflected child_deprel instead of default_kind
+    would show child_deprel's own before/after transition under the column
+    header literally reading "{default_kind}_feats"/"..._feats_after").
+    default_kind's "_feats_after" column is unconditional (SVA/subj_aux
+    always reinflect it, so it's always meaningful); child_deprel's
+    "_feats_after" column only appears when at least one row in `item_df`
+    actually has an "after_{child_deprel}_*" value set (i.e. child_deprel
+    got reinflected on SOME row -- true only for NPA's non-head pairs,
+    never for SVA/subj_aux, where child_deprel is permanently fixed and
+    that column would otherwise render "&mdash;" on every single row).
+
+    head_label: cosmetic display label for default_kind's columns (e.g.
+    "Aux" instead of "head") -- see _display_kind. Applied only to header
+    text; every lookup below still uses default_kind itself.
+    """
     if item_df is None or len(item_df) == 0:
         return '<p class="empty">no examples</p>'
 
+    def _kind_of(col):
+        # Group columns by component (child_deprel, e.g. nsubj, vs.
+        # default_kind, e.g. head) so each component's columns sit together
+        # rather than alternating between components.
+        if child_deprel and col.startswith(f"{child_deprel}_"):
+            return "child"
+        if default_kind and col.startswith(f"{default_kind}_"):
+            return "default"
+        return "other"
+
     preferred = [c for c in item_df.columns if c.endswith("_form") or c in ("feature_vals", "alternatives")]
-    forms = sorted(c for c in preferred if c.endswith("_form"))
-    rest = [c for c in preferred if c not in forms]
-    cols = (forms + rest)[:6] or list(item_df.columns[:6])
+    forms = [c for c in preferred if c.endswith("_form")]
+    other = [c for c in preferred if c not in forms]
+    kind_rank = {"child": 0, "default": 1, "other": 2}
+    cols = (sorted(forms, key=lambda c: kind_rank[_kind_of(c)]) + other)[:6] or list(item_df.columns[:6])
+
+    child_form_cols = [c for c in cols if _kind_of(c) == "child"]
+    default_form_cols = [c for c in cols if _kind_of(c) == "default"]
+    other_cols = [c for c in cols if _kind_of(c) == "other"]
 
     has_sentence = "sen" in item_df.columns
     has_treebank = "treebank" in item_df.columns and "sent_id" in item_df.columns
     sample = _diverse_sample(item_df, max_examples)
 
-    meta_cols = []
-    if default_kind:
-        meta_cols.append(f"{default_kind}_feats")
-        meta_cols.append(f"{default_kind}_feats_after")
-    if child_deprel:
-        meta_cols.append(f"{child_deprel}_feats")
-    if has_treebank:
-        meta_cols.append("treebank")
+    has_child_after = bool(child_deprel) and any(
+        col.startswith(f"after_{child_deprel}_") for col in item_df.columns
+    )
 
-    header_cols = (["before", "after"] if has_sentence else []) + cols + meta_cols
+    child_group = child_form_cols + (
+        [f"{child_deprel}_feats"] + ([f"{child_deprel}_feats_after"] if has_child_after else [])
+        if child_deprel else []
+    )
+    default_group = default_form_cols + ([f"{default_kind}_feats", f"{default_kind}_feats_after"] if default_kind else [])
+    # Header text only -- _display_kind relabels default_kind's columns
+    # (e.g. "head_form" -> "Aux_form") for readability; every lookup below
+    # still uses the raw child_form_cols/default_form_cols/default_kind.
+    default_group_display = [_display_kind(c, default_kind, head_label) for c in default_group]
+
+    header_cols = (
+        (["before", "after"] if has_sentence else []) + child_group + default_group_display + other_cols
+    )
+    if has_treebank:
+        header_cols.append("treebank")
     header = "".join(f"<th>{html_lib.escape(c)}</th>" for c in header_cols)
     body_rows = ""
     for _, row in sample.iterrows():
@@ -301,13 +389,16 @@ def _examples_table_html(item_df: pd.DataFrame, max_examples: int, treebank=None
                                             default_kind=default_kind)
             cells += f'<td class="sentence">{_fmt_sentence(before)}</td>'
             cells += f'<td class="sentence">{_fmt_sentence(after)}</td>'
-        cells += "".join(f"<td>{_fmt_cell(row[c])}</td>" for c in cols)
-        if default_kind:
-            kind = _resolve_kind(row, default_kind)
-            cells += f'<td class="feats">{_feats_summary(row, kind, highlight_feat=swap_feature)}</td>'
-            cells += f'<td class="feats">{_feats_summary(row, f"after_{kind}", highlight_feat=swap_feature)}</td>'
+        cells += "".join(f"<td>{_fmt_cell(row[c])}</td>" for c in child_form_cols)
         if child_deprel:
             cells += f'<td class="feats">{_feats_summary(row, child_deprel, highlight_feat=swap_feature)}</td>'
+            if has_child_after:
+                cells += f'<td class="feats">{_feats_summary(row, f"after_{child_deprel}", highlight_feat=swap_feature)}</td>'
+        cells += "".join(f"<td>{_fmt_cell(row[c])}</td>" for c in default_form_cols)
+        if default_kind:
+            cells += f'<td class="feats">{_feats_summary(row, default_kind, highlight_feat=swap_feature)}</td>'
+            cells += f'<td class="feats">{_feats_summary(row, f"after_{default_kind}", highlight_feat=swap_feature)}</td>'
+        cells += "".join(f"<td>{_fmt_cell(row[c])}</td>" for c in other_cols)
         if has_treebank:
             cells += f'<td class="treebank">{_treebank_link(row)}</td>'
         body_rows += f"<tr>{cells}</tr>"
@@ -317,18 +408,23 @@ def _examples_table_html(item_df: pd.DataFrame, max_examples: int, treebank=None
 
 
 def bucket_examples_html(diagnostic_dfs: dict, item_types, max_examples: int = 5, treebank=None,
-                          child_deprel=None, default_kind="head", swap_feature=None) -> dict:
+                          child_deprel=None, default_kind="head", swap_feature=None,
+                          head_label=None) -> dict:
     """_examples_table_html for every requested bucket at once, keyed by
     item_type -- what create_pairs() folds into the "examples" key of each
     language's meta.json, which word_order.html.html_deprel's report links to
     inline. Missing/empty buckets still get a "no examples" fragment rather
     than a missing key, since callers key off the same items every time.
+
+    head_label: see _examples_table_html/_display_kind -- cosmetic column
+    header relabeling only (e.g. "Aux" for subj_aux), None is a no-op.
     """
     return {
         item_type: _examples_table_html(
             diagnostic_dfs.get(item_type, pd.DataFrame()), max_examples,
             treebank=treebank, child_deprel=child_deprel,
             default_kind=default_kind, swap_feature=swap_feature,
+            head_label=head_label,
         )
         for item_type in item_types
     }
@@ -426,7 +522,7 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
                   swap_target=["head",], context_inflector=None, max_num_of_pairs=None,
                   leaf_threshold=0.1, save_to=None,
                   max_examples=5, num_lemma=None, num_form=None, full_df=None,
-                  unk_counts=None, label_distribution=None):
+                  unk_counts=None, label_distribution=None, head_label=None):
     """
     Create re-inflected minimal sentence pairs for each row in the decision tree dataframe.
 
@@ -459,6 +555,11 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
             unk rows -- so it stays meaningful even though dt_df itself never has unk
             rows when drop_unk=True. Folded into meta.json under "label_distribution".
             None (default) omits the key.
+        head_label: cosmetic display label for the "head" role's columns in every
+            bucket's example table (e.g. "Aux" for subj_aux, "Verb" for SVA) -- see
+            bucket_examples_html/_examples_table_html/_display_kind. Header text
+            only; underlying lookups are unaffected. None (default) leaves headers
+            reading "head_form"/"head_feats" etc, unchanged from before this existed.
     Returns:
         dict[str, pd.DataFrame]: one DataFrame per diagnostics bucket (e.g. "correct_swaps").
     """
@@ -479,9 +580,34 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
     child_deprel = target.child_deprels[0]
     ufeat, _ = inflector.inflection_map
 
+    # Rows whose agreement label itself is unk (missing/undefined on the
+    # head, the child, or both) never enter the Yes-only reinflection loop
+    # below at all. Surfaced as three buckets split by which side is
+    # missing -- head_unk/nsubj_unk/both_unk -- matching exactly the
+    # categorization word_order.decision_tree.fit_dt already uses for the
+    # "Dropped before fitting" counts shown in the Results section, so
+    # these link straight from underneath those same counts rather than
+    # living in the bucket-breakdown zone (which is scoped to outcomes of
+    # attempted swaps, a different population entirely).
+    is_unk = full_df[swap_feat].isin(UNK_LABELS)
+    feat_match_unk = re.match(r".*_([A-Z][a-z]+)_.*", swap_feat)
+    head_col = f"head_{feat_match_unk.group(1)}" if feat_match_unk else None
+    child_col = f"{child_deprel}_{feat_match_unk.group(1)}" if feat_match_unk else None
+    if head_col in full_df.columns and child_col in full_df.columns:
+        head_missing = full_df[head_col].isna()
+        child_missing = full_df[child_col].isna()
+    else:
+        head_missing = child_missing = pd.Series(False, index=full_df.index)
+    both_unk_df = full_df[is_unk & head_missing & child_missing]
+    head_unk_df = full_df[is_unk & head_missing & ~child_missing]
+    nsubj_unk_df = full_df[is_unk & ~head_missing & child_missing]
+
     items_seen = 0
     feature_distribution = Counter()
     diagnostics = {
+                "head_unk": head_unk_df.to_dict("records"),
+                "nsubj_unk": nsubj_unk_df.to_dict("records"),
+                "both_unk": both_unk_df.to_dict("records"),
                 "correct_swaps": [],
                 "same_forms": [],
                 "same_features": [],
@@ -501,17 +627,7 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
     else:
         columns = list(swap_df.columns)
         # Precompute, once, which columns hold each swap kind's morphological
-        # features (was re-matched via regex on every row before). One
-        # pattern for both the filter and the extraction -- a two-regex
-        # split (a loose filter, then a stricter one to pull the name out)
-        # used to live here and had two bugs: [A-Z][a-z]+ requires a
-        # lowercase run right after the capital, so any all-caps-run feature
-        # name (rare, but real -- broke on it for Madi) matched the loose
-        # filter but not the strict one, crashing on .group(1) of a None
-        # match; and un-anchored re.match silently truncated every ordinary
-        # two-word CamelCase feature (VerbForm, NumType, PronType, ...) to
-        # just its first capitalized run ("Verb", "Num", "Pron"), corrupting
-        # og_feats' keys for every language, not just edge-case ones.
+        # features (was re-matched via regex on every row before).
         kind_feat_cols = {
             kind: [
                 (col, m.group(1))
@@ -590,6 +706,7 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
             full_df, child_deprel, inflector
         )
         meta = {
+            "leaf_threshold": leaf_threshold,
             "num_ud_candidates_raw": n_raw,
             "num_ud_candidates_keep": n_keep,
             "items_seen": items_seen,
@@ -607,7 +724,7 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
         meta["examples"] = bucket_examples_html(
             diagnostic_dfs, list(diagnostic_dfs), max_examples=max_examples,
             child_deprel=child_deprel, default_kind=swap_target[0],
-            swap_feature=swap_feature,
+            swap_feature=swap_feature, head_label=head_label,
         )
         with open(os.path.join(save_to, "meta.json"), "w") as f:
             json.dump(meta, f)

@@ -11,7 +11,7 @@ import pandas as pd
 from matplotlib.colors import to_hex
 
 from .entropy import order_entropy, calculate_base_entropy, calculate_tree_entropy
-from .utils import get_all_orders, build_grew_link
+from .utils import get_all_orders, build_grew_link, split_pairwise_predictor
 from .html.html_tree import create_html, write_placeholder_html
 
 
@@ -142,17 +142,94 @@ def get_sample_ids(prep, clf, dt_df, predictor_var, max_rows=100, seed=42):
 
 
 # ── Agreement swap highlighting (head <-> child feature, e.g. SVA) ────────────
-# Applies only when predictor_var is an agreement predictor (e.g.
-# "head_nsubj_Number_agreement") with a known target — mirrors the highlighting
-# built for sva_trees.create_pairs's example tables. No-op for plain word-order
-# targets.
+# Applies only when predictor_var is an agreement predictor with a known
+# highlight pair — mirrors the highlighting built for sva_trees.create_pairs's
+# example tables. No-op for plain word-order targets.
+#
+# Two disjoint predictor_var conventions are recognized (SVA's own
+# convention never contains "-", so checking for one first is unambiguous):
+#   - Pairwise role-pair naming, e.g. npa_trees' "HEAD-DET_Number":
+#     "{Role1}-{Role2}_{Feature}" -- highlights both roles directly by name,
+#     in whatever case they appear in predictor_var (NOT lowercased: unlike
+#     SVA's own always-lowercase deprel-based prefixes, e.g. "nsubj",
+#     npa_trees' role prefixes are uppercase by convention -- "HEAD_idx",
+#     "HEAD_Gender", etc. -- and _build_feat_columns/_add_sen_str_column
+#     both key off the prefix exactly as it appears in the column name, so
+#     the highlight-prefix casing has to match that exactly too), no target
+#     needed.
+#   - SVA's "head_{child_deprel}_{Feature}_agreement" (e.g.
+#     "head_nsubj_Number_agreement"): requires "agreement" in the string
+#     and a PredictionTarget with child_deprels set -- highlights the
+#     literal "head" role plus target.child_deprels[0].
 
 def _agreement_context(predictor_var, target):
-    """Returns (swap_feature, child_deprel) for an agreement predictor, else (None, None)."""
-    if not predictor_var or "agreement" not in predictor_var or target is None or not target.child_deprels:
-        return None, None
+    """Returns (swap_feature, highlight_prefixes) for an agreement
+    predictor, else (None, ())."""
+    if not predictor_var:
+        return None, ()
+
+    pair_match = split_pairwise_predictor(predictor_var)
+    if pair_match:
+        role1, role2, feat = pair_match
+        return feat, (role1, role2)
+
+    if "agreement" not in predictor_var or target is None or not target.child_deprels:
+        return None, ()
     match = re.match(r".*_([A-Z][a-z]+)_.*", predictor_var)
-    return (match.group(1) if match else None), target.child_deprels[0]
+    return (match.group(1) if match else None), ("head", target.child_deprels[0])
+
+
+def _display_predictor_var(predictor_var, head_label):
+    """predictor_var, cosmetically cleaned up for the info-panel "Predictor"
+    row: its trailing "_agreement" dropped (redundant on this page -- every
+    predictor here is one) and its "head" role token swapped for a
+    stream-specific, human-readable label (e.g. "Verb" for SVA, "Aux" for
+    subj_aux, "NP head" for npa). The underlying dataframe/column-name
+    convention (always literally "head"/"HEAD", and always "_agreement"-
+    suffixed for SVA/subj_aux) is untouched; only this display string
+    changes.
+
+    Handles both predictor_var conventions _agreement_context does: the
+    pairwise "{Role1}-{Role2}_{Feature}" naming (relabels whichever role is
+    "head", case-insensitively -- npa's is always uppercase "HEAD"; never
+    "_agreement"-suffixed, so that part is a no-op) and SVA/subj_aux's
+    "head_{child_deprel}_{Feature}_agreement" (relabels the leading "head"
+    segment). head_label="head" (the default) skips the role relabeling but
+    still drops "_agreement".
+    """
+    if not predictor_var:
+        return predictor_var
+    pair_match = split_pairwise_predictor(predictor_var)
+    if pair_match:
+        role1, role2, feat = pair_match
+        if head_label != "head":
+            role1 = head_label if role1.lower() == "head" else role1
+            role2 = head_label if role2.lower() == "head" else role2
+        return f"{role1}-{role2}_{feat}"
+    display = predictor_var
+    if display.endswith("_agreement"):
+        display = display[: -len("_agreement")]
+    if head_label != "head" and display.lower().startswith("head_"):
+        display = head_label + display[len("head"):]
+    return display
+
+
+def _relabel_head_columns(records, head_label):
+    """Renames "head_*"/"HEAD_*" keys in each dict of `records` (e.g.
+    "head_form" -> "Aux_form") to head_label -- same cosmetic-only relabeling
+    as _display_predictor_var, applied to the sample-rows table's column
+    keys instead of the Predictor string. head_label="head" is a no-op.
+    """
+    if head_label == "head" or not records:
+        return records
+
+    def relabel_key(k):
+        for prefix in ("head_", "HEAD_"):
+            if k.startswith(prefix):
+                return head_label + k[len(prefix) - 1:]
+        return k
+
+    return [{relabel_key(k): v for k, v in r.items()} for r in records]
 
 
 def _highlighted_sen_str(sen, highlight_idx) -> str:
@@ -179,27 +256,55 @@ def _add_sen_str_column(full_df, highlight_prefixes=()):
 
 
 def _build_feat_columns(full_df, swap_feature=None, highlight_prefixes=()):
-    """Build {prefix}_features list columns (one "Feat=Val" string per node feature),
-    bolding the swap-relevant feature's entry for prefixes in highlight_prefixes."""
-    feat_collect = {}
+    """Build {prefix}_features list columns (one "Feat=Val" string per node feature
+    that's actually set, skipping None/NaN/"_" -- extract_node_features creates a
+    "{prefix}_{feat}" column for every feat in the treebank's WHOLE feature
+    vocabulary regardless of POS, e.g. a verb Tense column exists, and is
+    null, on every noun row -- matches sva_trees/create_pairs.py's own
+    _feats_summary, which skips null values the same way), bolding the
+    swap-relevant feature's entry for prefixes in highlight_prefixes.
+
+    Includes each node's upos (extract_node_features's "{prefix}_pos" column
+    -- displayed as "upos=..." rather than the column's own "pos" label,
+    first in the list, ahead of the morphological Feats) alongside the
+    morphological feats proper.
+
+    Every row still contributes a (possibly empty) list to every prefix's
+    "{prefix}_features" entry, even a row with zero set features for that
+    prefix -- feat_collect's lists are later assigned directly as DataFrame
+    columns (full_df[k] = v in this function's callers), which requires
+    exactly len(full_df) entries in row order; silently omitting a row
+    whenever its features all happened to be null would misalign every
+    row after it.
+    """
     # Trailing (?:\[[a-z]+\])? admits UD's layered-feature suffix (e.g.
-    # "Number[psor]", "Gender[subj]")
-    feat_df = full_df.filter(regex=r"^[a-z]+_[A-Z][a-zA-Z]+(?:\[[a-z]+\])?$", axis=1)
+    # "Number[psor]", "Gender[subj]"). Prefix is [A-Za-z]+, not just [a-z]+:
+    # SVA's own prefixes ("head", "nsubj", ...) are always lowercase, but
+    # e.g. npa_trees' role-based prefixes ("HEAD", "DET", ...) are uppercase
+    # by design (pools NOUN/PROPN/PRON-headed NPs under one "HEAD" role) --
+    # this widens the match without narrowing it for any lowercase-prefixed
+    # caller.
+    morph_df = full_df.filter(regex=r"^[A-Za-z]+_[A-Z][a-zA-Z]+(?:\[[a-z]+\])?$", axis=1)
+    pos_cols = [c for c in full_df.columns if re.match(r"^[A-Za-z]+_pos$", c)]
+    feat_df = pd.concat([full_df[pos_cols], morph_df], axis=1) if pos_cols else morph_df
     feat_cols = list(feat_df.columns)
+    prefixes = {label.split("_")[0] for label in feat_cols}
+    feat_collect = {f"{p}_features": [] for p in prefixes}
     # itertuples(), not iterrows(): avoids rebuilding a full-width Series per row.
     for row_tuple in feat_df.itertuples(index=False, name=None):
-        mf = dict()
+        mf = {f"{p}_features": [] for p in prefixes}
         for label, val in zip(feat_cols, row_tuple):
+            if pd.isna(val) or val == "_":
+                continue
             prefix, feature = label.split("_")
             key = f"{prefix}_features"
-            mf[key] = mf.get(key, list())
             val_str = str(val)[:-2] if str(val).endswith(".0") else str(val)
-            entry = f"{feature}={val_str}"
+            display_feature = "upos" if feature == "pos" else feature
+            entry = f"{display_feature}={val_str}"
             if swap_feature and feature == swap_feature and prefix in highlight_prefixes:
                 entry = f"<strong>{entry}</strong>"
             mf[key].append(entry)
         for k, v in mf.items():
-            feat_collect[k] = feat_collect.get(k, list())
             feat_collect[k].append(v)
     return feat_collect
 
@@ -217,11 +322,11 @@ def get_samples(
     show_features=False,
     extra_columns=None,
     target=None,
+    head_label="head",
 ):
     sample_ids = get_sample_ids(prep, clf, dt_df, predictor_var, max_rows, seed)
 
-    swap_feature, child_deprel = _agreement_context(predictor_var, target)
-    highlight_prefixes = tuple(p for p in ("head", child_deprel) if p) if swap_feature else ()
+    swap_feature, highlight_prefixes = _agreement_context(predictor_var, target)
 
     keep_columns = ["sen_str"]
     _add_sen_str_column(full_df, highlight_prefixes=highlight_prefixes)
@@ -251,7 +356,9 @@ def get_samples(
     for predictor, node_sample_ids in sample_ids.items():
         predictor_samples[predictor] = {
             int(node_idx): {
-                "rows": full_df.loc[sample_ids][keep_columns].to_dict("records"),
+                "rows": _relabel_head_columns(
+                    full_df.loc[sample_ids][keep_columns].to_dict("records"), head_label
+                ),
                 "count": len(sample_ids),
                 "total_count": label_distribution[node_idx][class2idx[predictor]],
             }
@@ -367,7 +474,8 @@ def remove_censored(full_df):
 
 
 def build_placeholder_args(
-    dt_df, full_df, predictor_var, meta=None, show_features=False, target=None
+    dt_df, full_df, predictor_var, meta=None, show_features=False, target=None,
+    head_label="head",
 ):
     """Compute all arguments needed for write_placeholder_html."""
     # dt_df's predictor values may not actually be uniform: this placeholder
@@ -380,10 +488,9 @@ def build_placeholder_args(
     if meta is None:
         meta = {}
     meta["Training samples"] = f"{len(dt_df):,}"
-    meta["Predictor"] = predictor_var
+    meta["Predictor"] = _display_predictor_var(predictor_var, head_label)
 
-    swap_feature, child_deprel = _agreement_context(predictor_var, target)
-    highlight_prefixes = tuple(p for p in ("head", child_deprel) if p) if swap_feature else ()
+    swap_feature, highlight_prefixes = _agreement_context(predictor_var, target)
 
     _add_sen_str_column(full_df, highlight_prefixes=highlight_prefixes)
     full_df["treebank_link"] = build_treebank_links(full_df)
@@ -404,6 +511,7 @@ def build_placeholder_args(
     sample_rows = full_df.sample(min(50, len(full_df)), random_state=42)[
         keep_columns
     ].to_dict("records")
+    sample_rows = _relabel_head_columns(sample_rows, head_label)
 
     return label, meta, sample_rows
 
@@ -464,6 +572,12 @@ def _finalize_tree_html(
     ]  # normalize to str (clf.classes_ may be numpy ints)
     n_classes = len(classes)
     class2idx = {c: idx for idx, c in enumerate(classes)}
+    # Classes fit_dt dropped before fitting (e.g. "unk") only ever have a
+    # real (non-root-node) count via the legend/root distribution -- every
+    # other node's count for them is definitionally 0, since none of those
+    # rows ever reached a split. Used below to keep them out of each node's
+    # own dist/tooltip breakdown, where they'd just be permanent zero-clutter.
+    model_classes_str = {str(c) for c in model_classes}
 
     feature_names = prep.get_feature_names_out()
 
@@ -540,12 +654,20 @@ def _finalize_tree_html(
         node_color = hex_colors[display_class_idx]
         relative_entropy = impurity[i] / max_impurity
         dist_i = label_distribution[i]
-        n_right = max(dist_i)
-        n_wrong = sum(dist_i) - n_right
+        # Entropy/frac must only ever reflect classes the tree actually
+        # fit on -- at the root, dist_i also carries the dropped-class
+        # (e.g. "unk") count injected for the legend, which would otherwise
+        # inflate n_wrong/total_node there and desync this node's own H=/
+        # frac numbers from the tree's real n_samples[i] and accuracy.
+        dist_i_fitted = [
+            cnt for cnt, cls in zip(dist_i, classes) if cls in model_classes_str
+        ]
+        n_right = max(dist_i_fitted)
+        n_wrong = sum(dist_i_fitted) - n_right
         binary_entropy = order_entropy(n_right, n_wrong)
         node_color = interpolate_color(node_color, "#ffffff", relative_entropy * 0.72)
 
-        total_node = sum(dist_i) or 1
+        total_node = sum(dist_i_fitted) or 1
 
         # Small dim style shared by node-id and stats. direction:ltr +
         # unicode-bidi:isolate: the rule/leaf-label line above this span can be
@@ -574,8 +696,15 @@ def _finalize_tree_html(
             )
             hover_corr = list(corr)
         else:
-            # Leaf: include all classes with count >= 50% of the majority
-            sorted_dist = sorted(zip(dist_i, classes), key=lambda x: x[0], reverse=True)
+            # Leaf: include all classes with count >= 50% of the majority.
+            # dist_i_fitted (not dist_i): a depth-0/trivial tree's single
+            # leaf IS the root, so without this, a dropped class like "unk"
+            # -- large enough at the root to pass the >=50%-of-majority bar
+            # -- could show up right in the leaf's own predicted-class label.
+            sorted_dist = sorted(
+                zip(dist_i_fitted, [c for c in classes if c in model_classes_str]),
+                key=lambda x: x[0], reverse=True,
+            )
             top_cnt, top_cls = sorted_dist[0]
             qualifying = [top_cls] + [
                 cls for cnt, cls in sorted_dist[1:] if cnt > 0 and cnt >= 0.5 * top_cnt
@@ -611,6 +740,7 @@ def _finalize_tree_html(
             "dist": [
                 {"cls": cls, "cnt": int(cnt), "frac": cnt / total_node, "color": color}
                 for cls, cnt, color in zip(classes, label_distribution[i], hex_colors)
+                if cls in model_classes_str
             ],
             "corr": hover_corr,
             "is_leaf": bool(feature[i] == -2),
@@ -717,8 +847,13 @@ def _finalize_tree_html(
         clickmode="event",
         xaxis=dict(visible=False),
         yaxis=dict(visible=False),
-        plot_bgcolor="white",
-        paper_bgcolor="white",
+        # Transparent, not "white": the page (.tree-panel) paints its own
+        # var(--bg) behind the chart, light or dark. Node boxes stay
+        # light-toned regardless of theme (interpolate_color always blends
+        # toward white), by design -- only the empty canvas behind them
+        # needs to follow the page.
+        plot_bgcolor="rgba(0,0,0,0)",
+        paper_bgcolor="rgba(0,0,0,0)",
         margin=dict(l=10, r=10, t=10, b=10),
         font=dict(family="DM Sans, sans-serif"),
     )
@@ -750,6 +885,9 @@ def tree2html(
     show_features=False,
     full_tree_html=True,
     palette_map=None,
+    leaf_threshold=None,
+    full_label_distribution=None,
+    head_label="head",
 ):
     """
     pipeline_model:
@@ -769,13 +907,40 @@ def tree2html(
                 "Training samples": 4486,
             }
         If not provided, these values are computed automatically where possible.
+    leaf_threshold: the entropy cutoff sva_trees.create_pairs.create_pairs uses to
+        decide "keep" (leaf_top1_entropy < leaf_threshold) -- shown in the info
+        panel next to base/reduced entropy so it's visible right where it's
+        needed, without cross-referencing the create_pairs run that produced
+        this language's N Keep/minimal pairs. None omits the row (e.g. callers
+        that don't know it, or aren't showing agreement diagnostics at all).
+    full_label_distribution: {label: count} across the language's full
+        predictor_var column, BEFORE word_order.decision_tree.fit_dt's
+        UNK_LABELS drop (same dict sva_trees.pipeline already computes for
+        the deprel overview's distribution bar). Classes fit_dt dropped
+        (typically "unk", or "+-"/"--") never appear in the fitted model's
+        own class list, so without this they'd show a misleading 0 in the
+        root legend/distribution bar -- as if zero such rows existed, rather
+        than however many were excluded before the tree ever saw them. Only
+        applied to the root node (index 0): those rows never reach any split,
+        so every other node's count for them is correctly 0. None (default)
+        leaves dropped classes at 0, same as before this existed.
+    head_label: cosmetic display label for the "head" role in the info-panel
+        Predictor row and the sample table's column headers (e.g. "Verb" for
+        SVA, "Aux" for subj_aux, "NP head" for npa) -- see
+        _display_predictor_var/_relabel_head_columns. "head" (default) is a
+        no-op, unchanged from before this existed.
     """
+    if leaf_threshold is not None:
+        meta = dict(meta or {})
+        meta["Keep threshold"] = f"entropy &lt; {leaf_threshold:g}"
+
     if not full_tree_html:
         write_placeholder_html(
             out_file,
-            predictor_var,
+            _display_predictor_var(predictor_var, head_label),
             *build_placeholder_args(
-                dt_df, full_df, predictor_var, meta, show_features=show_features, target=target
+                dt_df, full_df, predictor_var, meta, show_features=show_features, target=target,
+                head_label=head_label,
             ),
         )
         return
@@ -820,16 +985,30 @@ def tree2html(
     for c in model_classes:
         if c not in classes:
             classes.append(c)
+    # get_all_orders enumerates word-order permutation codes -- meaningless
+    # for an agreement predictor_var (e.g. "Vs"/"sV"), so it and model_classes
+    # (which never includes "unk"/"+-"/"--" now that fit_dt drops them before
+    # fitting) never actually add a dropped class here. Append any class
+    # full_label_distribution has that isn't already shown, so it gets a
+    # legend entry/bar at all -- the counts themselves come from the root-node
+    # backfill below.
+    if full_label_distribution:
+        for c in full_label_distribution:
+            if c not in classes:
+                classes.append(c)
 
     n_classes = len(classes)
 
-    # Expand label_distribution to full display_classes (missing classes get 0)
+    # Expand label_distribution to full display_classes (missing classes get 0,
+    # except the root -- see full_label_distribution's docstring above).
     label_distribution = []
-    for dist in label_distribution_model:
+    for node_idx, dist in enumerate(label_distribution_model):
         full_dist = []
         for cls in classes:
             if cls in class2idx_model:
                 full_dist.append(dist[class2idx_model[cls]])
+            elif node_idx == 0 and full_label_distribution:
+                full_dist.append(full_label_distribution.get(cls, 0))
             else:
                 full_dist.append(0)
         label_distribution.append(full_dist)
@@ -861,7 +1040,7 @@ def tree2html(
     if "Training samples" not in meta:
         meta["Training samples"] = f"{root_samples:,}"
     if "Predictor" not in meta:
-        meta["Predictor"] = predictor_var
+        meta["Predictor"] = _display_predictor_var(predictor_var, head_label)
 
     predictor_samples = get_samples(
         prep,
@@ -875,6 +1054,7 @@ def tree2html(
         extra_columns=extra_columns,
         show_features=show_features,
         target=target,
+        head_label=head_label,
     )
 
     _finalize_tree_html(

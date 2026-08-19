@@ -14,7 +14,6 @@ from multiblimp.languages import (
 )
 
 
-
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--resource_dir", default="../../resources")

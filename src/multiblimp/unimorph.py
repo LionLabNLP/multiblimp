@@ -11,7 +11,7 @@ from .unimorph_features import load_um_features
 
 import sys
 sys.path.append("../../")
-from resources.um2ud_annotation.UM2UD_mapper import UM2UD_values
+from resources.um2ud_annotation.UM2UD_mapper import UM2UD_values, shortened_vals as SHORTENED_UM_VALS
 
 
 unmarked_features = {
@@ -52,6 +52,26 @@ def allval2um(val):
     # val is already a real UM tag (unimorph/ and ud_unimorph/ both store
     # real UM tags now, see multiblimp.ud2um), so just normalize casing.
     return val.upper()
+
+
+def um_val_to_ud(feat: str, val: str) -> str:
+    """A UM-format value (e.g. "PL", "NOM") for UD feature `feat` (e.g.
+    "Number", "Case") -> its UD-format value ("Plur", "Nom"). Same
+    (SHORTENED_UM_VALS-preferred, falling back to UM2UD) lookup precedence
+    resources.um2ud_annotation.UM2UD_mapper.parse_ufeat_value itself uses,
+    since a handful of short codes (the 1-2 letter argument-marking/
+    possession forms, e.g. "F"/"M"/"P"/"S") only exist in SHORTENED_UM_VALS,
+    not UM2UD_values.
+
+    Returns `val` unchanged if neither table has an entry for it under
+    `feat` specifically -- e.g. `val` is UNDEFINED, already UD-format, or a
+    tag whose UD2UM_values dict doesn't happen to set this particular
+    feature (a single UM tag can carry several UD features at once, e.g.
+    "V.PTCP" -> {"upos": "VERB", "VerbForm": "Part"}; only look up the one
+    `feat` names).
+    """
+    source = SHORTENED_UM_VALS if val in SHORTENED_UM_VALS else UM2UD
+    return source.get(val, {}).get(feat, val)
 
 
 def load_inflector(lang: str, langcode: str, unimorph_args, inflection_map: dict, 
@@ -835,15 +855,22 @@ class UnimorphInflector:
 
     @staticmethod
     def _rows_to_bundle(rows_df) -> Dict[str, Set[str]]:
-        """Every UM feature column's value(s) across `rows_df`, e.g. for
-        displaying a reinflected form's other features (flowchart's "after"
-        column). UNDEFINED means "no info", same as NaN -- excluded."""
+        """Every UM feature column's value(s) across `rows_df`, converted to
+        UD-format values (um_val_to_ud) -- e.g. for displaying a reinflected
+        form's other features (flowchart's "after_<role>_<Feat>" columns,
+        see sva_trees.create_pairs.create_pairs/npa.agreement.
+        create_npa_pairs), which should read like the rest of a row's
+        feature columns (all UD-format, e.g. "Plur"/"Nom") rather than
+        switching to UM's own short codes ("PL"/"NOM") just for this one
+        display. Column names are already UD feature names (Case, Gender,
+        Number, ...) regardless -- only the values were ever UM-coded, see
+        um_val_to_ud. UNDEFINED means "no info", same as NaN -- excluded."""
         bundle = {}
         for col in rows_df.columns:
             if col in ("lemma", "form", "ufeat", "upos"):
                 continue
             values = {
-                allval2um(val) for val in set(rows_df[col])
+                um_val_to_ud(col, allval2um(val)) for val in set(rows_df[col])
                 if isinstance(val, str) and val != UNDEFINED
             }
             if values:
@@ -953,6 +980,21 @@ class UnimorphInflector:
                 (swap_ufeat not in row.keys())
                 or (row[swap_ufeat] == UNDEFINED)
                 or pd.isna(row[swap_ufeat])
+            ):
+                skip_row = True
+
+            # lemma2form() always needs a "lemma" key in row_features (it
+            # pops it to look up lemma_groups) -- for closed-class POS
+            # tables sourced from the UD-derived fallback (e.g. DET, whose
+            # lemma annotation in UD is sparser/less consistent than for
+            # open-class POS like verbs), a matched row's own "lemma" can
+            # itself be missing. Previously that silently produced a
+            # row_features dict with no "lemma" key at all (since the loop
+            # below skips any NaN value, "lemma" included), and lemma2form's
+            # row_features.pop("lemma") raised a bare KeyError instead of
+            # this row just being skipped like any other unusable match.
+            if ("lemma" not in um_features) and (
+                ("lemma" not in row.keys()) or pd.isna(row["lemma"])
             ):
                 skip_row = True
 
