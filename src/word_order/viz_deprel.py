@@ -511,7 +511,9 @@ def generate_html_deprel_index(
     lang_colors = {}
     for _, row in metrics_six.iterrows():
         lang_name = row["language"].replace("_", " ")
-        if row["language"] in include_trivial_langs:
+        trivial_dist = include_trivial_langs.get(row["language"])
+        # Green means "categorical agreement throughout"
+        if trivial_dist is not None and set(trivial_dist) <= include_trivial_labels:
             lang_colors[lang_name] = "#31cb9f"  # green — matches palette_map "Yes"
         else:
             lang_colors[lang_name] = scatter_color(

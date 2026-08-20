@@ -989,7 +989,7 @@ def create_html(meta, node_samples, node_data, hex_colors, classes, div_id):
             const raw = r[c] == null ? "" : String(r[c]);
             let content;
             if (c.endsWith("_features")) {{
-              content = "<details><summary>features...</summary>" + raw.split(",").join("<br>") + "</details>";
+              content = "<details class='feat-details'><summary>features...</summary>" + raw.split(",").join("<br>") + "</details>";
             }} else {{
               content = raw;
             }}
@@ -1001,6 +1001,26 @@ def create_html(meta, node_samples, node_data, hex_colors, classes, div_id):
       }}
 
       container.innerHTML = html;
+      linkFeatureDetails(container);
+    }}
+
+    // Feature lists for different roles in the same example row (e.g. subject
+    // vs. verb) are separate <details> elements. Link them per-row so that
+    // opening/closing one toggles the others in that row to match, letting
+    // you compare both sides' features at a glance instead of expanding
+    // each one by hand.
+    function linkFeatureDetails(root) {{
+      root.querySelectorAll("tr").forEach(tr => {{
+        const detailsEls = tr.querySelectorAll("details.feat-details");
+        if (detailsEls.length < 2) return;
+        detailsEls.forEach(d => {{
+          d.addEventListener("toggle", () => {{
+            detailsEls.forEach(other => {{
+              if (other !== d) other.open = d.open;
+            }});
+          }});
+        }});
+      }});
     }}
 
     // ── Plotly setup ──
@@ -1178,7 +1198,7 @@ def write_placeholder_html(out_file, predictor_var, label, meta=None, sample_row
                         except Exception:
                             items = str(val)
                     content = (
-                        f"<details><summary>features...</summary>{items}</details>"
+                        f"<details class='feat-details'><summary>features...</summary>{items}</details>"
                     )
                 else:
                     content = str(val)
@@ -1279,6 +1299,22 @@ def write_placeholder_html(out_file, predictor_var, label, meta=None, sample_row
       {table_html}
     </div>
   </div>
+  <script>
+    // Feature lists for different roles in the same example row (e.g. subject
+    // vs. verb) are separate <details> elements. Link them per-row so that
+    // opening/closing one toggles the others in that row to match.
+    document.querySelectorAll(".ex-table tr").forEach(tr => {{
+      const detailsEls = tr.querySelectorAll("details.feat-details");
+      if (detailsEls.length < 2) return;
+      detailsEls.forEach(d => {{
+        d.addEventListener("toggle", () => {{
+          detailsEls.forEach(other => {{
+            if (other !== d) other.open = d.open;
+          }});
+        }});
+      }});
+    }});
+  </script>
 </body>
 </html>"""
 

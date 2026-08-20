@@ -160,7 +160,7 @@ def _feats_summary(row, prefix, highlight_feat=None) -> str:
         f' &middot; <span class="swap-feat-badge">{html_lib.escape(highlight_feat)}={highlight_val}</span>'
         if highlight_val is not None else ""
     )
-    return f'<details><summary>{len(pairs)} feats{badge}</summary>{items}</details>'
+    return f'<details class="feat-details"><summary>{len(pairs)} feats{badge}</summary>{items}</details>'
 
 
 def _treebank_link(row) -> str:

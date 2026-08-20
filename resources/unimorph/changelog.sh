@@ -103,3 +103,5 @@ sed "s/SUP/SPRL/" afr/afr > afr/afr2; mv afr/afr2 afr/afr
 # Swedish
 sed -E "/\tV;/s/;SG//" swe/swe > swe/swe2; mv swe/swe2 swe/swe
 sed -E "/\tV;/s/;PL//" swe/swe > swe/swe2; mv swe/swe2 swe/swe
+awk -F'\t' -v OFS='\t' '{gsub(/[;|]SG/,"",$3); gsub(/[;|]PL/,"",$3); print}' swe/swe.segmentations > swe/swe.segmentations2
+mv swe/swe.segmentations2 swe/swe.segmentations

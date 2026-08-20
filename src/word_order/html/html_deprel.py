@@ -1566,9 +1566,29 @@ def _create_diagnostics_html(
       const n = bucketCount(lang, bucketKey);
       examplesSubtitle.textContent = `Sample rows that landed in this bucket (n=${{n.toLocaleString()}}).`;
       examplesBody.innerHTML = lang.diag.examples[bucketKey];
+      linkFeatureDetails(examplesBody);
       examplesOverlay.classList.add("open");
     }}
     function closeExamplesModal() {{ examplesOverlay.classList.remove("open"); }}
+
+    // Feature lists for different roles in the same example row (e.g.
+    // {nsubj_label} vs. {head_role_label}) are separate <details> elements.
+    // Link them per-row so that opening/closing one toggles the others in
+    // that row to match, letting you compare both sides' features at a
+    // glance instead of expanding each one by hand.
+    function linkFeatureDetails(root) {{
+      root.querySelectorAll("tr").forEach(tr => {{
+        const detailsEls = tr.querySelectorAll("details.feat-details");
+        if (detailsEls.length < 2) return;
+        detailsEls.forEach(d => {{
+          d.addEventListener("toggle", () => {{
+            detailsEls.forEach(other => {{
+              if (other !== d) other.open = d.open;
+            }});
+          }});
+        }});
+      }});
+    }}
 
     tableBody.addEventListener("click", (e) => {{
       const btn = e.target.closest(".b-examples-btn, .cell-examples-btn");
