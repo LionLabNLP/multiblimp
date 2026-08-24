@@ -705,27 +705,24 @@ def _create_diagnostics_html(
               hsl(var(--pct-lo-h) var(--pct-lo-s) var(--pct-lo-l)) 100%);
         }}
 
-        .table-scroll {{ overflow-x: auto; border: 1px solid var(--border); border-radius: 10px; }}
-        .grid-table {{ min-width: 760px; }}
-        /* Pinned to the viewport bottom (not the table's own bottom edge) so
-           horizontal scrolling stays reachable without first scrolling all
-           the way down a tall page -- e.g. once several rows have their
-           Results/Diagnostics panel expanded. left/width are set by JS to
-           match #tableScroll's own rect (see refreshFixedHscroll) -- NOT
-           left/right:0, which would span the full viewport and usually end
-           up wider than the table's actual content, leaving nothing for
-           this bar itself to scroll even while the real table overflows.
-           Hidden by default so it never flashes before JS decides the table
-           actually overflows horizontally. */
-        .fixed-hscroll {{
-            display: none; position: fixed; bottom: 0;
-            height: 14px; overflow-x: auto; overflow-y: hidden;
-            background: var(--card); border-top: 1px solid var(--border);
-            z-index: 40;
+        /* Bounded height + its own vertical scroll (not just overflow-x)
+           is what lets .thead-row's position:sticky actually stick -- a
+           sticky element only sticks against the nearest ancestor that's
+           genuinely a scrolling box. Before this, .table-scroll had
+           overflow-x:auto alone, which per spec forces overflow-y to
+           compute as auto too, but with no height cap that axis never
+           actually scrolls -- so the "sticky ancestor" browsers found
+           never moved, and the header just scrolled away with the page
+           instead of freezing. Bounding the height makes .table-scroll
+           the real scroller on both axes, so overflow-y:auto here is
+           belt-and-suspenders (already the computed value either way). */
+        .table-scroll {{
+            overflow-x: auto; overflow-y: auto; max-height: 70vh;
+            border: 1px solid var(--border); border-radius: 10px;
         }}
-        .fixed-hscroll #fixedHscrollInner {{ height: 1px; }}
+        .grid-table {{ min-width: 760px; }}
         .row {{ display: flex; align-items: center; width: max-content; min-width: 100%; }}
-        .thead-row {{ background: var(--hover); border-bottom: 2px solid var(--border); }}
+        .thead-row {{ background: var(--hover); border-bottom: 2px solid var(--border); position: sticky; top: 0; z-index: 20; }}
         .cell {{
             padding: 0.8rem 0.9rem; font-size: 0.74rem; text-transform: uppercase; letter-spacing: 0.05em;
             color: var(--text-muted); font-weight: 600; flex: 0 0 auto; line-height: 1.25;
@@ -938,8 +935,6 @@ def _create_diagnostics_html(
             </div>
         </div>
     </div>
-
-    <div class="fixed-hscroll" id="fixedHscroll"><div id="fixedHscrollInner"></div></div>
 
     <div class="modal-overlay" id="legendOverlay">
       <div class="modal" role="dialog" aria-modal="true" aria-labelledby="legendTitle">
@@ -1305,64 +1300,6 @@ def _create_diagnostics_html(
     const tableBody = document.getElementById("tableBody");
     const theadRow = document.getElementById("theadRow");
 
-    // Pinned-to-viewport-bottom horizontal scrollbar, mirroring #tableScroll's
-    // native one -- see .fixed-hscroll's CSS comment for why. Kept correct
-    // through every width-changing event via a ResizeObserver -- but NOT one
-    // observing #gridTable itself: #gridTable is a plain block box (width:
-    // auto), so a child row overflowing it wider never resizes #gridTable's
-    // own box, and the observer would simply never fire for that. Each
-    // .row IS sized with width:max-content though, so it genuinely resizes
-    // as its bucket-zone's width transitions open/closed -- observing the
-    // rows themselves is what makes the bar track that animation live,
-    // frame by frame, not just snap to the right value sometime after.
-    const tableScrollEl = document.getElementById("tableScroll");
-    const fixedHscroll = document.getElementById("fixedHscroll");
-    const fixedHscrollInner = document.getElementById("fixedHscrollInner");
-    let syncingHscroll = false;
-
-    function refreshFixedHscroll() {{
-      // Match #tableScroll's own rect, not the viewport's: a fixed bar
-      // spanning the full window would (as here) usually be WIDER than the
-      // table's total content, even while the table itself -- inset by the
-      // page's padding/max-width -- genuinely overflows and needs to
-      // scroll. Anchoring to the same left offset and width as the real
-      // scroll container is what makes this bar's own overflow match it.
-      const rect = tableScrollEl.getBoundingClientRect();
-      fixedHscroll.style.left = rect.left + "px";
-      fixedHscroll.style.width = rect.width + "px";
-      fixedHscrollInner.style.width = gridTable.scrollWidth + "px";
-      fixedHscroll.style.display =
-        gridTable.scrollWidth > tableScrollEl.clientWidth ? "block" : "none";
-    }}
-    tableScrollEl.addEventListener("scroll", () => {{
-      if (syncingHscroll) return;
-      syncingHscroll = true;
-      fixedHscroll.scrollLeft = tableScrollEl.scrollLeft;
-      syncingHscroll = false;
-    }});
-    fixedHscroll.addEventListener("scroll", () => {{
-      if (syncingHscroll) return;
-      syncingHscroll = true;
-      tableScrollEl.scrollLeft = fixedHscroll.scrollLeft;
-      syncingHscroll = false;
-    }});
-    window.addEventListener("resize", refreshFixedHscroll);
-    // Re-pointed at each .row (see comment above) rather than #gridTable.
-    // #theadRow carries its own bucket-zone (see syncHeaderBuckets below) and
-    // is static markup that's never torn down, so it's observed once, here.
-    // The per-language rows ARE torn down and rebuilt on every renderAll(),
-    // so those are disconnected and re-observed there each time -- but that
-    // disconnect() call clears every observation this observer holds,
-    // #theadRow included, so renderAll re-observes it too, not just the rows.
-    const rowResizeObserver = new ResizeObserver(refreshFixedHscroll);
-    rowResizeObserver.observe(theadRow);
-    // Belt-and-suspenders alongside the observer above: guarantees one
-    // correct, final refresh once a bucket-zone's open/close transition
-    // (max-width/opacity/margin) actually finishes, regardless of any
-    // ResizeObserver timing quirk. transitionend bubbles, so one delegated
-    // listener here covers every row's bucket-zone.
-    gridTable.addEventListener("transitionend", refreshFixedHscroll);
-
     function syncHeaderBuckets() {{
       theadRow.classList.toggle("buckets-open", openBuckets.size > 0);
     }}
@@ -1403,8 +1340,6 @@ def _create_diagnostics_html(
       }});
 
       tableBody.innerHTML = "";
-      rowResizeObserver.disconnect();
-      rowResizeObserver.observe(theadRow);
       sorted.forEach((lang) => {{
         const langRow = document.createElement("div");
         langRow.className = "row lang-row";
@@ -1458,7 +1393,6 @@ def _create_diagnostics_html(
 
         tableBody.appendChild(langRow);
         tableBody.appendChild(detailRow);
-        rowResizeObserver.observe(langRow);
       }});
 
       syncHeaderBuckets();
@@ -1468,11 +1402,6 @@ def _create_diagnostics_html(
           h.classList.add(currentSort.ascending ? "sort-asc" : "sort-desc");
         }}
       }});
-      // Explicit call, not left to ResizeObserver's implicit initial fire
-      // alone: that fire is async and its exact timing isn't guaranteed
-      // across environments, so without this the bar can stay wrongly
-      // hidden until *something* later happens to trigger a resize.
-      refreshFixedHscroll();
     }}
 
     theadRow.querySelectorAll(".cell.sortable").forEach(header => {{

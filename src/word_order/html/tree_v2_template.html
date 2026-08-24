@@ -1,0 +1,1904 @@
+<meta charset="utf-8">
+<title>Minimal-Pair Attention Trace</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    color-scheme: light;
+    --bg: #f5f5f4;
+    --surface: #ffffff;
+    --surface-raised: #fafaf9;
+    --border: #e7e5e4;
+    --border-subtle: #f0efee;
+    --text-primary: #1c1917;
+    --text-secondary: #78716c;
+    --text-tertiary: #a8a29e;
+    --accent: #2563eb;
+    --accent-light: #eff6ff;
+    --yes: #14b8a6;
+    --yes-light: #e2faf6;
+    --no: #ec4899;
+    --no-light: #fce7f3;
+    --unk: #a78bda;
+    --unk-light: #f0eafb;
+    --trace-a: #7c3aed; --trace-a-light: #f1eafe;
+    --trace-b: #b45309; --trace-b-light: #fdf1e0;
+    --trace-c: #e11d48; --trace-c-light: #fde7ec;
+    --trace-d: #0891b2; --trace-d-light: #e0f6fa;
+    --trace-e: #65a30d; --trace-e-light: #eef6d9;
+    --ok: #16a34a;
+    --danger: #dc2626;
+    --keep: #7c3aed;
+    --keep-light: #f1eafe;
+    --role-a: #d97706;
+    --role-b: #4f46e5;
+    --font-ui: 'DM Sans', sans-serif;
+    --font-mono: 'JetBrains Mono', monospace;
+    --radius: 10px;
+    --shadow-sm: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+    --shadow-md: 0 4px 12px rgba(0,0,0,0.08), 0 2px 4px rgba(0,0,0,0.04);
+    --shadow-lg: 0 8px 24px rgba(0,0,0,0.10), 0 4px 8px rgba(0,0,0,0.04);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      color-scheme: dark;
+      --bg: #16140f; --surface: #221f19; --surface-raised: #1c1a15;
+      --border: #38332a; --border-subtle: #2a261e;
+      --text-primary: #f0ede6; --text-secondary: #a39a8a; --text-tertiary: #766d5e;
+      --accent: #6ea8ff; --accent-light: #1c2a42;
+      --yes: #2dd4bf; --yes-light: #0f2e2b;
+      --no: #f472b6; --no-light: #3a1830;
+      --unk: #c3aef0; --unk-light: #2a2140;
+      --trace-a: #b18cf5; --trace-a-light: #2a2140;
+      --trace-b: #e0a458; --trace-b-light: #392a15;
+      --trace-c: #f0708a; --trace-c-light: #3a1c26;
+      --trace-d: #4fd2eb; --trace-d-light: #123138;
+      --trace-e: #a3d84a; --trace-e-light: #26300f;
+      --ok: #4ade80; --danger: #f0605a;
+      --keep: #b18cf5; --keep-light: #2a2140;
+      --role-a: #f0a743; --role-b: #8b93f8;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --bg: #16140f; --surface: #221f19; --surface-raised: #1c1a15;
+    --border: #38332a; --border-subtle: #2a261e;
+    --text-primary: #f0ede6; --text-secondary: #a39a8a; --text-tertiary: #766d5e;
+    --accent: #6ea8ff; --accent-light: #1c2a42;
+    --yes: #2dd4bf; --yes-light: #0f2e2b;
+    --no: #f472b6; --no-light: #3a1830;
+    --unk: #c3aef0; --unk-light: #2a2140;
+    --trace-a: #b18cf5; --trace-a-light: #2a2140;
+    --trace-b: #e0a458; --trace-b-light: #392a15;
+    --trace-c: #f0708a; --trace-c-light: #3a1c26;
+    --trace-d: #4fd2eb; --trace-d-light: #123138;
+    --trace-e: #a3d84a; --trace-e-light: #26300f;
+    --ok: #4ade80; --danger: #f0605a;
+    --keep: #b18cf5; --keep-light: #2a2140;
+    --role-a: #f0a743; --role-b: #8b93f8;
+  }
+
+  body {
+    font-family: var(--font-ui);
+    background: var(--bg);
+    color: var(--text-primary);
+    height: 100vh;
+    overflow: hidden;
+  }
+
+  /* Two fixed regions, not one long scrolling page: the tree stays pinned
+     at the top (flex: 0 0 auto, sized by sizeTreeBox below) and everything
+     else -- samples, minimal pairs -- shares one independently-scrolling
+     pane underneath it (.scroll-pane), so the tree (and its own pan/zoom)
+     never scrolls out of view while browsing a long sample/pairs list. */
+  .page {
+    max-width: 1180px;
+    margin: 0 auto;
+    height: 100vh;
+    padding: 20px 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    overflow: hidden;
+  }
+
+  .scroll-pane {
+    flex: 1 1 auto;
+    /* Flex items default to min-height:auto, which refuses to shrink below
+       their content's natural size -- without this override, the pane
+       would just grow to fit the samples+pairs content instead of
+       stopping at its allotted space and scrolling internally. */
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+  /* Both cards default to flex-shrink:1 as flex children of .scroll-pane
+     (a column flex container) -- without this, the browser would squeeze
+     each one down to whatever space is left instead of letting them sit at
+     their natural content height and having .scroll-pane itself grow past
+     its box and scroll. Each card's own overflow:hidden would otherwise
+     silently clip away most of a long sample/pairs list rather than the
+     intended pane-level scrollbar ever appearing. */
+  .scroll-pane > .card { flex-shrink: 0; }
+
+  .card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-sm);
+    overflow: hidden;
+  }
+
+  .card-header {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+    padding: 14px 18px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface-raised);
+  }
+  .card-header h2 {
+    font-size: 12.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text-secondary);
+  }
+  .card-header .hint { font-size: 12px; color: var(--text-tertiary); }
+
+  /* ── Tree selector (switches between the two real trees) ── */
+  .tree-select-row { display: flex; gap: 8px; padding: 12px 18px 0; }
+  .tree-select-btn {
+    font-family: var(--font-ui);
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    background: var(--surface-raised);
+    border: 1.5px solid var(--border);
+    border-radius: 20px;
+    padding: 6px 14px;
+    cursor: pointer;
+    transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+  }
+  .tree-select-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .tree-select-btn.active { background: var(--accent-light); border-color: var(--accent); color: var(--accent); }
+  .tree-select-btn .keep-count { font-family: var(--font-mono); font-size: 10.5px; opacity: 0.75; margin-left: 4px; }
+
+  /* ── Tree panel ── */
+  .tree-wrap { position: relative; flex: 0 0 auto; }
+  .tree-svg-box {
+    position: relative;
+    /* Width is 100% of the card by default, but narrowed by JS (sizeTreeBox(),
+       keyed off CANVAS_W/CANVAS_H) whenever that would push the aspect-locked
+       height below past TREE_BOX_MAX_H -- centered via auto margins once
+       narrower than the card. Kept aspect-locked (not an independent
+       max-height) rather than letting height diverge from width's own
+       ratio: the SVG's viewBox and the HTML node-box overlay below share one
+       coordinate space keyed to this box's width alone (see .tree-viewport's
+       comment) -- an independently-set height would desync them, not just
+       resize them. */
+    width: 100%;
+    margin: 0 auto;
+    /* Clips the pannable/zoomable content below to this box's own frame --
+       without it, zooming in or panning would spill the tree out past the
+       card's edge instead of scrolling within it. */
+    overflow: hidden;
+    background:
+      radial-gradient(circle at 1px 1px, var(--border-subtle) 1px, transparent 0) 0 0/24px 24px,
+      var(--bg);
+  }
+  .tree-svg-box.grabbable { cursor: grab; }
+  .tree-svg-box.panning { cursor: grabbing; }
+
+  /* Everything the user pans/zooms together: the edges/rings SVG and the
+     HTML node-box overlay share one coordinate space (a node's `left`/`top`
+     are percentages of this same box), so they're transformed as a single
+     unit here rather than the SVG's own viewBox -- that would desync them,
+     since the HTML overlay doesn't know about the SVG's viewBox at all. The
+     floating info-panel and zoom controls sit outside this element, as
+     siblings, so they stay fixed in place while the tree moves under them. */
+  .tree-viewport { width: 100%; transform-origin: 0 0; }
+  .tree-viewport svg { display: block; width: 100%; height: auto; }
+
+  .zoom-controls {
+    position: absolute;
+    right: 16px;
+    bottom: 16px;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-md);
+    overflow: hidden;
+  }
+  .zoom-btn {
+    width: 30px;
+    height: 30px;
+    border: none;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text-secondary);
+    font-family: var(--font-ui);
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+  }
+  .zoom-btn:last-child { border-bottom: none; }
+  .zoom-btn:hover { background: var(--surface-raised); color: var(--accent); }
+  .zoom-btn.reset { font-size: 12px; }
+
+  .node-box {
+    width: 168px;
+    border-radius: 8px;
+    border: 1px solid rgba(0,0,0,0.12);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.10);
+    font-family: var(--font-ui);
+    /* visible, not hidden: the dist-bar hover popover (below) needs to
+       escape the box upward. The header/body split below handles corner
+       rounding itself instead (each rounds its own outer corners), so nothing
+       here needs the parent to clip it. */
+    overflow: visible;
+    cursor: pointer;
+    transition: box-shadow 0.15s ease;
+  }
+  /* Confidence color is confined to this header strip only, not the whole
+     card -- the rest of the node (below) stays on the page's own neutral
+     surface. A whole-card fill put the per-node distribution bar on top of
+     the very same majority-class color it's showing the split of (a
+     high-confidence node's fill and its dominant segment could both render
+     as almost the same teal), which the header/body split sidesteps
+     entirely rather than trying to out-contrast it with a darker bar. */
+  .node-header {
+    padding: 5px 8px 4px;
+    border-radius: 7px 7px 0 0;
+    /* --node-fill is set per node in JS: the node's majority class color,
+       blended toward white in proportion to H -- the same
+       interpolate-toward-white formula decision_trees/{cond}/{lang}.html's
+       _finalize_tree_html uses (that page's node boxes stay light-toned
+       regardless of theme for the same reason -- the fixed dark text below
+       needs to stay legible at any H, in either page theme). Falls back to
+       white if JS hasn't run. */
+    background: var(--node-fill, #ffffff);
+    transition: background 0.2s ease;
+  }
+  .node-rule {
+    font-family: var(--font-ui);
+    font-size: 10.5px;
+    font-weight: 600;
+    /* Fixed, not var(--text-primary): this always sits on the light-toned
+       --node-fill above regardless of page theme, so needs to stay dark in
+       both -- a theme-flipping color couldn't also guarantee contrast
+       against a fill ranging from near-white to a fully saturated class
+       color (confirmed: an accent-blue attempt here measured below 4.5:1
+       against the pink end of that range). */
+    color: #1c1917;
+    display: block;
+  }
+  .node-box .node-body {
+    padding: 4px 8px 6px;
+    border-radius: 0 0 7px 7px;
+    background: var(--surface);
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    color: var(--text-secondary);
+    line-height: 1.35;
+  }
+
+  /* ── Correlated-feature [+] marker (see corrHtml's comment) ── */
+  .corr-marker-wrap { position: relative; display: inline-block; }
+  .corr-marker { color: #1d4ed8; font-weight: 700; cursor: help; margin-left: 2px; }
+  .corr-popover {
+    display: none;
+    position: absolute;
+    bottom: calc(100% + 6px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    box-shadow: var(--shadow-md);
+    padding: 6px 9px;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    line-height: 1.6;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    z-index: 60;
+  }
+  .corr-marker-wrap:hover .corr-popover { display: block; }
+
+  .node-keep {
+    margin-top: 4px;
+    padding: 3px 6px;
+    border-radius: 5px;
+    font-family: var(--font-mono);
+    font-size: 8.5px;
+    font-weight: 700;
+    display: block;
+  }
+  .node-keep.yes { background: var(--keep-light); color: var(--keep); border: 1px solid var(--keep); }
+  .node-keep.yes:hover { filter: brightness(1.08); }
+  .node-keep.no { color: var(--text-tertiary); font-weight: 500; }
+
+  /* ── Per-node class-distribution bar (real Yes/No split at that node) ── */
+  .node-dist-bar-wrap { position: relative; margin-top: 4px; }
+  .node-dist-bar {
+    display: flex;
+    height: 5px;
+    border-radius: 3px;
+    overflow: hidden;
+    background: rgba(0,0,0,0.12);
+    transition: transform 0.12s ease;
+  }
+  .node-dist-bar .seg { height: 100%; }
+  .node-dist-bar-wrap:hover .node-dist-bar { transform: scaleY(1.8); }
+  .node-dist-bar-wrap:hover .node-dist-popover { display: flex; }
+
+  /* Hover-to-expand: the compact bar above is legible for "which class,
+     roughly how skewed" at a glance; hovering it swaps in the real counts
+     per class, same idea as decision_trees/{cond}/{lang}.html's node-dist-card
+     hover-expand, rendered here as a small popover instead of an in-place
+     scale-up (a 2x scale on an already-tiny 168px node would just overlap
+     neighboring nodes). */
+  .node-dist-popover {
+    display: none;
+    position: absolute;
+    bottom: calc(100% + 7px);
+    left: 50%;
+    transform: translateX(-50%);
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    box-shadow: var(--shadow-md);
+    padding: 6px 7px 5px;
+    gap: 4px;
+    z-index: 60;
+    pointer-events: none;
+  }
+  .node-dist-popover::after {
+    content: "";
+    position: absolute;
+    top: 100%; left: 50%;
+    transform: translateX(-50%);
+    border: 5px solid transparent;
+    border-top-color: var(--surface);
+  }
+
+  /* ── Shared dist-column building block: one bar + count + label per
+     class, used at two sizes -- small in the node-hover popover above,
+     large in the "About node" panel's detail chart below. ── */
+  .dist-col { display: flex; flex-direction: column; align-items: center; gap: 2px; }
+  .dist-col-bar-wrap { display: flex; align-items: flex-end; justify-content: center; }
+  .dist-col-bar { width: 100%; border-radius: 2px 2px 0 0; min-height: 2px; }
+  .dist-col-count { font-family: var(--font-mono); color: var(--text-secondary); text-align: center; white-space: nowrap; }
+  .dist-col-label { font-family: var(--font-mono); color: var(--text-tertiary); text-align: center; white-space: nowrap; }
+  .node-dist-popover .dist-col { width: 40px; }
+  .node-dist-popover .dist-col-bar-wrap { width: 13px; height: 34px; }
+  .node-dist-popover .dist-col-count { font-size: 8.5px; }
+  .node-dist-popover .dist-col-label { font-size: 7.5px; }
+
+  .node-slot { position: absolute; transform: translate(-50%, -50%); }
+  .node-slot.current .node-box { box-shadow: 0 0 0 4px var(--accent), 0 0 14px 3px var(--accent); }
+
+  .ring { fill: none; stroke-width: 3; opacity: 0.9; }
+
+  /* ── Floating info panel: overlays the tree canvas top-left, same position
+     and structure as decision_trees/{cond}/{lang}.html's own info-panel --
+     dark header with language + accuracy badge, meta stats, class
+     distribution, node-distribution toggle and True/False branch pills, all
+     collapsible behind one minimize button. Ported onto this page's own
+     tokens (which already share the real page's variable names). ── */
+  .info-panel {
+    position: absolute;
+    top: 16px;
+    left: 16px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: var(--shadow-md);
+    z-index: 100;
+    width: 250px;
+    max-width: calc(100% - 32px);
+    /* Expanded, this panel's content (meta rows + class legend + toggle +
+       branch legend + notes) can end up taller than the tree canvas behind
+       it, especially on a shorter/narrower tree like Hindi's -- and
+       .tree-svg-box has its own overflow:hidden for the pan/zoom feature,
+       which would silently clip the panel's bottom instead of scrolling it.
+       Capping height here and scrolling the body below (not this element)
+       keeps the header pinned in view while the rest scrolls. */
+    max-height: calc(100% - 32px);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    font-family: var(--font-ui);
+    transition: width 0.3s ease;
+  }
+  .info-panel.minimized { width: auto; }
+  .info-panel-body {
+    overflow-y: auto;
+    /* Lets this flex child actually shrink to scroll instead of stretching
+       the panel past max-height -- flex items default to a min-height
+       equal to their content's, which would defeat the cap above. */
+    min-height: 0;
+    scrollbar-width: thin;
+    scrollbar-color: var(--text-tertiary) transparent;
+    /* A native scrollbar alone isn't a reliable enough hint that this
+       scrolls: macOS/most mobile browsers auto-hide it until you're
+       actively scrolling, and Safari ignores scrollbar-width/
+       ::-webkit-scrollbar entirely, so there's often no visible scrollbar
+       at all to notice. This is the standard CSS-only "scroll shadow"
+       technique instead -- two gradients that scroll with the content
+       (background-attachment: local) sit exactly over two fixed shadows
+       at the container's own edges (attachment: scroll); a shadow only
+       peeks out from under its gradient once there's actually unscrolled
+       content on that side, so the hint appears/disappears with real
+       scroll position, in every browser, with no JS. */
+    background-color: var(--surface);
+    background-image:
+      linear-gradient(var(--surface), rgba(0, 0, 0, 0)),
+      linear-gradient(rgba(0, 0, 0, 0), var(--surface)),
+      radial-gradient(farthest-side at 50% 0%, rgba(0, 0, 0, .25), rgba(0, 0, 0, 0)),
+      radial-gradient(farthest-side at 50% 100%, rgba(0, 0, 0, .25), rgba(0, 0, 0, 0));
+    background-repeat: no-repeat;
+    background-position: top, bottom, top, bottom;
+    background-size: 100% 24px, 100% 24px, 100% 10px, 100% 10px;
+    background-attachment: local, local, scroll, scroll;
+  }
+  .info-panel-body::-webkit-scrollbar { width: 8px; }
+  .info-panel-body::-webkit-scrollbar-track { background: transparent; }
+  .info-panel-body::-webkit-scrollbar-thumb { background: var(--text-tertiary); border-radius: 4px; }
+
+  .info-panel-header {
+    padding: 10px 14px;
+    /* Fixed dark bar regardless of theme, like the node fills -- not
+       var(--text-primary), which flips light in dark mode. */
+    background: #1c1917;
+    color: white;
+    position: relative;
+  }
+  .minimize-button {
+    position: absolute;
+    top: 10px; right: 10px;
+    width: 20px; height: 20px;
+    border: none;
+    background: rgba(255,255,255,0.2);
+    color: white;
+    border-radius: 4px;
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 14px; line-height: 1;
+    transition: background 0.2s;
+    padding: 0;
+  }
+  .minimize-button:hover { background: rgba(255,255,255,0.3); }
+  .info-panel-header .language-name { font-size: 15px; font-weight: 600; line-height: 1.2; padding-right: 22px; }
+  .info-panel-header .accuracy-badge {
+    display: inline-flex; align-items: center; gap: 4px;
+    margin-top: 5px;
+    background: rgba(255,255,255,0.15);
+    border-radius: 20px;
+    padding: 2px 8px;
+    font-size: 11px; font-weight: 500;
+    color: rgba(255,255,255,0.9);
+  }
+  .accuracy-dot { width: 6px; height: 6px; border-radius: 50%; background: #4ade80; }
+
+  /* display:none, not a max-height:0/overflow:hidden collapse: a hidden
+     block still contributes its full intrinsic width to the panel's own
+     shrink-to-fit sizing (minimized relies on width:auto below) -- the long
+     unbroken Predictor value in the meta rows was inflating the minimized
+     panel to the width of the *expanded* content, invisibly, well past the
+     tree it's meant to float over. display:none removes it from that
+     calculation entirely; the tradeoff is losing the real page's slide
+     transition on minimize, which the plain width tween below (0.3s ease)
+     still keeps most of. */
+  .info-panel.minimized .info-panel-meta,
+  .info-panel.minimized .info-panel-legend,
+  .info-panel.minimized .toggle-row,
+  .info-panel.minimized .branch-legend {
+    display: none;
+  }
+
+  .info-panel-meta { padding: 8px 14px; border-bottom: 1px solid var(--border-subtle); }
+  .meta-row { display: flex; justify-content: space-between; align-items: center; gap: 10px; padding: 3px 0; }
+  .meta-key { font-size: 11px; color: var(--text-tertiary); font-weight: 500; white-space: nowrap; }
+  .meta-val { font-size: 11px; color: var(--text-secondary); font-family: var(--font-mono); font-weight: 500; text-align: right; overflow-wrap: anywhere; }
+
+  .info-panel-legend { padding: 8px 14px 10px; }
+  .legend-title {
+    font-size: 10px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.07em; color: var(--text-tertiary); margin-bottom: 6px;
+  }
+  .class-dist-row {
+    display: grid;
+    grid-template-columns: 9px 34px 40px 1fr;
+    align-items: center;
+    gap: 7px;
+    padding: 3px 0;
+  }
+  .class-dist-swatch { width: 9px; height: 9px; border-radius: 2px; flex-shrink: 0; }
+  .class-dist-label { font-family: var(--font-mono); font-weight: 600; color: var(--text-primary); font-size: 11px; }
+  .class-dist-count { font-family: var(--font-mono); color: var(--text-tertiary); text-align: right; font-size: 10px; }
+  .class-dist-bar-track { height: 6px; background: var(--border-subtle); border-radius: 3px; overflow: hidden; }
+  .class-dist-bar-fill { height: 100%; border-radius: 3px; }
+
+  .toggle-row {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 14px;
+    border-top: 1px solid var(--border-subtle);
+    cursor: pointer;
+    user-select: none;
+  }
+  .toggle-label { font-size: 11px; font-weight: 500; color: var(--text-secondary); }
+  .toggle-switch { width: 28px; height: 16px; border-radius: 8px; background: var(--accent); position: relative; transition: background 0.2s; flex-shrink: 0; }
+  .toggle-switch.off { background: var(--border); }
+  .toggle-switch::after {
+    content: ""; position: absolute; width: 12px; height: 12px; border-radius: 50%;
+    background: white; top: 2px; left: 14px; transition: left 0.2s; box-shadow: 0 1px 2px rgba(0,0,0,0.2);
+  }
+  .toggle-switch.off::after { left: 2px; }
+
+  .branch-legend { display: flex; gap: 8px; padding: 10px 14px; border-top: 1px solid var(--border-subtle); }
+  .branch-pill {
+    display: flex; align-items: center; gap: 5px;
+    background: var(--surface-raised);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 4px 10px;
+    font-size: 11px; font-weight: 500;
+    color: var(--text-secondary);
+  }
+  .branch-line { width: 16px; height: 2.5px; border-radius: 2px; flex-shrink: 0; }
+  /* Mirrors the tree's own dashed False/"No" edges (see drawBaseTree's
+     stroke-dasharray) so the legend pill matches what's actually on the
+     tree, not just a solid swatch in the branch color. */
+  .branch-line.dashed { background: repeating-linear-gradient(to right, var(--danger) 0 4px, transparent 4px 7px); border-radius: 0; }
+
+  /* ── Node note (always-present prose for whichever node is being browsed) ── */
+  .node-note {
+    padding: 12px 18px;
+    border-bottom: 1px solid var(--border);
+    background: var(--accent-light);
+    font-size: 12.5px;
+    line-height: 1.6;
+    color: var(--text-secondary);
+  }
+  .node-note b { color: var(--text-primary); }
+  .node-note code {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
+    color: var(--text-primary);
+  }
+  .node-note .node-note-title {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--accent);
+    margin-bottom: 4px;
+    display: block;
+  }
+
+  /* ── Node summary row: the breadcrumb note plus a larger version of the
+     same class-distribution chart, side by side -- this node's detail-panel
+     counterpart to the always-on mini bar drawn on the node itself. ── */
+  .node-summary-row { display: flex; align-items: stretch; }
+  .node-note { flex: 1 1 auto; min-width: 0; }
+  .node-dist-detail {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: flex-end;
+    justify-content: center;
+    gap: 12px;
+    padding: 12px 20px;
+    min-width: 130px;
+    border-bottom: 1px solid var(--border);
+    border-left: 1px solid var(--border);
+    background: var(--surface-raised);
+  }
+  .node-dist-detail .dist-col { width: 34px; }
+  .node-dist-detail .dist-col-bar-wrap { width: 30px; height: 56px; }
+  .node-dist-detail .dist-col-count { font-size: 12px; }
+  .node-dist-detail .dist-col-label { font-size: 9.5px; }
+
+  /* ── Sample table (compact, up to 15 real rows per class) ── */
+  /* A scrollable feature table with no scrollbar visible until you actually
+     scroll (the OS/browser default, e.g. macOS's auto-hiding scrollbars)
+     reads as a hard, unscrollable cutoff rather than "there's more to the
+     right" -- especially once alignFeatLabelCols widens the table to the
+     longest nsubj/verb token across all 5 samples. Forcing a persistent
+     thin scrollbar here removes that ambiguity. */
+  .node-table-wrap {
+    padding: 4px 18px 18px;
+    overflow-x: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--text-tertiary) transparent;
+  }
+  .node-table-wrap::-webkit-scrollbar { height: 8px; }
+  .node-table-wrap::-webkit-scrollbar-track { background: transparent; }
+  .node-table-wrap::-webkit-scrollbar-thumb { background: var(--text-tertiary); border-radius: 4px; }
+  table.node-table { width: 100%; border-collapse: collapse; font-family: var(--font-ui); font-size: 12.5px; }
+  .node-table thead th {
+    text-align: left;
+    font-family: var(--font-mono);
+    font-size: 9.5px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-tertiary);
+    padding: 0 8px 6px;
+    border-bottom: 1px solid var(--border);
+    white-space: nowrap;
+  }
+  .node-table tbody tr.sample-row {
+    cursor: pointer;
+    border-bottom: 1px solid var(--border-subtle);
+    transition: background 0.12s ease;
+  }
+  .node-table tbody tr.sample-row:hover { background: var(--surface-raised); }
+  .node-table tbody tr.sample-row.active { background: var(--sample-color-light); }
+  .node-table tbody tr.sample-row.active td.col-idx { color: var(--sample-color); }
+  .node-table tbody tr.feat-row td { padding: 8px 8px 10px; background: var(--surface-raised); }
+
+  /* ── Per-label group header: how many of the node's real rows for this
+     label these samples represent, not just a flat unlabeled list. ── */
+  /* display:flex goes on the inner div, never the <td> itself: a flexed
+     table cell can fall out of the table's normal auto column-width
+     calculation (this one collapsed to ~150px regardless of the table's
+     real ~1100px width), which then wrapped the group-n text across 5+
+     lines instead of laying the header out on one line. */
+  .node-table tr.sample-group-header td { padding: 0; border-bottom: 1px solid var(--border-subtle); }
+  .node-table tr.sample-group-header:first-child td { padding-top: 0; }
+  .group-header-row { display: flex; align-items: baseline; gap: 8px; padding: 12px 8px 5px; }
+  .node-table tr.sample-group-header:first-child .group-header-row { padding-top: 2px; }
+  .group-swatch { display: inline-block; width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
+  .group-label { font-family: var(--font-mono); font-weight: 700; font-size: 11px; color: var(--text-primary); text-transform: capitalize; }
+  .group-n { font-family: var(--font-mono); font-size: 10.5px; color: var(--text-tertiary); white-space: nowrap; }
+
+  .node-table td { padding: 6px 8px; vertical-align: top; }
+  .node-table td.col-idx { font-family: var(--font-mono); font-size: 11px; font-weight: 700; color: var(--text-secondary); width: 18px; }
+  .node-table td.col-sentence { line-height: 1.5; }
+  /* nsubj/verb (or det/head) tokens: same two colors used for the matching
+     role's word in the feature table below, so a highlighted word in the
+     sentence and its row in the table are visibly the same thing. */
+  .node-table td.col-sentence strong.tok-a, .pair-example-sentence strong.tok-a {
+    color: var(--role-a); text-decoration: underline; text-decoration-color: var(--role-a);
+    text-decoration-thickness: 2px; text-underline-offset: 2px;
+  }
+  .node-table td.col-sentence strong.tok-b, .pair-example-sentence strong.tok-b {
+    color: var(--role-b); text-decoration: underline; text-decoration-color: var(--role-b);
+    text-decoration-thickness: 2px; text-underline-offset: 2px;
+  }
+  .node-table td.col-link { white-space: nowrap; text-align: right; }
+  .node-table td.col-link a { color: var(--accent); font-size: 13px; text-decoration: none; margin-left: 8px; }
+  .node-table td.col-link .group-feats-toggle { margin-left: 0; }
+
+  /* ── One switch per class group, not one for the whole table: opening
+     Yes's feature tables shouldn't also open No's -- each class links only
+     its own up-to-5 rows together. ── */
+  .group-feats-toggle {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    font-weight: 600;
+    color: var(--accent);
+    background: none;
+    border: none;
+    cursor: pointer;
+    padding: 0;
+    margin-left: auto;
+  }
+  .group-feats-toggle:hover { text-decoration: underline; }
+
+  /* ── Feature mini table: one row per role (nsubj/verb), one column per
+     feature -- lines the two roles' values up for a direct comparison,
+     which is the whole point of an agreement condition. ── */
+  .feat-mini-table {
+    border-collapse: collapse;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    overflow: hidden;
+  }
+  .feat-mini-table th, .feat-mini-table td { padding: 4px 9px; text-align: left; white-space: nowrap; }
+  .feat-mini-table thead th {
+    font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
+    color: var(--text-tertiary); border-bottom: 1px solid var(--border); background: var(--surface-raised);
+    /* All-caps text has no descenders, but the default line-height still
+       reserves room for them below the cap line -- against the 4px/4px
+       padding that reads as more space under the text than above it, even
+       though vertical-align is already middle. line-height:1 removes that
+       reserved descender gap so the padding is what actually shows. */
+    line-height: 1;
+  }
+  .feat-mini-table tbody th {
+    text-align: left; font-weight: 700; color: var(--text-primary);
+    border-right: 1px solid var(--border); background: var(--surface-raised);
+  }
+  /* Floor width, not a fixed one: the row-label cell holds the actual
+     nsubj/verb token, whose length varies a lot from sample to sample (a
+     one-letter Greek pronoun next to a ten-letter noun) -- past this floor
+     it still grows for a genuinely long word, but for the common case it
+     stops that word length from being what shifts every later column
+     sideways relative to the other 4 samples' tables. */
+  .node-table-wrap .feat-mini-table tbody th { min-width: 92px; }
+  .feat-mini-table tbody tr + tr th, .feat-mini-table tbody tr + tr td { border-top: 1px solid var(--border-subtle); }
+  .feat-mini-table .role-form { font-weight: 700; margin-left: 4px; }
+  .feat-mini-table .role-form.role-a { color: var(--role-a); }
+  .feat-mini-table .role-form.role-b { color: var(--role-b); }
+  .feat-mini-table td b { color: var(--sample-color, var(--keep)); font-weight: 700; }
+  .feat-mini-table td .na { color: var(--text-tertiary); opacity: 0.5; }
+  .feat-mini-table th.decisive, .feat-mini-table td.decisive { background: var(--sample-color-light, var(--accent-light)); }
+  /* "linked" rows: a role and its reinflected swapped_ counterpart, tied
+     together with a matching colored rail down the row-label cell. */
+  .feat-mini-table tr.linked-row th { box-shadow: inset 3px 0 0 var(--keep); }
+  .feat-mini-table td.decisive.swapped { background: var(--trace-c-light); }
+  .feat-mini-table td.decisive.swapped b { color: var(--trace-c); }
+
+
+  /* ── Node samples (native <details>, open by default -- unlike pairs
+     below, this is the primary thing a node click populates, so it starts
+     visible; the collapse mechanism itself just mirrors the pairs card's,
+     for anyone who wants the scroll-pane space back). Reuses .card-header's
+     own layout/h2/.hint styling (summary class="card-header" in the markup)
+     rather than redeclaring it -- only the collapse-specific bits (hiding
+     the native marker, the chevron, keeping the row from wrapping) are
+     added here. ── */
+  details.samples-card summary { cursor: pointer; list-style: none; }
+  details.samples-card summary::-webkit-details-marker { display: none; }
+  /* h2 title and the chevron (the collapse affordance) always stay on one
+     line, in full -- the hint in between is the one thing allowed to give
+     up space first, truncating with an ellipsis instead of wrapping the
+     whole summary row onto two lines on a narrower viewport. */
+  details.samples-card summary h2 { white-space: nowrap; }
+  details.samples-card summary .summary-right { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
+  details.samples-card summary .summary-right .hint {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  details.samples-card summary .chevron { flex: 0 0 auto; color: var(--text-tertiary); font-family: var(--font-mono); font-size: 11px; }
+  details.samples-card[open] summary .chevron::before { content: "▾ collapse"; }
+  details.samples-card:not([open]) summary .chevron::before { content: "▸ expand"; }
+
+  /* ── Generated minimal pairs (native <details>, closed by default, always present) ── */
+  details.pairs-card summary {
+    cursor: pointer;
+    list-style: none;
+    padding: 14px 18px;
+    background: var(--surface-raised);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  details.pairs-card summary::-webkit-details-marker { display: none; }
+  details.pairs-card summary h2 {
+    font-size: 12.5px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.06em; color: var(--keep); display: inline-flex; align-items: center; gap: 6px;
+  }
+  details.pairs-card summary .chevron { color: var(--text-tertiary); font-family: var(--font-mono); font-size: 11px; }
+  details.pairs-card[open] summary .chevron::before { content: "▾ collapse"; }
+  details.pairs-card:not([open]) summary .chevron::before { content: "▸ expand"; }
+  .pairs-intro { padding: 12px 18px 0; font-size: 12.5px; color: var(--text-secondary); line-height: 1.6; }
+  .pairs-intro b { color: var(--text-primary); }
+  .pairs-leaf-path {
+    font-size: 12.5px; color: var(--text-secondary); line-height: 1.6;
+    margin-bottom: 10px;
+  }
+  .pairs-leaf-path b { color: var(--text-primary); }
+  .pairs-leaf-path code {
+    font-family: var(--font-mono);
+    font-size: 11.5px;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 5px;
+    color: var(--text-primary);
+  }
+  .pairs-list { padding: 12px 18px 18px; display: flex; flex-direction: column; gap: 10px; }
+  .pairs-leaf-group + .pairs-leaf-group { margin-top: 6px; }
+  .pairs-leaf-heading-row { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
+  .pairs-leaf-heading {
+    font-family: var(--font-mono); font-size: 11px; font-weight: 700;
+    color: var(--keep);
+  }
+  .pairs-leaf-heading .n { color: var(--text-tertiary); font-weight: 500; }
+  .pair-example {
+    --sample-color: var(--keep); --sample-color-light: var(--keep-light);
+    border: 1px solid var(--border); border-radius: 8px; padding: 11px 13px;
+    background: var(--surface-raised); cursor: pointer;
+    transition: background 0.12s ease, border-color 0.12s ease;
+  }
+  .pair-example:hover { border-color: var(--sample-color); }
+  .pair-example.active { background: var(--sample-color-light); border-color: var(--sample-color); }
+  /* display:block + overflow-x:auto turns the table itself into its own
+     horizontal-scroll container (the internal thead/tbody/tr structure
+     still renders as a table inside that block box) -- unlike the sample
+     table above, nothing already wraps this one, so without this it would
+     just push the pairs card wider than the page on a narrow screen. */
+  .pair-example .feat-mini-table { margin-top: 8px; display: block; max-width: 100%; overflow-x: auto; }
+  .pair-sentence-row { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+  .pair-sentence-row .mark { font-weight: 700; flex-shrink: 0; }
+  .pair-sentence-row.grammatical .mark { color: var(--ok); }
+  .pair-sentence-row.ungrammatical .mark { color: var(--danger); }
+  .pair-example-sentence { font-size: 12.5px; line-height: 1.55; }
+  /* Same convention as .node-table td.col-link a: a bare arrow, title
+     attribute carries the treebank name instead of visible text -- right-
+     aligned via margin-left:auto within the (flex) grammatical sentence row. */
+  .pair-link { color: var(--accent); font-size: 13px; text-decoration: none; flex-shrink: 0; }
+  /* Goes on the button, not .pair-link -- it's the first of the two
+     right-side controls now, so it's the one that needs to absorb the
+     row's remaining space; putting it on .pair-link instead would leave a
+     gap between the button and the sentence text rather than push both
+     controls to the edge together. */
+  .pair-sentence-row.grammatical .group-feats-toggle { margin-left: auto; flex-shrink: 0; }
+
+  @media (max-width: 480px) {
+    .node-table td.col-link { display: none; }
+  }
+</style>
+
+<div class="page">
+  <div class="card tree-wrap">
+    <div class="card-header">
+      <h2 id="treeTitle">Tree</h2>
+      <span class="hint">click a node to browse its samples</span>
+    </div>
+    <div class="tree-select-row" id="treeSelectRow"></div>
+    <div class="tree-svg-box grabbable" id="treeBox">
+      <div class="tree-viewport" id="treeViewport">
+        <svg id="treeSvg" viewBox="0 0 900 500" xmlns="http://www.w3.org/2000/svg">
+          <g id="edgesBase"></g>
+          <g id="ringsLayer"></g>
+        </svg>
+        <div id="nodesLayer" style="position:absolute; inset:0;"></div>
+      </div>
+
+      <div class="zoom-controls">
+        <button type="button" class="zoom-btn" id="zoomInBtn" title="Zoom in">+</button>
+        <button type="button" class="zoom-btn" id="zoomOutBtn" title="Zoom out">−</button>
+        <button type="button" class="zoom-btn reset" id="zoomResetBtn" title="Fit tree to frame">⤢</button>
+      </div>
+
+      <div class="info-panel minimized" id="infoPanel">
+        <div class="info-panel-header">
+          <button type="button" class="minimize-button" id="minimizeBtn" title="Expand panel">+</button>
+          <div class="language-name" id="infoPanelTitle"></div>
+          <div class="accuracy-badge"><span class="accuracy-dot"></span><span id="infoPanelAccuracy"></span> accuracy</div>
+        </div>
+        <div class="info-panel-body">
+          <div class="info-panel-meta" id="infoPanelMeta"></div>
+          <div class="info-panel-legend">
+            <div class="legend-title">Classes · dataset distribution</div>
+            <div id="classDistLegend"></div>
+          </div>
+          <div class="toggle-row" id="distToggleRow">
+            <span class="toggle-label">Show node distributions</span>
+            <span class="toggle-switch" id="distToggleSwitch"></span>
+          </div>
+          <div class="branch-legend">
+            <span class="branch-pill"><span class="branch-line dashed"></span>False</span>
+            <span class="branch-pill"><span class="branch-line" style="background:var(--ok)"></span>True</span>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="scroll-pane" id="scrollPane">
+    <details class="card samples-card" id="sampleCard" open>
+      <summary class="card-header">
+        <h2 id="sampleGridTitle">Node samples</h2>
+        <span class="summary-right">
+          <span class="hint">click a row to trace it · up to 15 real rows per class</span>
+          <span class="chevron"></span>
+        </span>
+      </summary>
+      <div class="node-summary-row">
+        <div class="node-note" id="nodeNote"></div>
+        <div class="node-dist-detail" id="nodeDistDetail"></div>
+      </div>
+      <div class="node-table-wrap">
+        <table class="node-table">
+          <thead>
+            <tr>
+              <th></th><th>Sentence</th><th></th>
+            </tr>
+          </thead>
+          <tbody id="sampleGrid"></tbody>
+        </table>
+      </div>
+    </details>
+
+    <details class="card pairs-card" id="pairsCard">
+      <summary>
+        <h2 id="pairsTitle">🔑 Generated minimal pairs</h2>
+        <span class="chevron"></span>
+      </summary>
+      <div class="pairs-intro" id="pairsIntro"></div>
+      <div class="pairs-list" id="pairsList"></div>
+    </details>
+  </div>
+</div>
+
+<script>
+(function () {
+  const PALETTE = ['--trace-a', '--trace-b', '--trace-c', '--trace-d', '--trace-e'];
+  // Per-tree, not a fixed 900x500 -- that was sized to fit two hand-placed
+  // demo trees specifically; a real tree's own width/depth varies a lot
+  // (wide+shallow vs. narrow+deep), so the canvas has to too, or nodes
+  // either overlap (canvas too small for the real spread) or end up
+  // needlessly tiny (canvas too large). Set from T.CANVAS_W/H below and
+  // again in selectTree() -- see drawBaseTree()'s treeSvg viewBox update.
+  let CANVAS_W, CANVAS_H;
+
+__V2_TREE_DATA_JS__
+  let T = TREES[currentTreeKey];
+  CANVAS_W = T.CANVAS_W; CANVAS_H = T.CANVAS_H;
+  let currentNode = T.defaultNode;
+  const active = new Map(); // sampleKey ("node_idx") -> palette css var name
+
+
+  const treeSvg = document.getElementById('treeSvg');
+  const edgesBase = document.getElementById('edgesBase');
+  const ringsLayer = document.getElementById('ringsLayer');
+  const nodesLayer = document.getElementById('nodesLayer');
+  const treeBox = document.getElementById('treeBox');
+  const treeViewport = document.getElementById('treeViewport');
+  const scrollPane = document.getElementById('scrollPane');
+  const sampleGrid = document.getElementById('sampleGrid');
+  const sampleGridTitle = document.getElementById('sampleGridTitle');
+  const nodeNote = document.getElementById('nodeNote');
+  const nodeDistDetail = document.getElementById('nodeDistDetail');
+  const pairsCard = document.getElementById('pairsCard');
+  const pairsIntro = document.getElementById('pairsIntro');
+  const pairsList = document.getElementById('pairsList');
+  const pairsTitle = document.getElementById('pairsTitle');
+  const treeTitle = document.getElementById('treeTitle');
+  const treeSelectRow = document.getElementById('treeSelectRow');
+  const classDistLegend = document.getElementById('classDistLegend');
+  const infoPanel = document.getElementById('infoPanel');
+  const infoPanelTitle = document.getElementById('infoPanelTitle');
+  const infoPanelAccuracy = document.getElementById('infoPanelAccuracy');
+  const infoPanelMeta = document.getElementById('infoPanelMeta');
+  const minimizeBtn = document.getElementById('minimizeBtn');
+  const distToggleRow = document.getElementById('distToggleRow');
+  const distToggleSwitch = document.getElementById('distToggleSwitch');
+
+  // ── Pan/zoom: scale+translate treeViewport as one unit, not the SVG's own
+  // viewBox. The HTML node-box overlay (nodesLayer) doesn't know
+  // about the SVG's viewBox at all -- each node's left/top is just a
+  // percentage of the shared parent box -- so zooming the viewBox alone
+  // would desync the SVG edges from the HTML boxes drawn on top of them.
+  // Transforming their shared parent instead keeps both in lockstep for free.
+  const ZOOM_MIN = 0.5, ZOOM_MAX = 3, ZOOM_STEP = 1.3;
+  let zoom = { scale: 1, tx: 0, ty: 0 };
+
+  function applyZoom() {
+    treeViewport.style.transform = `translate(${zoom.tx}px, ${zoom.ty}px) scale(${zoom.scale})`;
+  }
+
+  // Caps treeBox's own height by narrowing its width (not by setting an
+  // independent height) -- treeBox is aspect-locked to CANVAS_W/CANVAS_H via
+  // its child SVG's own width:100%;height:auto, and fitToContent's
+  // toPxX/toPxY below assume that same lock to keep a single zoom.scale
+  // valid for both axes (see the "shared parent" comment above). At 100%
+  // card width, a wide-but-shallow tree (or a trivial one-leaf tree, whose
+  // own tiny logical canvas still gets stretched to the card's full width)
+  // could render several viewport-heights tall, pushing the node-samples
+  // panel below the tree fully offscreen on load. Keeping the box's
+  // rendered height under TREE_BOX_MAX_H by shrinking width instead (CSS
+  // centers the narrower result) means the samples panel's own top edge is
+  // reliably visible without scrolling, on any tree shape.
+  function sizeTreeBox() {
+    const maxW = treeBox.parentElement.clientWidth;
+    const maxH = Math.min(window.innerHeight * 0.46, 460);
+    const naturalH = maxW * (CANVAS_H / CANVAS_W);
+    treeBox.style.width = naturalH > maxH ? `${maxH * (CANVAS_W / CANVAS_H)}px` : '';
+  }
+
+  // Both demo trees' node coordinates were hand-placed to already fit the
+  // fixed 900x500 canvas, so this reduces to the identity transform for
+  // them -- but it's computed from T.NODES' actual bounding box, not
+  // hardcoded to that fact, so a tree whose layout doesn't fit 900x500 still
+  // opens fully visible instead of clipped or half off-screen.
+  function fitToContent() {
+    const nodes = Object.values(T.NODES);
+    // Real, fixed CSS pixels -- not "canvas units" -- because that's what a
+    // .node-box actually is: a 168px-wide element whose *position* is a
+    // percentage of the box (so it scales with boxW) but whose *size* isn't
+    // (so it doesn't). Padding expressed in canvas units and only converted
+    // to pixels afterward (the previous version of this function) scales
+    // together with boxW and cancels out of the scale calculation entirely
+    // -- it never actually adapted to a narrower box, which only surfaced
+    // once something genuinely compressed treeBox: the fixed-width node
+    // boxes kept overflowing past the edge regardless of scale, because the
+    // padding meant to account for their real pixel footprint shrank right
+    // along with everything else instead of staying fixed.
+    const NODE_HALF_W = 84;  // half of .node-box's fixed 168px width
+    const NODE_HALF_H = 45;  // rough half-height allowance (rule, stats, dist bar, keep badge)
+    const boxW = treeBox.clientWidth || CANVAS_W;
+    const boxH = boxW * (CANVAS_H / CANVAS_W);
+    const toPxX = x => (x / CANVAS_W) * boxW;
+    const toPxY = y => (y / CANVAS_H) * boxH;
+    const minPxX = Math.min(...nodes.map(n => toPxX(n.x))) - NODE_HALF_W;
+    const maxPxX = Math.max(...nodes.map(n => toPxX(n.x))) + NODE_HALF_W;
+    const minPxY = Math.min(...nodes.map(n => toPxY(n.y))) - NODE_HALF_H;
+    const maxPxY = Math.max(...nodes.map(n => toPxY(n.y))) + NODE_HALF_H;
+    const scaleX = boxW / (maxPxX - minPxX);
+    const scaleY = boxH / (maxPxY - minPxY);
+    zoom.scale = Math.min(1, scaleX, scaleY); // never zoom *in* past 1:1 just to fit
+    const cx = (minPxX + maxPxX) / 2, cy = (minPxY + maxPxY) / 2;
+    zoom.tx = boxW / 2 - cx * zoom.scale;
+    zoom.ty = boxH / 2 - cy * zoom.scale;
+    applyZoom();
+  }
+
+  function zoomBy(factor, centerX, centerY) {
+    const rect = treeBox.getBoundingClientRect();
+    const cx = centerX ?? rect.width / 2;
+    const cy = centerY ?? rect.height / 2;
+    const newScale = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, zoom.scale * factor));
+    const ratio = newScale / zoom.scale;
+    // Keep the point under the cursor (or the box's center, for the +/-
+    // buttons) fixed on screen while the scale changes around it.
+    zoom.tx = cx - (cx - zoom.tx) * ratio;
+    zoom.ty = cy - (cy - zoom.ty) * ratio;
+    zoom.scale = newScale;
+    applyZoom();
+  }
+
+  document.getElementById('zoomInBtn').addEventListener('click', () => zoomBy(ZOOM_STEP));
+  document.getElementById('zoomOutBtn').addEventListener('click', () => zoomBy(1 / ZOOM_STEP));
+  document.getElementById('zoomResetBtn').addEventListener('click', () => fitToContent());
+
+  treeBox.addEventListener('wheel', e => {
+    if (e.target.closest('.info-panel')) return;
+    e.preventDefault();
+    const rect = treeBox.getBoundingClientRect();
+    zoomBy(e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP, e.clientX - rect.left, e.clientY - rect.top);
+  }, { passive: false });
+
+  // Drag-to-pan, but only when the drag starts on empty canvas -- starting
+  // on a node needs to stay a plain click (selecting it), not compete with
+  // panning for the same gesture.
+  let panState = null;
+  treeBox.addEventListener('mousedown', e => {
+    if (e.target.closest('.node-box') || e.target.closest('.zoom-controls') || e.target.closest('.info-panel')) return;
+    panState = { startX: e.clientX, startY: e.clientY, origTx: zoom.tx, origTy: zoom.ty };
+    treeBox.classList.add('panning');
+  });
+  window.addEventListener('mousemove', e => {
+    if (!panState) return;
+    zoom.tx = panState.origTx + (e.clientX - panState.startX);
+    zoom.ty = panState.origTy + (e.clientY - panState.startY);
+    applyZoom();
+  });
+  window.addEventListener('mouseup', () => {
+    if (panState) { panState = null; treeBox.classList.remove('panning'); }
+  });
+
+  // Re-fit whenever treeBox's own rendered size changes, for any reason --
+  // not just a window resize event. A ResizeObserver on the box itself
+  // also catches the box being compressed by something that never fires
+  // "resize" on window at all: this artifact's own panel narrowing, a host
+  // page's sidebar toggling, a container query breakpoint, etc. Without
+  // this, the pan/zoom transform stays keyed to whatever size the box
+  // happened to be at the last real window resize, so the fixed-width node
+  // boxes (children of the zoomed treeViewport) can end up scaled for a box
+  // that no longer exists, spilling out past the page's own edge instead of
+  // shrinking with it.
+  let resizeTimer = null;
+  const scheduleRefit = () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => { sizeTreeBox(); fitToContent(); }, 150);
+  };
+  new ResizeObserver(scheduleRefit).observe(treeBox);
+  // Kept alongside the observer above, not replaced by it: an actual
+  // window resize always fires this reliably, so it's a guaranteed
+  // fallback in case something about a given host page's layout ever
+  // stops treeBox's own box size from changing in step with the window
+  // (e.g. a CSS containment quirk) -- redundant in the common case, but
+  // that just means fitToContent() gets called twice, which is harmless.
+  window.addEventListener('resize', scheduleRefit);
+
+  function widthFor(childN, parentN) { return Math.max(2, (childN / parentN) * 15); }
+  function ns(tag) { return document.createElementNS('http://www.w3.org/2000/svg', tag); }
+  function varName(cssVal) { return cssVal.match(/--[a-z-]+/)[0]; }
+
+  // Tags the sentence's two bolded tokens by role (case-insensitive match,
+  // since sentence-initial capitalization can differ from the stored form),
+  // so the same tok-a/tok-b classes color them exactly like the matching
+  // role's row in the feature table below.
+  function tagRoleTokens(html, formA, formB) {
+    return html.replace(/<strong>(.*?)<\/strong>/g, (match, word) => {
+      const w = word.toLowerCase();
+      if (w === String(formA).toLowerCase()) return `<strong class="tok-a">${word}</strong>`;
+      if (w === String(formB).toLowerCase()) return `<strong class="tok-b">${word}</strong>`;
+      return match;
+    });
+  }
+
+  // Shared, comparable features first (this is exactly what agreement is
+  // about), then role-specific morphology, then dependency-structure extras
+  // (deprel/upos) used by the Hindi tree's rule checks.
+  const ORDERED_FEATS = ['Number', 'Person', 'Gender', 'Case', 'Mood', 'Tense', 'Aspect', 'Voice', 'VerbForm', 'Definite', 'PronType', 'Poss', 'Reflex', 'deprel', 'upos'];
+
+  function featEntry(feats, key) {
+    const hit = feats.find(f => f.replace(/<\/?b>/g, '').startsWith(key + '='));
+    if (!hit) return null;
+    const value = hit.replace(/<\/?b>/g, '').split('=')[1];
+    // "nan" is the pipeline's own missing-value sentinel (see viz_tree.py's
+    // "_missing" -> "nan" rewrite) -- treated the same as a feature that
+    // doesn't apply to this token at all (null -> the "–" placeholder below),
+    // rather than leaking the raw Python string into the table.
+    if (value === 'nan') return null;
+    return { value, bold: hit.startsWith('<b>') };
+  }
+
+  // Sets a minimal pair's decisive feature to its real post-swap value --
+  // create_pairs' own after_{role}_{Feat} column, emitted per pair as
+  // p.afterValue -- so the "swapped" row's other features are identical to
+  // the original by construction (the same feature list, only this one
+  // entry replaced), and the decisive value itself is real data, not a
+  // guessed opposite.
+  function applyAfterFeat(feats, decisiveFeat, afterValue) {
+    if (afterValue == null) return feats;
+    return feats.map(f => {
+      const clean = f.replace(/<\/?b>/g, '');
+      const [key] = clean.split('=');
+      if (key !== decisiveFeat) return f;
+      return `<b>${key}=${afterValue}</b>`;
+    });
+  }
+
+  // One row per {label, form, feats} entry x one column per feature, columns
+  // limited to whichever features actually appear across all rows -- keeps a
+  // trimmed pair's table narrow instead of padding it out to a fixed schema.
+  // Rows flagged `linked` get a colored left rail connecting them (a role and
+  // its reinflected "swapped_" counterpart); a row flagged `swapped` gets its
+  // decisive cell flagged as the violation rather than the grammatical value.
+  function buildFeatTable(decisiveFeat, rows, forceCols) {
+    // forceCols lets a caller fix the same column set across several of
+    // these tables (e.g. all 5 sample rows for a node) so they line up
+    // visually -- left to compute its own columns, each table only shows
+    // the features actually set for its own two rows, which drifts from
+    // sample to sample.
+    const cols = forceCols || ORDERED_FEATS.filter(k => rows.some(r => featEntry(r.feats, k)));
+    const headHtml = cols.map(k => `<th${k === decisiveFeat ? ' class="decisive"' : ''}>${k}</th>`).join('');
+    const rowHtml = (r) => {
+      const cells = cols.map(k => {
+        const e = featEntry(r.feats, k);
+        const isDecisive = k === decisiveFeat;
+        const cls = isDecisive ? ` class="decisive${r.variant === 'swapped' ? ' swapped' : ''}"` : '';
+        if (!e) return `<td${cls}><span class="na">–</span></td>`;
+        return `<td${cls}>${e.bold ? `<b>${e.value}</b>` : e.value}</td>`;
+      }).join('');
+      const rowCls = r.linked ? ' class="linked-row"' : '';
+      const roleCls = r.role ? ` role-${r.role}` : '';
+      return `<tr${rowCls}><th>${r.label} <span class="role-form${roleCls}">${r.form}</span></th>${cells}</tr>`;
+    };
+    return `
+      <table class="feat-mini-table">
+        <thead><tr><th></th>${headHtml}</tr></thead>
+        <tbody>
+          ${rows.map(rowHtml).join('\n          ')}
+        </tbody>
+      </table>`;
+  }
+
+  function nextColor() {
+    const used = new Set(active.values());
+    return PALETTE.find(c => !used.has(c)) || PALETTE[active.size % PALETTE.length];
+  }
+
+  function hexToRgb(hex) {
+    hex = hex.replace('#', '');
+    if (hex.length === 3) hex = hex.split('').map(c => c + c).join('');
+    const n = parseInt(hex, 16);
+    return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+  }
+
+  function interpolateHex(hex1, hex2, t) {
+    const [r1, g1, b1] = hexToRgb(hex1);
+    const [r2, g2, b2] = hexToRgb(hex2);
+    const mix = (a, b) => Math.round(a + (b - a) * t);
+    return `#${[mix(r1, r2), mix(g1, g2), mix(b1, b2)].map(v => v.toString(16).padStart(2, '0')).join('')}`;
+  }
+
+  // Node fill: majority-class color (the same real per-node dist the mini
+  // bar below draws from) blended toward white in proportion to H -- the
+  // exact interpolate_color(node_color, "#ffffff", relative_entropy*0.72)
+  // formula decision_trees/{cond}/{lang}.html's _finalize_tree_html uses
+  // (relative_entropy there is impurity/log2(n_classes), which for these
+  // two-class Yes/No trees is the same binary entropy already shown as H).
+  // Fixed light-mode hex, not cssVar('--yes'/'--no'): the fill is meant to
+  // stay light-toned in both page themes (see the --node-fill comment
+  // above), so its base color shouldn't shift with the dark-mode palette.
+  // Fixed light-mode hex per semantic class, keyed the same way classColor
+  // below looks them up -- interpolateHex needs a real hex to blend toward
+  // white, not a var(...) reference, which is why this can't just reuse
+  // classColor's/T.CLASSES's own color values directly for yes/no/unk (it
+  // can for any other class, whose color already IS a real hex -- see the
+  // fallback below).
+  const SEMANTIC_BASE_HEX = { yes: '#14b8a6', no: '#ec4899', unk: '#a78bda' };
+  function nodeFillColor(node) {
+    if (!node.dist) return null;
+    const majority = node.dist.reduce((a, b) => (b.cnt > a.cnt ? b : a));
+    const base = SEMANTIC_BASE_HEX[majority.cls.toLowerCase()] || majority.color;
+    const t = Math.min(1, node.H * 0.72);
+    return interpolateHex(base, '#ffffff', t);
+  }
+
+  // Looks the color up on T.CLASSES rather than hardcoding yes/no -- CLASSES
+  // already carries the right var(--yes)/var(--no)/var(--unk) (or a real
+  // hex fallback for anything else) per class, computed server-side.
+  function classColor(cls) {
+    const entry = T.CLASSES.find(c => c.cls === cls);
+    return entry ? entry.color : 'var(--unk)';
+  }
+
+  // Yes/No is the real class name in the underlying data (T.CLASSES, every
+  // node's dist[], each sample's label) and stays that way everywhere it's
+  // used as an identifier -- grouping key, dataset key, comparisons against
+  // majorityLabel. This only relabels it where it's rendered as text for a
+  // reader, to "Agree"/"Disagree" (does the subject/verb, or det/head,
+  // actually agree), so it can't be misread as the True/False branch
+  // result shown elsewhere on the same tree -- two different yes/no-shaped
+  // facts about a node that used to share the same two words. Handles the
+  // rare compound case too (node 2's tied "Yes / No" leaf prediction).
+  function displayLabel(cls) {
+    return cls.split(' / ').map(part => {
+      const lower = part.toLowerCase();
+      if (lower !== 'yes' && lower !== 'no') return part;
+      const word = lower === 'yes' ? 'agree' : 'disagree';
+      return part[0] === part[0].toUpperCase() ? word[0].toUpperCase() + word.slice(1) : word;
+    }).join(' / ');
+  }
+
+  // Leaf node boxes render node.rule verbatim ("predict: Yes") server-side --
+  // relabel just the predicted class part through displayLabel, the same
+  // way every other reader-facing Yes/No already is. Internal (split-rule)
+  // nodes have no node.predicted and are returned unchanged: their rule
+  // text is a feature condition, not a class name, even on the rare
+  // feature whose own value happens to be the literal string "Yes"/"No".
+  function nodeRuleDisplay(node) {
+    if (!node.leaf || !node.predicted) return node.rule;
+    return `predict: ${displayLabel(node.predicted)}`;
+  }
+
+  // One bar + count + label per class; sizing (bar width/height, font size)
+  // comes entirely from the caller's CSS context (.node-dist-popover vs.
+  // .node-dist-detail), so this only ever computes the fill heights.
+  function buildDistColumns(dist, maxH) {
+    const maxCnt = Math.max(...dist.map(d => d.cnt), 1);
+    return dist.map(d => {
+      const h = Math.max(2, Math.round((d.cnt / maxCnt) * maxH));
+      return `
+        <div class="dist-col">
+          <div class="dist-col-bar-wrap"><div class="dist-col-bar" style="height:${h}px; background:${classColor(d.cls)}"></div></div>
+          <div class="dist-col-count">${d.cnt.toLocaleString()}</div>
+          <div class="dist-col-label">${displayLabel(d.cls)}</div>
+        </div>`;
+    }).join('');
+  }
+
+  function buildDistBar(node) {
+    if (!node.dist) return '';
+    const total = node.dist.reduce((s, d) => s + d.cnt, 0) || 1;
+    const segs = node.dist.map(d => {
+      return `<span class="seg" style="width:${(d.cnt / total * 100).toFixed(2)}%; background:${classColor(d.cls)}"></span>`;
+    }).join('');
+    const hidden = showNodeDist ? '' : ' style="display:none"';
+    return `
+      <div class="node-dist-bar-wrap"${hidden}>
+        <div class="node-dist-bar">${segs}</div>
+        <div class="node-dist-popover">${buildDistColumns(node.dist, 34)}</div>
+      </div>`;
+  }
+
+  function drawBaseTree() {
+    treeSvg.setAttribute('viewBox', `0 0 ${CANVAS_W} ${CANVAS_H}`);
+    edgesBase.innerHTML = '';
+    nodesLayer.innerHTML = '';
+    T.EDGES.forEach(([a, b, kind]) => {
+      const A = T.NODES[a], B = T.NODES[b];
+      const line = ns('line');
+      const w = widthFor(B.n, A.n);
+      line.setAttribute('x1', A.x); line.setAttribute('y1', A.y + 23);
+      line.setAttribute('x2', B.x); line.setAttribute('y2', B.y - 23);
+      line.setAttribute('stroke', kind === 'true' ? 'var(--ok)' : 'var(--danger)');
+      line.setAttribute('stroke-width', w);
+      line.setAttribute('stroke-linecap', 'round');
+      // False ("No") branches dashed, True ("Yes") solid -- a second, shape-
+      // based cue alongside the green/red color so the branch taken doesn't
+      // rely on color alone (e.g. for colorblind readers, or a projector
+      // that washes the red out). Dash/gap scaled to the edge's own width
+      // (already variable, by sample count) so thick and thin dashed edges
+      // both read as a clean "- - - -", not a blob on the thick ones.
+      if (kind !== 'true') line.setAttribute('stroke-dasharray', `${w * 1.8},${w * 1.4}`);
+      line.classList.add('base-edge');
+      edgesBase.appendChild(line);
+    });
+
+    Object.entries(T.NODES).forEach(([id, node]) => {
+      const slot = document.createElement('div');
+      slot.className = 'node-slot';
+      slot.dataset.node = id;
+      slot.style.left = (node.x / CANVAS_W * 100) + '%';
+      slot.style.top = (node.y / CANVAS_H * 100) + '%';
+
+      const keepHtml = !node.leaf ? '' : node.keep
+        ? `<span class="node-keep yes" data-keep-toggle="1">🔑 ${node.kept.toLocaleString()} kept › ${node.correctSwaps.toLocaleString()} pairs ▸</span>`
+        : `<span class="node-keep no">not kept (H≥${T.META.keepThresholdH})</span>`;
+      const fill = nodeFillColor(node);
+      // [+] marker: flags a split rule where some other feature was >99%
+      // correlated with the chosen one in the rows reaching this node (the
+      // tree's pick was largely arbitrary among them) -- see
+      // get_correlated_features in viz_tree.py. Only ever set on internal
+      // (non-leaf) nodes there, same as here. Both real trees behind this
+      // mockup happen to have zero correlated features at every node (a
+      // real, verified fact about these two trees, not a placeholder), so
+      // this renders nothing today -- the mechanism is wired for whenever a
+      // tree that does have some gets dropped in.
+      const corrHtml = (node.corr && node.corr.length)
+        ? `<span class="corr-marker-wrap"><span class="corr-marker">[+]</span><span class="corr-popover">${node.corr.map(c => `≈ ${c}`).join('<br>')}</span></span>`
+        : '';
+
+      // No branch (True/False) badge on the node itself -- same as the real
+      // decision_trees/{cond}/{lang}.html annotations, which carry no
+      // direction indicator either; that's conveyed by the green/true vs.
+      // red/false edge color and position alone.
+      slot.innerHTML = `
+        <div class="node-box">
+          <div class="node-header"${fill ? ` style="--node-fill:${fill}"` : ''}>
+            <span class="node-rule">${nodeRuleDisplay(node)}${corrHtml}</span>
+          </div>
+          <div class="node-body">
+            [${id}]&nbsp; n=${node.n}&nbsp; H=${node.H.toFixed(2)}
+            ${buildDistBar(node)}
+            ${keepHtml}
+          </div>
+        </div>`;
+      nodesLayer.appendChild(slot);
+
+      const nodeBoxEl = slot.querySelector('.node-box');
+      nodeBoxEl.tabIndex = 0;
+      nodeBoxEl.setAttribute('role', 'button');
+      nodeBoxEl.setAttribute('aria-label', `Node ${id}: ${nodeRuleDisplay(node)}`);
+      nodeBoxEl.addEventListener('click', () => selectNode(id));
+      nodeBoxEl.addEventListener('keydown', e => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectNode(id); }
+      });
+      const keepEl = slot.querySelector('[data-keep-toggle]');
+      if (keepEl) {
+        keepEl.tabIndex = 0;
+        keepEl.setAttribute('role', 'button');
+        keepEl.setAttribute('aria-label', `View the ${node.correctSwaps.toLocaleString()} minimal pairs this leaf produced`);
+        const openPairs = e => {
+          e.stopPropagation();
+          pairsCard.open = true;
+          pairsCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        };
+        keepEl.addEventListener('click', openPairs);
+        keepEl.addEventListener('keydown', e => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openPairs(e); }
+        });
+      }
+    });
+  }
+
+  function buildTreeSelector() {
+    treeSelectRow.innerHTML = '';
+    // A real per-language page only ever has one tree -- the selector row
+    // (built for comparing multiple trees side by side) has nothing to
+    // switch between, so it's not shown at all rather than rendering as a
+    // single, unclickable-feeling button.
+    if (Object.keys(TREES).length <= 1) { treeSelectRow.style.display = 'none'; return; }
+    Object.entries(TREES).forEach(([key, tree]) => {
+      const keepLeaves = Object.entries(tree.NODES).filter(([, n]) => n.keep);
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'tree-select-btn' + (key === currentTreeKey ? ' active' : '');
+      btn.innerHTML = `${tree.title.split(' · ')[0]}<span class="keep-count">🔑×${keepLeaves.length}</span>`;
+      btn.addEventListener('click', () => selectTree(key));
+      treeSelectRow.appendChild(btn);
+    });
+  }
+
+  // Blue "current" outline covers the whole root→currentNode route, not just
+  // the node itself, so you can see how you got there at a glance.
+  function markCurrentPath() {
+    const onPath = new Set(T.PATHS[currentNode]);
+    document.querySelectorAll('.node-slot').forEach(el => {
+      el.classList.toggle('current', onPath.has(Number(el.dataset.node)));
+    });
+  }
+
+  // Floating info panel -- title/accuracy/meta rows straight from T.META,
+  // and the "Classes · dataset distribution" swatch+count+bar rows (same
+  // convention, same "unk" bucket dimmed to opacity 0.35 at zero count) from
+  // T.CLASSES -- both read from decision_trees/{cond}/{lang}.html's own
+  // info-panel, not recomputed here.
+  const META_ROWS = [
+    ['Language', 'language'], ['Keep threshold', 'keepThreshold'], ['accuracy', 'accuracy'],
+    ['base entropy', 'baseEntropy'], ['reduced entropy', 'reducedEntropy'],
+    ['Nodes', 'nodes'], ['Depth', 'depth'],
+    ['Training samples', 'trainingSamples'], ['Predictor', 'predictor'],
+  ];
+  function buildInfoPanel() {
+    infoPanelTitle.textContent = T.META.language;
+    infoPanelAccuracy.textContent = T.META.accuracy;
+    infoPanelMeta.innerHTML = META_ROWS.map(([label, key]) => `
+      <div class="meta-row"><span class="meta-key">${label}</span><span class="meta-val">${T.META[key]}</span></div>`).join('');
+
+    const maxCnt = Math.max(...T.CLASSES.map(c => c.cnt), 1);
+    classDistLegend.innerHTML = T.CLASSES.map(c => `
+      <div class="class-dist-row" style="${c.cnt === 0 ? 'opacity:0.35' : ''}">
+        <span class="class-dist-swatch" style="background:${c.color}"></span>
+        <span class="class-dist-label">${displayLabel(c.cls)}</span>
+        <span class="class-dist-count">${c.cnt.toLocaleString()}</span>
+        <div class="class-dist-bar-track">
+          <div class="class-dist-bar-fill" style="width:${(c.cnt / maxCnt * 100).toFixed(1)}%; background:${c.color}"></div>
+        </div>
+      </div>`).join('');
+  }
+
+  minimizeBtn.addEventListener('click', () => {
+    const minimized = infoPanel.classList.toggle('minimized');
+    minimizeBtn.textContent = minimized ? '+' : '−';
+    minimizeBtn.title = minimized ? 'Expand panel' : 'Minimize panel';
+  });
+
+  let showNodeDist = true;
+  distToggleRow.addEventListener('click', () => {
+    showNodeDist = !showNodeDist;
+    distToggleSwitch.classList.toggle('off', !showNodeDist);
+    document.querySelectorAll('.node-dist-bar-wrap').forEach(el => { el.style.display = showNodeDist ? '' : 'none'; });
+  });
+
+  function selectTree(key) {
+    if (key === currentTreeKey) return;
+    currentTreeKey = key;
+    T = TREES[key];
+    CANVAS_W = T.CANVAS_W; CANVAS_H = T.CANVAS_H;
+    currentNode = T.defaultNode;
+    active.clear();
+    openLabels.clear();
+    // Leaf ids aren't unique across trees (both demo trees happen to have a
+    // leaf "3"), so leaving these set would leak one tree's open/highlight
+    // state onto the other tree's same-numbered leaf.
+    openLeaves.clear();
+    activePairKey = null;
+    document.querySelectorAll('.tree-select-btn').forEach((el, i) => {
+      el.classList.toggle('active', Object.keys(TREES)[i] === key);
+    });
+    treeTitle.textContent = T.title;
+    drawBaseTree();
+    sizeTreeBox();
+    fitToContent();
+    markCurrentPath();
+    buildInfoPanel();
+    buildSampleGrid();
+    buildPairsList();
+    render();
+  }
+
+  function selectNode(id) {
+    // Traces don't survive a node change: leaving them active let a leaf
+    // flag from a node you're no longer looking at linger indefinitely,
+    // which read as stale rather than as an intentional cross-node
+    // comparison.
+    if (id !== currentNode) active.clear();
+    currentNode = id;
+    markCurrentPath();
+    buildSampleGrid();
+    render();
+  }
+
+  function render() {
+    ringsLayer.innerHTML = '';
+
+    // Node rings use the per-sample palette, since they're the one place
+    // that's actually comparing *which* traced sample(s) reach a node -- but
+    // the root is excluded: every route starts there, so a ring on it never
+    // carries any information.
+    const rootId = Object.entries(T.NODES).find(([, n]) => n.branch === 'root')[0];
+    const nodeUsers = {};
+    active.forEach((color, key) => {
+      T.PATHS[key.split('_')[0]].forEach(n => {
+        if (String(n) === rootId) return;
+        (nodeUsers[n] = nodeUsers[n] || []).push(color);
+      });
+    });
+    Object.entries(nodeUsers).forEach(([nodeId, colors]) => {
+      const node = T.NODES[nodeId];
+      colors.forEach((color, i) => {
+        const ring = ns('rect');
+        const inset = -6 - i * 6;
+        ring.setAttribute('x', node.x - 84 + inset);
+        ring.setAttribute('y', node.y - 23 + inset);
+        ring.setAttribute('width', 168 - inset * 2);
+        ring.setAttribute('height', 46 - inset * 2);
+        ring.setAttribute('rx', 8 - inset * 0.1);
+        ring.classList.add('ring');
+        ring.setAttribute('stroke', `var(${color})`);
+        ringsLayer.appendChild(ring);
+      });
+    });
+  }
+
+  // Which classes currently have their feature tables open -- one switch
+  // per class (Yes/No), not one for the whole node: opening Yes's up-to-5
+  // rows together (so their columns line up for comparison) shouldn't also
+  // open No's, since they're a separate group with nothing to compare
+  // against Yes row-for-row.
+  let openLabels = new Set();
+
+  // Which leaves currently have every one of their pairs' feature tables
+  // open -- keyed by leafId, not per-pair: a leaf's pairs have no Yes/No
+  // subdivision to open independently, so any one "features" button for a
+  // leaf (there's one per pair, plus one on the leaf's heading row) toggles
+  // all of that leaf's pairs together.
+  let openLeaves = new Set();
+  // The single most-recently-clicked pair ("leafId_i"), toggled independently
+  // of openLeaves above -- clicking a card only ever changes which one card
+  // is highlighted (or clears it, clicking the same one twice), never touches
+  // feature-table visibility.
+  let activePairKey = null;
+
+  // Runs `mutate`, then scrolls the page by however far the element tagged
+  // data-scroll-anchor="anchorValue" moved vertically as a result -- so
+  // whatever a person just clicked (a "features" toggle, a pair card) stays
+  // under their eye instead of the page jumping when content above or
+  // around it changes height. Re-queries by a stable data attribute rather
+  // than keeping clickedEl's own reference because buildPairsList() (and,
+  // in principle, any other full-rebuild caller) replaces the whole list on
+  // every call -- the original element is gone, but whatever it represents
+  // (a leaf's header button, a specific pair, a sample row) still has a
+  // stable identifying attribute to find its replacement by. Works just as
+  // well for callers that mutate in place (setLabelFeatsOpen never rebuilds
+  // anything) since re-querying the same still-present element is harmless.
+  function preservingScroll(clickedEl, anchorValue, mutate) {
+    const before = clickedEl.getBoundingClientRect().top;
+    mutate();
+    const after = document.querySelector(`[data-scroll-anchor="${CSS.escape(anchorValue)}"]`);
+    // scrollPane, not window: samples/pairs now scroll inside their own
+    // pane (see .scroll-pane), not the page/window itself, which stays
+    // fixed so the tree above never scrolls out of view.
+    if (after) scrollPane.scrollBy(0, after.getBoundingClientRect().top - before);
+  }
+
+  function setLabelFeatsOpen(label, open) {
+    if (open) openLabels.add(label); else openLabels.delete(label);
+    document.querySelectorAll(`#sampleGrid tr.feat-row[data-label="${CSS.escape(label)}"]`).forEach(el => { el.hidden = !open; });
+    // Every row in this label group now carries its own "features" button
+    // (plus the one on the group header) -- all of them need their label
+    // text kept in sync, not just a single button, since any one of them
+    // can be the one that triggered this.
+    document.querySelectorAll(`.group-feats-toggle[data-label="${CSS.escape(label)}"]`).forEach(btn => {
+      btn.textContent = (open ? '▾' : '▸') + ' features';
+      btn.setAttribute('aria-expanded', String(open));
+    });
+    if (open) alignFeatLabelCols();
+  }
+
+  // sharedCols (above) already keeps the data columns identical across all
+  // 5 samples' tables; the one column it can't fix is the row-label cell
+  // itself, since its width comes from the actual nsubj/verb token text --
+  // a one-letter Greek pronoun next to a ten-letter noun -- which a shared
+  // *set* of columns says nothing about. Measuring the widest one actually
+  // rendered and applying it to all of them (rather than guessing a fixed
+  // CSS width that's either wasteful or too narrow for a real outlier)
+  // finishes the alignment exactly. Only real once the rows are unhidden --
+  // a hidden row's cells measure 0-width -- so this runs after that, not at
+  // build time.
+  function alignFeatLabelCols() {
+    const cells = [...document.querySelectorAll('#sampleGrid tr.feat-row:not([hidden]) .feat-mini-table tbody th')];
+    if (!cells.length) return;
+    cells.forEach(c => { c.style.width = ''; });
+    const maxW = Math.max(...cells.map(c => c.getBoundingClientRect().width));
+    cells.forEach(c => { c.style.width = maxW + 'px'; });
+  }
+
+  // Auto-derived from T.NODES/T.PATHS alone: the chain of split rules and the
+  // branch (True/False, sklearn's own right/left convention) taken at each
+  // one to reach this node from the root. No hand-written interpretation.
+  function buildBreadcrumb(nodeId) {
+    const path = T.PATHS[nodeId];
+    if (path.length === 1) return '<i>Root — no decisions yet.</i>';
+    const steps = [];
+    for (let i = 0; i < path.length - 1; i++) {
+      const parent = T.NODES[path[i]];
+      const child = T.NODES[path[i + 1]];
+      const branch = child.branch === 'true' ? 'True' : 'False';
+      steps.push(`<code>${parent.rule}</code> → <b>${branch}</b>`);
+    }
+    return steps.join('<br>');
+  }
+
+  function buildSampleGrid() {
+    const node = T.NODES[currentNode];
+    sampleGridTitle.textContent = `Node ${currentNode} samples`;
+    nodeNote.innerHTML = `<span class="node-note-title">About node ${currentNode} · route ${T.PATHS[currentNode].join(' → ')}</span>${buildBreadcrumb(currentNode)}`;
+    nodeDistDetail.innerHTML = node.dist ? buildDistColumns(node.dist, 56) : '';
+    sampleGrid.innerHTML = '';
+
+    const samples = T.NODE_SAMPLES[currentNode];
+    // One shared column set for every sample's feature table (rather than
+    // each computing its own from just its two rows), so e.g. Mood/Case/
+    // VerbForm land in the same position across all 5 -- otherwise a
+    // feature only some samples have shifts every later column sideways
+    // from row to row, and nothing lines up for comparison.
+    const sharedCols = ORDERED_FEATS.filter(k =>
+      samples.some(s => featEntry(s.nsubjFeats, k) || featEntry(s.verbFeats, k))
+    );
+
+    function addRow(s, idx, displayIdx) {
+      const key = currentNode + '_' + idx;
+      const color = active.get(key);
+
+      const row = document.createElement('tr');
+      row.className = 'sample-row' + (active.has(key) ? ' active' : '');
+      row.tabIndex = 0;
+      row.setAttribute('role', 'button');
+      row.setAttribute('aria-pressed', String(active.has(key)));
+      row.dataset.key = key;
+      if (color) {
+        row.style.setProperty('--sample-color', `var(${color})`);
+        row.style.setProperty('--sample-color-light', `var(${color}-light)`);
+      }
+
+      row.innerHTML = `
+        <td class="col-idx">${displayIdx}</td>
+        <td class="col-sentence">${tagRoleTokens(s.sentence, s.nsubj, s.verb)}</td>
+        <td class="col-link">
+          <button type="button" class="group-feats-toggle" data-label="${s.label}" data-scroll-anchor="samplerow_${key}" aria-expanded="${openLabels.has(s.label)}">${openLabels.has(s.label) ? '▾' : '▸'} features</button>
+          <a href="${s.treebankLink}" target="_blank" rel="noopener" title="${s.treebankName}">↗</a>
+        </td>
+      `;
+
+      const featRow = document.createElement('tr');
+      featRow.className = 'feat-row';
+      featRow.dataset.label = s.label;
+      featRow.hidden = !openLabels.has(s.label);
+      featRow.innerHTML = `<td colspan="3">${buildFeatTable(T.decisiveFeat, [
+        { label: T.roleA, form: s.nsubj, feats: s.nsubjFeats, role: 'a' },
+        { label: T.roleB, form: s.verb, feats: s.verbFeats, role: 'b' },
+      ], sharedCols)}</td>`;
+
+      row.querySelector('a').addEventListener('click', e => e.stopPropagation());
+      const featBtn = row.querySelector('.group-feats-toggle');
+      featBtn.addEventListener('click', e => {
+        e.stopPropagation();
+        preservingScroll(featBtn, `samplerow_${key}`, () => setLabelFeatsOpen(s.label, !openLabels.has(s.label)));
+      });
+      const toggleTrace = () => {
+        if (active.has(key)) {
+          active.delete(key);
+        } else {
+          // Cap at one active sample per node: every row in this table
+          // already shares the identical route to currentNode, so a second
+          // traced sample here would only add color, not new path
+          // information -- multi-select still works across nodes, where it
+          // shows where different samples' routes diverge.
+          [...active.keys()].forEach(k => {
+            if (k.split('_')[0] === currentNode) active.delete(k);
+          });
+          active.set(key, nextColor());
+        }
+        buildSampleGrid();
+        render();
+      };
+      row.addEventListener('click', toggleTrace);
+      row.addEventListener('keydown', e => {
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleTrace(); }
+      });
+
+      sampleGrid.appendChild(row);
+      sampleGrid.appendChild(featRow);
+    }
+
+    // Group the up-to-5 shown rows by label, each under a header giving the
+    // node's real total for that label (from node.dist, the same real
+    // per-node counts the tree's own distribution bar/chart draw from) --
+    // "showing 3 of 14,838 (98.9% of this node)" instead of a flat list
+    // that never says how many rows exist beyond the ones shown.
+    const byLabel = new Map();
+    samples.forEach((s, idx) => {
+      if (!byLabel.has(s.label)) byLabel.set(s.label, []);
+      byLabel.get(s.label).push(idx);
+    });
+    // Order groups the same way node.dist does (Yes/yes before No/no) when
+    // possible, so the table's group order matches the tree's own bars.
+    const distOrder = (node.dist || []).map(d => d.cls);
+    const labels = [...byLabel.keys()].sort((a, b) => distOrder.indexOf(a) - distOrder.indexOf(b));
+
+    labels.forEach(label => {
+      const idxs = byLabel.get(label);
+      const distEntry = (node.dist || []).find(d => d.cls === label);
+      if (distEntry) {
+        const isOpen = openLabels.has(label);
+        const pct = (distEntry.cnt / node.n * 100).toFixed(1);
+        const header = document.createElement('tr');
+        header.className = 'sample-group-header';
+        header.innerHTML = `<td colspan="3"><div class="group-header-row">
+          <span class="group-swatch" style="background:${classColor(label)}"></span>
+          <span class="group-label">${displayLabel(label)}</span>
+          <span class="group-n">showing ${idxs.length} of ${distEntry.cnt.toLocaleString()} (${pct}% of this node)</span>
+          <button type="button" class="group-feats-toggle" data-label="${label}" data-scroll-anchor="samplehdr_${label}" aria-expanded="${isOpen}">${isOpen ? '▾' : '▸'} features</button>
+        </div></td>`;
+        const hdrBtn = header.querySelector('.group-feats-toggle');
+        hdrBtn.addEventListener('click', () => {
+          preservingScroll(hdrBtn, `samplehdr_${label}`, () => setLabelFeatsOpen(label, !openLabels.has(label)));
+        });
+        sampleGrid.appendChild(header);
+      }
+      idxs.forEach((idx, i) => addRow(samples[idx], idx, i + 1));
+    });
+    if (openLabels.size) alignFeatLabelCols();
+  }
+
+  function buildPairsList() {
+    pairsList.innerHTML = '';
+    // Caps how many real pair examples render per leaf -- T.PAIRS is a
+    // hand-picked demo subset today (a handful per leaf), but a leaf's real
+    // correct_swaps.parquet can run into the thousands, so this keeps the
+    // page from ever having to render all of them at once.
+    const PAIR_LIMIT = 15;
+    const keepLeaves = Object.entries(T.NODES).filter(([, n]) => n.keep).map(([id]) => id);
+    const pairsByLeaf = keepLeaves.map(leafId => [leafId, T.PAIRS.filter(p => String(p.leaf) === String(leafId))]);
+    const shownTotal = pairsByLeaf.reduce((sum, [, all]) => sum + Math.min(all.length, PAIR_LIMIT), 0);
+    const leafWord = keepLeaves.length === 1 ? 'leaf' : 'leaves';
+    pairsTitle.textContent = `🔑 Generated minimal pairs (${keepLeaves.length} ${leafWord} kept, ${shownTotal} shown)`;
+
+    // Which leaf/leaves, how many kept, and H vs. the keep threshold are all
+    // already on the node badges above (and repeated in pairsTitle just
+    // above this); this only needs to add what those don't already say --
+    // that these specific pairs come straight from correct_swaps.parquet.
+    const leafList = keepLeaves.length > 1 ? `leaves ${keepLeaves.join(' and ')}` : `leaf ${keepLeaves[0]}`;
+    pairsIntro.textContent = `Minimal pairs from ${leafList}`;
+
+    pairsByLeaf.forEach(([leafId, allPairs]) => {
+      if (allPairs.length === 0) return;
+      const leafPairs = allPairs.slice(0, PAIR_LIMIT);
+      const group = document.createElement('div');
+      group.className = 'pairs-leaf-group';
+      // One "show features" toggle per leaf, always present (not just once
+      // there's more than one kept leaf) -- it opens/closes every one of
+      // this leaf's pairs at once, independently of activePairKey below.
+      const leaf = T.NODES[leafId];
+      const allOpen = openLeaves.has(leafId);
+      const headingRow = document.createElement('div');
+      headingRow.className = 'pairs-leaf-heading-row';
+      const shownNote = allPairs.length > PAIR_LIMIT ? `, showing ${PAIR_LIMIT} of ${allPairs.length}` : '';
+      const headingHtml = keepLeaves.length > 1
+        ? `<span class="pairs-leaf-heading">Leaf ${leafId} <span class="n">— ${leaf.kept.toLocaleString()} kept, ${leaf.correctSwaps ? leaf.correctSwaps.toLocaleString() + ' pairs generated' : ''}${shownNote}</span></span>`
+        : '';
+      headingRow.innerHTML = `${headingHtml}<button type="button" class="group-feats-toggle" data-scroll-anchor="leafhdr_${leafId}" aria-expanded="${allOpen}">${allOpen ? '▾' : '▸'} features</button>`;
+      const leafHdrBtn = headingRow.querySelector('.group-feats-toggle');
+      leafHdrBtn.addEventListener('click', () => {
+        preservingScroll(leafHdrBtn, `leafhdr_${leafId}`, () => {
+          if (allOpen) openLeaves.delete(leafId); else openLeaves.add(leafId);
+          buildPairsList();
+        });
+      });
+      group.appendChild(headingRow);
+
+      // Same root-to-leaf rule/branch chain as the node-samples panel's
+      // "About node" breadcrumb above, just beneath this leaf's own
+      // heading rather than bundled with every leaf's at the top of the
+      // card -- auto-derived from T.NODES/T.PATHS, not hand-written, so it
+      // can't drift out of sync with the tree itself.
+      const pathTrace = document.createElement('div');
+      pathTrace.className = 'pairs-leaf-path';
+      pathTrace.innerHTML = buildBreadcrumb(leafId);
+      group.appendChild(pathTrace);
+
+      leafPairs.forEach((p, i) => {
+        const key = leafId + '_' + i;
+        // Every pair in an open leaf shows its feature table together (no
+        // per-pair open state); activePairKey is the single, separate
+        // highlight -- only ever one card across the whole page.
+        const isOpen = openLeaves.has(leafId);
+        const el = document.createElement('div');
+        el.className = 'pair-example' + (key === activePairKey ? ' active' : '');
+        el.tabIndex = 0;
+        el.setAttribute('role', 'button');
+        el.setAttribute('aria-pressed', String(key === activePairKey));
+        el.setAttribute('data-scroll-anchor', `pair_${key}`);
+
+        // The swapped role is the one create_pairs actually reinflected --
+        // roleA (det) for Hindi, roleB (verb) for Greek. Its "swapped_" row
+        // is the original row's features with only the decisive feature
+        // flipped, exactly what reinflection does.
+        const swappedIsA = (p.swapRole || T.swappedRole) === 'A';
+        const origRole = swappedIsA ? { label: T.roleA, form: p.nsubj, feats: p.nsubjFeats, role: 'a' } : { label: T.roleB, form: p.verb, feats: p.verbFeats, role: 'b' };
+        const otherRole = swappedIsA ? { label: T.roleB, form: p.verb, feats: p.verbFeats, role: 'b' } : { label: T.roleA, form: p.nsubj, feats: p.nsubjFeats, role: 'a' };
+        const swappedRow = {
+          label: `swapped_${origRole.label}`,
+          form: p.ungrammatical,
+          feats: applyAfterFeat(origRole.feats, T.decisiveFeat, p.afterValue),
+          variant: 'swapped',
+          linked: true,
+          role: origRole.role,
+        };
+        // The swapped sentence has the same two tokens except the swapped
+        // role's, which shows the reinflected (ungrammatical) form instead.
+        const swapFormA = swappedIsA ? p.ungrammatical : p.nsubj;
+        const swapFormB = swappedIsA ? p.verb : p.ungrammatical;
+
+        el.innerHTML = `
+          <div class="pair-sentence-row grammatical">
+            <span class="mark">✓</span><span class="pair-example-sentence">${tagRoleTokens(p.origSentence, p.nsubj, p.verb)}</span>
+            <button type="button" class="group-feats-toggle" data-scroll-anchor="pairitem_${key}" aria-expanded="${isOpen}">${isOpen ? '▾' : '▸'} features</button>
+            <a class="pair-link" href="${p.treebankLink}" target="_blank" rel="noopener" title="${p.treebankName}">↗</a>
+          </div>
+          <div class="pair-sentence-row ungrammatical"><span class="mark">✗</span><span class="pair-example-sentence">${tagRoleTokens(p.swapSentence, swapFormA, swapFormB)}</span></div>
+          ${isOpen ? buildFeatTable(T.decisiveFeat, [otherRole, { ...origRole, linked: true }, swappedRow]) : ''}
+        `;
+        el.querySelector('.pair-link').addEventListener('click', e => e.stopPropagation());
+        const itemFeatBtn = el.querySelector('.group-feats-toggle');
+        itemFeatBtn.addEventListener('click', e => {
+          e.stopPropagation();
+          preservingScroll(itemFeatBtn, `pairitem_${key}`, () => {
+            if (openLeaves.has(leafId)) openLeaves.delete(leafId); else openLeaves.add(leafId);
+            buildPairsList();
+          });
+        });
+        // Only ever changes which single card is highlighted (or clears it,
+        // clicking the same one again) -- feature-table visibility is the
+        // "features" button's job now, not this click.
+        const toggleHighlight = () => {
+          activePairKey = (activePairKey === key) ? null : key;
+          preservingScroll(el, `pair_${key}`, () => buildPairsList());
+        };
+        el.addEventListener('click', toggleHighlight);
+        el.addEventListener('keydown', e => {
+          if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleHighlight(); }
+        });
+        group.appendChild(el);
+      });
+      pairsList.appendChild(group);
+    });
+  }
+
+  buildTreeSelector();
+  treeTitle.textContent = T.title;
+  drawBaseTree();
+  sizeTreeBox();
+  fitToContent();
+  markCurrentPath();
+  buildInfoPanel();
+  buildSampleGrid();
+  buildPairsList();
+  // default: trace the Greek tree's first sample row for an immediate
+  // payoff. Feature tables start closed (openLabels is empty until a
+  // group's own toggle is clicked) -- not opened here, so the page's first
+  // paint isn't already showing every row's feature table before the
+  // reader's asked for it.
+  document.querySelectorAll('#sampleGrid tr.sample-row')[0].click();
+})();
+</script>

@@ -10,9 +10,38 @@ from .languages import latin_to_cyrillic, remove_diacritics_langs, remove_multip
 from .unimorph_features import load_um_features
 
 import sys
+from functools import lru_cache
 sys.path.append("../../")
-from resources.um2ud_annotation.UM2UD_mapper import UM2UD_values, shortened_vals as SHORTENED_UM_VALS
+from resources.um2ud_annotation.UM2UD_mapper import (
+    UM2UD_values, shortened_vals as SHORTENED_UM_VALS, map_um_value_to_ud,
+)
 
+
+@lru_cache(maxsize=None)
+def _cached_map_um_value_to_ud(val: str):
+    """lru_cache wrapper around the vendored map_um_value_to_ud (resources/
+    um2ud_annotation): its ARG*/PSS* handling does an O(vocabulary) regex
+    scan per call (parse_complex_um_value's nested loop over UM2UD_values/
+    shortened_vals), and a single UM lexicon (e.g. Georgian's real UniMorph
+    file, ~92k rows) repeats the same handful of ARG-tag strings across
+    nearly every row -- caching by the literal input string turns that into
+    a few hundred unique evaluations instead of tens of thousands. Safe to
+    cache unbounded: the domain is UM tag strings, a small closed vocabulary
+    per language, not user data.
+    """
+    return map_um_value_to_ud(val)
+
+
+# multiblimp.ud2um's own encoding for a UD layered/argument-marking feature
+# (e.g. Number[obj]=Plur) that survives into a UM tag string as a single
+# component: "<um_code><LAYERED_FEAT_SEP><suffix>" (e.g. "PL$obj"). Decoded
+# back into a "{feat}[{suffix}]" entry by UnimorphInflector.ufeats2dict
+# below. Not a real UniMorph tag syntax -- genuine UniMorph argument-marking/
+# possessor data uses ARG*/PSS* tags instead (see ufeats2dict's other
+# branch, which routes those through the vendored UM2UD_mapper). "$" doesn't
+# collide with anything in real UM tag vocabulary (uppercase alnum, plus the
+# ";+/.,{}" this module's own preprocessing already treats specially).
+LAYERED_FEAT_SEP = "$"
 
 unmarked_features = {
     "Degree",
@@ -391,12 +420,20 @@ class UnimorphInflector:
         if remove_multiples:
             df.form = [form.split(", ")[0] for form in df.form]
 
-        ufeat_cols = {x: [] for x in self.feat2val}
+        row_ufeats = [self.ufeats2dict(ufeat) for ufeat in df.ufeat]
 
-        for ufeat in df.ufeat:
-            row_ufeats = self.ufeats2dict(ufeat)
-            for ufeat_col in self.feat2val:
-                ufeat_cols[ufeat_col].append(row_ufeats.get(ufeat_col))
+        # self.feat2val's fixed plain-feature vocabulary won't have entries
+        # for the "{feat}[{suffix}]" argument-marking keys ufeats2dict can
+        # also produce (from real UM ARG*/PSS* tags or multiblimp.ud2um's
+        # LAYERED_FEAT_SEP encoding, e.g. "Number[obj]") -- discovered from
+        # the rows themselves instead, so those columns aren't silently
+        # dropped here.
+        bracketed_cols = {k for d in row_ufeats for k in d if "[" in k}
+        ufeat_cols = {x: [] for x in set(self.feat2val) | bracketed_cols}
+
+        for d in row_ufeats:
+            for ufeat_col in ufeat_cols:
+                ufeat_cols[ufeat_col].append(d.get(ufeat_col))
 
         # Only set the columns for ufeats that *do* occur
         for ufeat_col, ufeat_vals in ufeat_cols.items():
@@ -592,8 +629,26 @@ class UnimorphInflector:
             self.inflection_map = (swap_ufeat, swap_map)
 
 
-    def ufeats2dict(self, ufeats: str) -> Dict[str, str]: # replace with um2ud_mapper 
-        """Translates the unimorph X;Y;Z format to a dictionary"""
+    def ufeats2dict(self, ufeats: str) -> Dict[str, str]: # replace with um2ud_mapper
+        """Translates the unimorph X;Y;Z format to a dictionary.
+
+        Two argument-marking encodings are handled ahead of the plain-tag
+        lookup below (both produce "{feat}[{suffix}]" keys, e.g.
+        "Number[obj]"):
+          - LAYERED_FEAT_SEP-marked tags ("PL$obj"): multiblimp.ud2um's own
+            round-trip encoding for a UD layered feature that survived into
+            the UD-derived fallback lexicon (see LAYERED_FEAT_SEP's
+            docstring).
+          - Real UniMorph ARG*/PSS* tags ("ARGABS1", "PSS3S", ...): genuine
+            argument-marking/possessor UM tags, e.g. from Basque/Georgian UM
+            paradigm data. This module's own val2feat lookup below only
+            understands plain (non-compound) UM tags, so these are routed
+            through the vendored UM2UD_mapper (resources/um2ud_annotation)
+            instead, which already decomposes them correctly -- then
+            translated back to this module's raw-UM-code convention (val2feat's
+            values, e.g. "PL"/"3", not UD-format "Plur"/"3") via UD2UM, so
+            bracketed and plain columns stay directly comparable.
+        """
         ufeats = (
             str(ufeats)
             .replace("/", "+")
@@ -609,6 +664,22 @@ class UnimorphInflector:
 
         for val in ufeat_vals:
             if len(val) == 0:
+                continue
+            elif LAYERED_FEAT_SEP in val:
+                code, _, suffix = val.partition(LAYERED_FEAT_SEP)
+                base_feat = self.val2feat.get(code) or self.val2feat.get(code.upper())
+                if base_feat is None:
+                    continue
+                key = f"{base_feat}[{suffix}]"
+                ufeat_dict[key] = f"{ufeat_dict[key]}+{code}" if key in ufeat_dict else code
+                continue
+            elif val.startswith("ARG") or val.startswith("PSS"):
+                for bracketed_feat, ud_val in _cached_map_um_value_to_ud(val)["morpho"].items():
+                    base_feat, _, suffix = bracketed_feat.partition("[")
+                    suffix = suffix.rstrip("]")
+                    um_code = UD2UM.get((base_feat, ud_val), ud_val)
+                    key = f"{base_feat}[{suffix}]" if suffix else base_feat
+                    ufeat_dict[key] = f"{ufeat_dict[key]}+{um_code}" if key in ufeat_dict else um_code
                 continue
             elif val in self.val2feat:
                 ufeat = self.val2feat[val]

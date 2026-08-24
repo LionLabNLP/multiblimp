@@ -29,6 +29,10 @@ from sva_trees.pipeline import get_impurity, get_um_lookup_table, get_ud_lookup_
 from sva_trees.diagnostics import (
     generate_diagnostics_table, write_diagnostics_csv, diagnostics_row_to_json,
 )
+from multiblimp.config import (
+    HTML_DECISION_TREES_DIR, OUTPUT_DECISION_TREES_DIR, OUTPUT_MINIMAL_PAIRS_DIR,
+    OUTPUT_DIAGNOSTICS_DIR,
+)
 
 from .redirect import redirect_nsubj_to_aux, nsubj_aux_target, AUX_COUNT_FEAT
 
@@ -157,9 +161,10 @@ class SubjAuxPipeline:
                  include_multi_aux: bool = True,
                  rm_columns=("nsubj_child-deprel_conj",),
                  unimorph_args: dict | None = None,
-                 decision_trees_dir: str = "../../decision_trees",
-                 minimal_pairs_dir: str = "../../minimal_pairs",
-                 diagnostics_dir: str = "../../diagnostics",
+                 decision_trees_dir: str = OUTPUT_DECISION_TREES_DIR,
+                 html_decision_trees_dir: str = HTML_DECISION_TREES_DIR,
+                 minimal_pairs_dir: str = OUTPUT_MINIMAL_PAIRS_DIR,
+                 diagnostics_dir: str = OUTPUT_DIAGNOSTICS_DIR,
                  n_jobs: int = 1, max_worker_mem_gb: float | None = None,
                  mem_headroom: float = 0.8, max_tasks_per_child: int = 1,
                  force: bool = False):
@@ -187,6 +192,7 @@ class SubjAuxPipeline:
             "remove_multiword_forms": True,
         }
         self.decision_trees_dir = decision_trees_dir
+        self.html_decision_trees_dir = html_decision_trees_dir
         self.minimal_pairs_dir = minimal_pairs_dir
         self.diagnostics_dir = diagnostics_dir
         self.n_jobs = n_jobs  # languages processed in parallel (1=serial)
@@ -356,7 +362,28 @@ class SubjAuxPipeline:
             else:
                 dt_df = full_df
 
-        html_out = f"{self.decision_trees_dir}/{self.target_id}/{lang}.html"
+        # inflector/num_lemma/num_form already built at the top of this
+        # method, for extraction-time enrichment -- reused here as-is. Run
+        # before tree2html (not after, as before) so the v2 page's
+        # generated-pairs section can join this same run's own
+        # correct_swaps rows in by leaf_id -- create_pairs doesn't depend on
+        # anything tree2html produces, so this reorder is safe.
+        diagnostic_dfs = create_pairs(
+            dt_df,
+            swap_feat=self.predictor_var,
+            inflector=inflector,
+            target=self.target,
+            leaf_threshold=self.threshold,
+            save_to=self._pairs_dir(lang),
+            num_lemma=num_lemma,
+            num_form=num_form,
+            full_df=full_df,
+            unk_counts=unk_counts,
+            label_distribution=label_distribution,
+            head_label="Aux",
+        )
+
+        html_out = f"{self.html_decision_trees_dir}/{self.target_id}/{lang}.html"
         if self.never_skip or not os.path.exists(html_out):
             tree2html(
                 pipeline_model=model,
@@ -379,24 +406,8 @@ class SubjAuxPipeline:
                 leaf_threshold=self.threshold,
                 full_label_distribution=label_distribution,
                 head_label="Aux",
+                correct_swaps_df=diagnostic_dfs.get("correct_swaps"),
             )
-
-        # inflector/num_lemma/num_form already built at the top of this
-        # method, for extraction-time enrichment -- reused here as-is.
-        create_pairs(
-            dt_df,
-            swap_feat=self.predictor_var,
-            inflector=inflector,
-            target=self.target,
-            leaf_threshold=self.threshold,
-            save_to=self._pairs_dir(lang),
-            num_lemma=num_lemma,
-            num_form=num_form,
-            full_df=full_df,
-            unk_counts=unk_counts,
-            label_distribution=label_distribution,
-            head_label="Aux",
-        )
 
     def _generate_indexes(self):
         pairs_dir = f"{self.minimal_pairs_dir}/{self.target_id}/{self.target_id}_{self.deprel}"
@@ -418,7 +429,7 @@ class SubjAuxPipeline:
         print("Generating deprel index")
         generate_html_deprel_index(
             data_dir=self._decision_trees_dir_full(),
-            html_directory=f"{self.decision_trees_dir}/{self.target_id}",
+            html_directory=f"{self.html_decision_trees_dir}/{self.target_id}",
             target_col=self.predictor_var,
             exclude_labels={"unk"} if self.simplify else {"--", "+-"},
             include_trivial_labels={"Yes"},
@@ -430,4 +441,4 @@ class SubjAuxPipeline:
         )
 
         print("Generating overview index")
-        generate_html_overview_index(html_directory=self.decision_trees_dir)
+        generate_html_overview_index(html_directory=self.html_decision_trees_dir)

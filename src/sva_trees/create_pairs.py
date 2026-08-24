@@ -117,14 +117,17 @@ def _feats_summary(row, prefix, highlight_feat=None) -> str:
     "_features" columns in word_order/html/html_tree.py's example table, so a long
     feature set never overflows into neighboring cells. Column naming matches
     extract_node_features's f"{prefix}_{feat}" convention; excludes the many other
-    {prefix}_-prefixed columns (form, idx, deprel, sibling-*, child-*, ...) since
-    those never look like a bare CamelCase feature name.
+    {prefix}_-prefixed columns (form, idx, sibling-*, child-*, ...) since those
+    never look like a bare CamelCase feature name.
 
-    Also includes the node's upos (extract_node_features's "{prefix}_pos" column
-    -- displayed as "upos=..." rather than the column's own "pos" label, first
-    in the list, ahead of the morphological feats) -- same convention word_order/
-    viz_tree.py's _build_feat_columns uses for the tree page's own per-token
-    feature list, so the two stay consistent.
+    Also includes the node's upos/deprel/lemma (extract_node_features's
+    "{prefix}_pos"/"{prefix}_deprel"/"{prefix}_lemma" columns -- "pos" is
+    displayed as "upos=..." rather than the column's own "pos" label; deprel/
+    lemma keep their column names as-is, e.g. "deprel=cop", useful for telling
+    a redirect_nsubj_to_aux cop-redirected row apart from an aux/aux:pass one
+    at a glance), in that order, first in the list, ahead of the morphological
+    feats -- same convention word_order/viz_tree.py's _build_feat_columns uses
+    for the tree page's own per-token feature list, so the two stay consistent.
 
     highlight_feat: the feature actually being swapped/compared (e.g. "Number"),
     bolded in the list so it's easy to spot among the node's other features."""
@@ -148,9 +151,10 @@ def _feats_summary(row, prefix, highlight_feat=None) -> str:
 
     pairs.sort(key=lambda p: p[0])
 
-    upos_val = row.get(f"{prefix}_pos")
-    if pd.notna(upos_val) and upos_val not in (None, "None", "", "_missing", "_"):
-        pairs.insert(0, ("upos", f"upos={html_lib.escape(str(upos_val))}"))
+    for extra_feat, col_suffix in (("lemma", "lemma"), ("deprel", "deprel"), ("upos", "pos")):
+        val = row.get(f"{prefix}_{col_suffix}")
+        if pd.notna(val) and val not in (None, "None", "", "_missing", "_"):
+            pairs.insert(0, (extra_feat, f"{extra_feat}={html_lib.escape(str(val))}"))
 
     if not pairs:
         return "&mdash;"
@@ -266,6 +270,18 @@ def _fmt_sentence(html_text):
     return html_text if html_text is not None else "&mdash;"
 
 
+def _swap_form_after(row, kind) -> str:
+    """The reinflected word form for `kind` (process_item's "swap_{kind}" column,
+    e.g. "swap_head" -> the head's form post-swap), or "&mdash;" for buckets that
+    never call process_item for this kind (e.g. no_candidates/no_inflections),
+    where the column is entirely absent -- same missing-data convention as
+    _feats_summary's "&mdash;"."""
+    val = row.get(f"swap_{kind}")
+    if pd.isna(val):
+        return "&mdash;"
+    return _fmt_cell(val)
+
+
 def _diverse_sample(item_df: pd.DataFrame, max_examples: int, by: str = "feature_vals") -> pd.DataFrame:
     """Sample up to max_examples rows, covering as many distinct `by` values as
     possible first (e.g. both "SG -> PL" and "PL -> SG"), rather than just the
@@ -330,6 +346,14 @@ def _examples_table_html(item_df: pd.DataFrame, max_examples: int, treebank=None
     never for SVA/subj_aux, where child_deprel is permanently fixed and
     that column would otherwise render "&mdash;" on every single row).
 
+    default_kind's "_form_after" column (see _swap_form_after) shows the
+    actual reinflected word form -- process_item's "swap_{default_kind}"
+    column -- sitting between "_feats" and "_feats_after" (form, feats,
+    form-after, feats-after), same unconditional-for-default_kind treatment
+    as "_feats_after" above (buckets that never call
+    process_item for default_kind, e.g. no_candidates/no_inflections, render
+    "&mdash;" there instead of a missing column).
+
     head_label: cosmetic display label for default_kind's columns (e.g.
     "Aux" instead of "head") -- see _display_kind. Applied only to header
     text; every lookup below still uses default_kind itself.
@@ -369,11 +393,28 @@ def _examples_table_html(item_df: pd.DataFrame, max_examples: int, treebank=None
         [f"{child_deprel}_feats"] + ([f"{child_deprel}_feats_after"] if has_child_after else [])
         if child_deprel else []
     )
-    default_group = default_form_cols + ([f"{default_kind}_feats", f"{default_kind}_feats_after"] if default_kind else [])
+    default_group = default_form_cols + (
+        [f"{default_kind}_feats", f"{default_kind}_form_after", f"{default_kind}_feats_after"]
+        if default_kind else []
+    )
     # Header text only -- _display_kind relabels default_kind's columns
     # (e.g. "head_form" -> "Aux_form") for readability; every lookup below
-    # still uses the raw child_form_cols/default_form_cols/default_kind.
-    default_group_display = [_display_kind(c, default_kind, head_label) for c in default_group]
+    # still uses the raw child_form_cols/default_form_cols/default_kind. The
+    # synthetic "_form_after" entry isn't a real dataframe column (see
+    # _swap_form_after), so it gets its own "swapped_{label}_form" header --
+    # _display_kind's generic "{label}_form_after" would work too, but
+    # "swapped_" reads more clearly as "the reinflected form", not another
+    # plain _form column. default_kind's own "_feats_after" gets the same
+    # "swapped_" treatment, dropping the role label entirely (unlike
+    # "_form_after") since it always sits directly right of the already-
+    # labelled "_feats" column, so repeating the role there is redundant.
+    default_group_display = [
+        f"swapped_{head_label if head_label and head_label != default_kind else default_kind}_form"
+        if col == f"{default_kind}_form_after"
+        else "swapped_feats_after" if col == f"{default_kind}_feats_after"
+        else _display_kind(col, default_kind, head_label)
+        for col in default_group
+    ]
 
     header_cols = (
         (["before", "after"] if has_sentence else []) + child_group + default_group_display + other_cols
@@ -397,6 +438,7 @@ def _examples_table_html(item_df: pd.DataFrame, max_examples: int, treebank=None
         cells += "".join(f"<td>{_fmt_cell(row[c])}</td>" for c in default_form_cols)
         if default_kind:
             cells += f'<td class="feats">{_feats_summary(row, default_kind, highlight_feat=swap_feature)}</td>'
+            cells += f'<td>{_swap_form_after(row, default_kind)}</td>'
             cells += f'<td class="feats">{_feats_summary(row, f"after_{default_kind}", highlight_feat=swap_feature)}</td>'
         cells += "".join(f"<td>{_fmt_cell(row[c])}</td>" for c in other_cols)
         if has_treebank:
@@ -627,12 +669,17 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
     else:
         columns = list(swap_df.columns)
         # Precompute, once, which columns hold each swap kind's morphological
-        # features (was re-matched via regex on every row before).
+        # features (was re-matched via regex on every row before). Matches
+        # both plain feature columns (head_Number) and layered/argument-
+        # marking ones (head_Number[obj], head_Person[erg], ...) -- the
+        # latter carry the only usable signal for object-verb/indirect-
+        # object-verb (polypersonal) agreement, see multiblimp.swap_features'
+        # swap_number_obj_any and friends.
         kind_feat_cols = {
             kind: [
                 (col, m.group(1))
                 for col in columns
-                if (m := re.match(rf"^{kind}_([A-Z][a-zA-Z]*)$", col))
+                if (m := re.match(rf"^{kind}_([A-Z][a-zA-Z]*(?:\[[a-z]+\])?)$", col))
             ]
             for kind in swap_target
         }
@@ -735,8 +782,8 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
 if __name__ == "__main__":
     # Example usage
     resource_dir = "../../resources"
-    # Load your decision tree dataframe 
-    dt_df = pd.read_parquet("../../decision_trees/svNa/svNa_nsubj/German.parquet")
+    # Load your decision tree dataframe
+    dt_df = pd.read_parquet("../../output/decision_trees/svNa/svNa_nsubj/German.parquet")
 
     swap_feat = "head_nsubj_Number_agreement"
 
@@ -754,4 +801,4 @@ if __name__ == "__main__":
                     resource_dir=resource_dir,)
 
     create_pairs(dt_df, swap_feat=swap_feat, inflector=inflector, leaf_threshold=0.12,
-                 save_to="../../decision_trees/svNa/svNa_nsubj/pairs/German")
+                 save_to="../../output/minimal_pairs/svNa/svNa_nsubj/German")

@@ -3,6 +3,15 @@ import re
 import json
 
 from .html.html_overview import create_html
+from multiblimp.condition_taxonomy import (
+    GROUP_PREFIXES as _GROUP_PREFIXES,
+    FEATURE_SUFFIXES as _FEATURE_SUFFIXES,
+    FEATURE_ORDER as _FEATURE_ORDER,
+    NPA_ROLE_PROSE as _NPA_ROLE_PROSE,
+    NPA_ROLE_ORDER as _NPA_ROLE_ORDER,
+    NPA_FEATURE_NAMES as _NPA_FEATURE_NAMES,
+    NPA_FEATURE_ORDER as _NPA_FEATURE_ORDER,
+)
 
 
 def _extract_plot_data(html_content: str) -> dict | None:
@@ -44,49 +53,13 @@ def _safe_id(deprel: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_-]", "_", deprel)
 
 
-# What the subject agrees WITH -- the sva_trees (sv/sp) and subj_aux (sa)
-# script-name prefix convention, e.g. "svNa" = subject-verb, Number.
-_GROUP_PREFIXES = {
-    "sv": "Subject–Verb",
-    "sp": "Subject–Participle",
-    "sa": "Subject–Auxiliary",
-}
-# The agreement feature -- the same scripts' suffix convention.
-_FEATURE_SUFFIXES = {
-    "Na": "Number",
-    "Ga": "Gender",
-    "Pa": "Person",
-}
-_FEATURE_ORDER = {"Na": 0, "Ga": 1, "Pa": 2}
+# _GROUP_PREFIXES/_FEATURE_SUFFIXES/_FEATURE_ORDER and the NPA vocabulary
+# below now come from multiblimp.condition_taxonomy -- the single shared
+# copy of this naming convention, also used by scripts/overview/
+# build_stats.py's CONDITION_META, so the two overview pages can't drift
+# apart on what a condition id means. See that module's own docstring.
 _DEPREL_RE = re.compile(r"^(sv|sp|sa)(Na|Ga|Pa)(?:_(.+))?$")
-
-# --- NPA (Noun Phrase Agreement) grouping ---
-# NPA's decision_trees/minimal_pairs/diagnostics live nested one level
-# deeper than sv/sp/sa's own flat {target_id}/ convention: every NPA
-# target_col sits under one shared "npa/" folder as "npa/{ROLE1}-{ROLE2}_
-# {FeatAbbrev}" (e.g. "npa/HEAD-DET_N") -- see npa.agreement.npa_id/
-# FEATURE_ABBREV, which builds that identifier, and run_agreement_pipeline,
-# which nests decision_trees/minimal_pairs/diagnostics under it. This
-# module intentionally doesn't import npa.* (the same reason
-# _classify_deprel doesn't import sva_trees for the sv/sp/sa case above),
-# so _NPA_ROLE_PROSE/_NPA_FEATURE_NAMES below are its own small, stable
-# copy of that vocabulary -- keep them in sync by hand if either changes.
 _NPA_LEAF_RE = re.compile(r"^([A-Z]+)-([A-Z]+)_([A-Za-z]+)$")
-_NPA_ROLE_PROSE = {
-    "HEAD": "Head", "DET": "Determiner", "NUM": "Numeral",
-    "ADJ": "Adjective", "ADP": "Adposition", "PRON": "Pronoun",
-}
-# Same role vocabulary/priority as npa.np_types.ROLE_PRIORITY, used only to
-# order subgroups (Head-pairs first, then non-head pairs, each in a fixed
-# reading order) rather than alphabetically by their prose label (which
-# would, e.g., sort "Determiner–Adjective" before every "Head–..." pair).
-_NPA_ROLE_ORDER = {"HEAD": 0, "DET": 1, "NUM": 2, "ADJ": 3, "ADP": 4, "PRON": 5}
-_NPA_FEATURE_NAMES = {
-    "N": "Number", "G": "Gender", "P": "Person", "C": "Case",
-    "Def": "Definite", "Deg": "Degree", "PT": "PronType",
-    "NT": "NumType", "Pos": "Poss",
-}
-_NPA_FEATURE_ORDER = {"N": 0, "G": 1, "P": 2, "C": 3}
 
 
 def _classify_deprel(deprel: str) -> tuple[str, str, int, tuple | None]:

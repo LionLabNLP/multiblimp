@@ -1,9 +1,12 @@
 import argparse
+import os
 import sys
 import random
 from functools import partial
 
 sys.path.append("../../src/")
+
+from multiblimp.config import TREEBANK_FEATURES_DIR
 
 from sva_trees.pipeline import Pipeline
 from multiblimp.languages import get_ud_langs
@@ -70,7 +73,7 @@ if __name__=="__main__":
                                 },
                         deprel_dir="_".join(target.child_deprels), 
                         resource_dir="../../resources", 
-                        word_order_dir=f"../../treebank_features/{deprel_dir}_fin",
+                        word_order_dir=os.path.join(TREEBANK_FEATURES_DIR, f"{deprel_dir}_fin"),
                         max_treebank_len=args.max_treebank_len,
                         never_skip=args.never_skip,
                         rm_columns=["nsubj_child-deprel_conj",

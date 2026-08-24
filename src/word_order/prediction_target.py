@@ -125,3 +125,32 @@ nsubj_target = PredictionTarget(
     head_pos=["VERB"],
     child_pos=["NOUN", "PROPN", "PRON"]
 )
+
+# Object-verb / indirect-object-verb agreement -- same shape as nsubj_target
+# (no head_deprel="root" restriction, so agreement in subordinate clauses
+# isn't lost either). Named obj_agr_target/iobj_agr_target (not obj_target/
+# iobj_target) to avoid colliding with the pre-existing, unused
+# core_arg_target/iobj_target above (which restrict to head_deprel="root"
+# and have no child_pos filter) -- kept separate rather than repurposing
+# those, since their root-only shape looks intentional for a word-order-
+# prediction use case this module doesn't otherwise exercise.
+#
+# Mostly a rare phenomenon in UD (verbal object/indirect-object indexing --
+# "polypersonal agreement" -- is limited to a handful of language families:
+# Basque, Georgian, Abkhaz, Swahili, Hungarian's definite conjugation,
+# some Quechuan/Mayan languages, ...), and where it occurs it's almost
+# always annotated via layered UD features (Number[obj], Person[erg],
+# Number[abs], ...) rather than plain Number/Person -- see
+# multiblimp.swap_features's swap_number_obj_any and friends, which swap on
+# those layered features directly with no plain-feature fallback.
+obj_agr_target = PredictionTarget(
+    child_deprels=["obj"],
+    head_pos=["VERB"],
+    child_pos=["NOUN", "PROPN", "PRON"]
+)
+
+iobj_agr_target = PredictionTarget(
+    child_deprels=["iobj"],
+    head_pos=["VERB"],
+    child_pos=["NOUN", "PROPN", "PRON"]
+)

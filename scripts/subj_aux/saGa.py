@@ -1,7 +1,10 @@
 import argparse
+import os
 import sys
 
 sys.path.append("../../src/")
+
+from multiblimp.config import TREEBANK_FEATURES_DIR
 
 from subj_aux.pipeline import SubjAuxPipeline
 from multiblimp.languages import get_ud_langs
@@ -31,7 +34,7 @@ if __name__ == "__main__":
         inflection_map=swap_gender_any,
         langs=(args.langs if args.langs else get_ud_langs(resource_dir)),
         resource_dir=resource_dir,
-        word_order_dir="../../treebank_features/subj_aux",
+        word_order_dir=os.path.join(TREEBANK_FEATURES_DIR, "subj_aux"),
         never_skip=args.never_skip,
         simplify=not args.distinguish_unk,
         include_multi_aux=not args.single_aux_only,

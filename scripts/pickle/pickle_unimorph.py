@@ -18,8 +18,6 @@ from multiblimp.unimorph import UnimorphInflector
 if __name__ == "__main__":
     resource_dir = "../../resources"
     ud_langs = get_ud_langs(resource_dir)
-    ud_langs = ["Swedish"]
-
 
     for lang in ud_langs:
         print(lang)

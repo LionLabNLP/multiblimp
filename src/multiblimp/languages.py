@@ -5,72 +5,86 @@ import unicodedata
 from glob import glob
 
 from iso639 import Lang
-from iso639.exceptions import InvalidLanguageValue
 
 from .config import UD_PATH
 
 
 def lang2langcode(name: str):
-    try:
-        return Lang(udlang2iso639.get(name, name)).pt3
-    except InvalidLanguageValue:
-        return {"Ancient_Greek": "grc",
-                "Ancient_Hebrew": name,
-                "Bokota": name,
-                "Cappadocian": name,
-                "Central_Kurdish": "ckb",
-                "Chintang": name,
-                "Classical_Armenian": "xcl",
-                "Classical_Chinese": name,
-                "Frisian_Dutch": name,
-                "Haitian_Creole": name,
-                "Highland_Puebla_Nahuatl": name,
-                "Kadiweu": name,
-                "Komi_Permyak": name,
-                "Komi_Zyrian": name,
-                "Low_Saxon": name,
-                "Maghrebi_Arabic_French": name,
-                "Mbya_Guarani": name,
-                "Middle_Armenian": name,
-                "Middle_French": "frm",
-                "Naga": name,
-                "North_Sami": "sme",
-                "Northern_Kurdish": "kmr",
-                "Northwest_Gbaya": name,
-                "Norwegian_Bokmaal": "nob",
-                "Norwegian_Nynorsk": "nno",
-                "Occitan": "oci",
-                "Old_Church_Slavonic": "chu",
-                "Old_East_Slavic": name,
-                "Old_English": "ang",
-                "Old_French": "fro",
-                "Old_Georgian": name,
-                "Old_Irish": "sga",
-                "Old_Occitan": name,
-                "Old_Turkish": name,
-                "Ottoman_Turkish": name,
-                "Pomak": "poma",
-                "Scottish_Gaelic": "gla",
-                "Shanghainese": name,
-                "Skolt_Sami": name,
-                "South_Levantine_Arabic": name,
-                "Southern_Kurdish": "sdh",
-                "Spanish_Sign_Language": name,
-                "Swedish_Sign_Language": name,
-                "Telugu_English": name,
-                "Turkish_English": name,
-                "Turkish_German": name,
-                "Upper_Sorbian": name,
-                "Western_Armenian": name,
-                "Western_Sierra_Puebla_Nahuatl": name,
-                }.get(name, name)
+    lookup_name = udlang2iso639.get(name, name)
+    # Try the mapped name as-is, then with underscores turned into spaces --
+    # get_ud_langs joins multi-word UD folder names with "_" (e.g.
+    # "Norwegian_Bokmål"), but iso639's Lang() expects real spaces and
+    # rejects the underscored form outright. Without this second attempt,
+    # any such language silently falls through to the static dict below and
+    # gets treated as code-less even when iso639 knows it perfectly well
+    # (e.g. "Norwegian_Bokmål"/"Low_Saxon"/"Upper_Sorbian" -- all resolve
+    # fine as "Norwegian Bokmål"/"Low Saxon"/"Upper Sorbian", losing access
+    # to real UniMorph data sitting under their correct codes).
+    for candidate in (lookup_name, lookup_name.replace("_", " ")):
+        try:
+            return Lang(candidate).pt3
+        except Exception:
+            continue
+    return {"Ancient_Greek": "grc",
+            "Ancient_Hebrew": name,
+            "Bokota": name,
+            "Cappadocian": name,
+            "Central_Kurdish": "ckb",
+            "Chintang": name,
+            "Classical_Armenian": "xcl",
+            "Classical_Chinese": name,
+            "Frisian_Dutch": name,
+            "Haitian_Creole": name,
+            "Highland_Puebla_Nahuatl": name,
+            "Kadiweu": name,
+            "Komi_Permyak": name,
+            "Komi_Zyrian": name,
+            "Maghrebi_Arabic_French": name,
+            "Mbya_Guarani": name,
+            "Middle_Armenian": name,
+            "Middle_French": "frm",
+            "Naga": name,
+            "North_Sami": "sme",
+            "Northern_Kurdish": "kmr",
+            "Northwest_Gbaya": name,
+            "Norwegian_Nynorsk": "nno",
+            "Occitan": "oci",
+            "Old_Church_Slavonic": "chu",
+            "Old_East_Slavic": name,
+            "Old_English": "ang",
+            "Old_French": "fro",
+            "Old_Georgian": name,
+            "Old_Irish": "sga",
+            "Old_Occitan": name,
+            "Old_Turkish": name,
+            "Ottoman_Turkish": name,
+            "Pomak": "poma",
+            "Scottish_Gaelic": "gla",
+            "Shanghainese": name,
+            "Skolt_Sami": name,
+            "South_Levantine_Arabic": name,
+            "Southern_Kurdish": "sdh",
+            "Spanish_Sign_Language": name,
+            "Swedish_Sign_Language": name,
+            "Telugu_English": name,
+            "Turkish_English": name,
+            "Turkish_German": name,
+            "Western_Armenian": name,
+            "Western_Sierra_Puebla_Nahuatl": name,
+            }.get(name, name)
 
 udlang2iso639 = {
     "Abkhaz": "Abkhazian",
     "Ancient Greek": "Ancient Greek (to 1453)",
     "Apurina": "Apurinã",
     "Arabic": "Standard Arabic",
-    "Assyrian": "Akkadian",
+    # UD's "Assyrian" treebank (UD_Assyrian-AS) is actually Assyrian
+    # Neo-Aramaic (Syriac script) -- a distinct modern language from
+    # ancient Akkadian (UD_Akkadian-RIAO/PISANDUB, Latin-transliterated
+    # cuneiform). Mapping this to "Akkadian" collided both onto iso639
+    # code "akk", so whichever processed later (alphabetically: Assyrian)
+    # silently overwrote Akkadian's UD-derived UniMorph table with its own.
+    "Assyrian": "Assyrian Neo-Aramaic",
     "Bororo": "Borôro",
     "Buryat": "Buriat",
     "Cantonese": "Yue Chinese",
@@ -143,6 +157,7 @@ udlang2treebanks = {
     "English": ["EWT", "LinES", "ParTUT", "PUD"],
     "Sanskrit": ["Vedic"],
     "French": ["FQB", "GSD", "ParTUT", "PUD", "Sequoia"],
+    "Swedish": ["LinES", "PUD", "SweLL", "Talbanken"],
     "Galician": ["PUD", "TreeGal"],
     "Italian": [
         "ISDT",
@@ -194,8 +209,6 @@ skip_langs = {
     "Turkish_English",
     "Spanish_Sign_Language",
     "Swedish_Sign_Language",
-    "UD_French_ALTS",
-    "UD_French:PoitevinDIVITAL",
 }
 
 
@@ -341,6 +354,39 @@ def get_ud_langs(resource_dir, ud_dir=None, do_skip_langs=True):
         treebank_langs = [lang for lang in treebank_langs if lang not in skip_langs]
 
     return treebank_langs
+
+
+def get_lang_treebanks(resource_dir, ud_dir=None):
+    """Every UD treebank id (e.g. "UD_French-GSD") this pipeline could pull
+    samples from for each language, keyed by the same underscore-joined
+    language name get_ud_langs uses (e.g. "Norwegian_Bokmål",
+    "Ancient_Greek") -- one language can span several treebanks (e.g.
+    French: FQB/GSD/PUD/ParTUT/Sequoia), and udlang2treebanks/add_langs
+    below are the same two overrides get_ud_langs and the actual pipeline
+    already apply, so this reflects real treebank selection rather than
+    "everything that happens to exist in the UD release for that language".
+    """
+    if ud_dir is None:
+        ud_dir = UD_PATH
+
+    def ud_dir2lang(x):
+        return "_".join(os.path.basename(x).replace("UD_", "").split("-")[:-1])
+
+    by_lang = {}
+    for path in sorted(glob(os.path.join(resource_dir, ud_dir, "*"))):
+        folder = os.path.basename(path)
+        if not folder.startswith("UD_"):
+            continue
+        by_lang.setdefault(ud_dir2lang(path), []).append(folder)
+
+    for lang, codes in udlang2treebanks.items():
+        if lang in by_lang:
+            by_lang[lang] = [tb for tb in by_lang[lang] if tb.rsplit("-", 1)[-1] in codes]
+
+    for lang, treebank_id in add_langs.items():
+        by_lang.setdefault(lang, []).append(treebank_id)
+
+    return by_lang
 
 
 if __name__=="__main__":

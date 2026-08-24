@@ -615,6 +615,68 @@ def _build_tree_maps(tree) -> TreeMaps:
     )
 
 
+# Deprel names whose bracket-suffix convention some treebanks spell
+# differently from the deprel itself -- e.g. Georgian's indirect-object
+# bracket is "[io]", not "[iobj]"; "nsubj" is covered by merge_subj_
+# layered_feats already (both "[subj]" and "[nsubj]"), listed here too
+# only so a caller that reaches this function for deprel="nsubj" anyway
+# (see extract_instances) still finds it.
+_DEPREL_BRACKET_ALIASES = {
+    "nsubj": ["subj", "nsubj"],
+    "iobj": ["iobj", "io"],
+}
+
+
+def _resolve_layered_head_val(head_features, child_features, target_feature, deprel):
+    """head_{target_feature}[{...}] fallback for extract_instances' agreement-
+    label comparison -- tries two different bracket conventions treebanks
+    use for polypersonal/ergative verbal argument-indexing, in order:
+
+    1. Relation-named: head_{feat}[{deprel}] (or a known alias, e.g. "io"
+       for iobj) -- e.g. Georgian's head_Person[obj]/head_Person[io].
+    2. Case-named: head_{feat}[{child's own Case, lowercased}] -- e.g.
+       Basque's head_Number[erg]/head_Number[abs], keyed by whether the
+       child (nsubj/obj/...) is itself Case=Erg/Case=Abs/etc. No
+       transitivity check needed: the child's own case already encodes
+       which argument slot it fills (an ergative-marked child's agreement
+       lives under [erg]; an absolutive-marked one -- whether it's the
+       nsubj of an intransitive clause or the obj of a transitive one --
+       lives under [abs] either way).
+
+    Both are no-ops (return None) for languages/targets that don't use the
+    relevant convention: a deprel name/case value with no matching
+    head_{feat}[...] column just falls through.
+
+    Caller contract differs by deprel (see extract_instances): for
+    deprel="nsubj", this is only tried as a fallback when the plain
+    head_{target_feature} is already missing. For every other deprel
+    (obj, iobj, ...), this is tried FIRST and plain head_{target_feature}
+    is never used as a fallback at all -- merge_subj_layered_feats already
+    populates the plain feature from the SUBJECT's own [subj]-marked value,
+    so treating that as if it said something about a different argument
+    (comparing it against obj_Person, say) would compare the subject's
+    person to the object's, not the verb's real object-agreement marker to
+    the object's -- coincidentally "matching" almost always, since most
+    subjects and objects are both simply 3rd person. See the Georgian
+    ovNa run this was found on: head_obj_Person_agreement over the plain
+    feature only was "Yes" 2442/2442 times because both sides defaulted to
+    "3", including rows where head_Person[obj] itself was genuinely
+    missing.
+    """
+    for suffix in _DEPREL_BRACKET_ALIASES.get(deprel, [deprel]):
+        val = head_features.get(f"head_{target_feature}[{suffix}]")
+        if val is not None:
+            return val
+
+    child_case = child_features.get(f"{deprel}_Case")
+    if child_case is not None:
+        val = head_features.get(f"head_{target_feature}[{str(child_case).lower()}]")
+        if val is not None:
+            return val
+
+    return None
+
+
 def extract_instances(
     tree,
     tree_idx,
@@ -755,7 +817,26 @@ def extract_instances(
                 target_features = []
 
             for target_feature in target_features:
-                head_val = head_features.get(f"head_{target_feature}", None)
+                if deprel == "nsubj":
+                    # Plain head_{feat} is the traditional, legitimate
+                    # signal here (this is what merge_subj_layered_feats'
+                    # [subj]/[nsubj] merge exists for) -- only fall back to
+                    # a layered feature when it's missing.
+                    head_val = head_features.get(f"head_{target_feature}", None)
+                    if head_val is None:
+                        head_val = _resolve_layered_head_val(
+                            head_features, child_features, target_feature, deprel
+                        )
+                else:
+                    # Every other relation (obj, iobj, ...): never fall
+                    # back to the plain feature at all -- see
+                    # _resolve_layered_head_val's docstring for why that
+                    # would silently compare the SUBJECT's merged value
+                    # against this child instead of a real per-argument
+                    # marker.
+                    head_val = _resolve_layered_head_val(
+                        head_features, child_features, target_feature, deprel
+                    )
                 child_val = child_features.get(f"{deprel}_{target_feature}", None)
 
                 # Default assumption: a NOUN/PROPN token of interest without
@@ -906,12 +987,17 @@ def drop_singleton_cols(
 
     always_keep, regardless of uniqueness: deprel_order/sen/no_space_after/
     treebank/sent_id/tree_idx, any column ending in "agreement"/"_idx"/
-    "_form", target.head_feats columns (e.g. SVA's spGa's "head_VerbForm"
-    filter value -- fit_dt filters real constants independently, so this
-    isn't papering over anything), and extra_always_keep (e.g. subj_aux's
-    "head_{AUX_COUNT_FEAT}", needed downstream to split single-vs-stacked-
-    aux instances even when every row in a given language happens to share
-    the same count).
+    "_form"/"_pos" (upos -- kept even when constant across a whole language,
+    e.g. subj_aux's head_pos is always "AUX" by construction, same as any
+    other role/target with a fixed head_pos; still useful to show explicitly
+    in the tree page/example tables' per-token feature list rather than
+    silently vanishing, see word_order.viz_tree._build_feat_columns/
+    sva_trees.create_pairs._feats_summary), target.head_feats columns (e.g.
+    SVA's spGa's "head_VerbForm" filter value -- fit_dt filters real
+    constants independently, so this isn't papering over anything), and
+    extra_always_keep (e.g. subj_aux's "head_{AUX_COUNT_FEAT}", needed
+    downstream to split single-vs-stacked-aux instances even when every row
+    in a given language happens to share the same count).
 
     No-op on an empty df (nunique/df[[]] on 0 rows is well-defined but
     pointless work).
@@ -922,6 +1008,7 @@ def drop_singleton_cols(
     always_keep.update(col for col in df.columns if col.endswith("agreement"))
     always_keep.update(col for col in df.columns if col.endswith("_idx"))
     always_keep.update(col for col in df.columns if col.endswith("_form"))
+    always_keep.update(col for col in df.columns if col.endswith("_pos"))
     if target is not None and target.head_feats:
         always_keep.update(f"head_{feat}" for feat in target.head_feats)
     always_keep.update(extra_always_keep)

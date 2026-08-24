@@ -8,7 +8,7 @@ from tqdm import tqdm
 
 from .languages import lang2langcode, skip_langs
 from .treebank import Treebank, has_typo
-from .unimorph import UD2UM
+from .unimorph import UD2UM, LAYERED_FEAT_SEP
 
 sys.path.append("../../")
 from resources.um2ud_annotation.UM2UD_mapper import UM2UD_values
@@ -20,12 +20,35 @@ def _fuses_upos(tag: str) -> bool:
     return any(UM2UD_values.get(sub, {}).get("upos") is not None for sub in tag.split("/"))
 
 
+def _layered_feat_tag(base_feat: str, suffix: str, val: str) -> Optional[str]:
+    """UD2UM-encode one value of a layered/argument-marking UD feature (e.g.
+    Number[obj]=Plur -> "PL$obj") via multiblimp.unimorph.LAYERED_FEAT_SEP's
+    round-trip convention -- see that constant's docstring. `suffix` is kept
+    verbatim from the source UD feature name ("obj", "erg", "abs", "subj",
+    "io", ...): treebanks disagree on whether an argument-marking bracket
+    names a grammatical relation (Georgian's [subj]/[obj]/[io], Madi's
+    [subj]/[obj]) or a case (Basque's [erg]/[abs]/[dat]), and this encoding
+    doesn't need to care which -- it's this module's own lossless internal
+    round-trip for UD-derived data, not a real UniMorph tag (genuine
+    UniMorph argument-marking/possessor paradigm data uses ARG*/PSS* tags
+    instead, handled separately by UnimorphInflector.ufeats2dict). None if
+    `val` has no UD2UM entry for `base_feat` at all (same as the plain-
+    feature case below).
+    """
+    um_code = UD2UM.get((base_feat, val))
+    return f"{um_code}{LAYERED_FEAT_SEP}{suffix}" if um_code is not None else None
+
+
 def ud_feats_to_um_tags(upos: str, feats: Optional[Dict[str, str]]) -> Optional[List[str]]:
     """Convert a UD token's upos + feats into real UniMorph tag strings
     (e.g. ["V", "PST", "3", "SG"]) via UD2UM. Comma-valued UD features
-    (syncretic forms) map to UM's "/" disjunction syntax. Layered features
-    (Number[psor], ...) and values with no UD2UM entry are skipped.
-    Returns None if upos itself has no UM counterpart (PUNCT, SYM, X, ...).
+    (syncretic forms) map to UM's "/" disjunction syntax. Layered/argument-
+    marking features (Number[obj], Person[erg], Number[psor], ...) are kept
+    too, via _layered_feat_tag, rather than skipped -- e.g. Basque/Georgian
+    verbal object/indirect-object agreement is annotated exclusively this
+    way, with no plain-feature fallback. Values with no UD2UM entry are
+    skipped (same for plain and layered features). Returns None if upos
+    itself has no UM counterpart (PUNCT, SYM, X, ...).
     """
     upos_tag = UD2UM.get(("upos", upos))
     if upos_tag is None:
@@ -33,13 +56,20 @@ def ud_feats_to_um_tags(upos: str, feats: Optional[Dict[str, str]]) -> Optional[
 
     tags = []
     for feat, raw_val in (feats or {}).items():
-        if "[" in feat:
-            continue
-        sub_tags = [
-            UD2UM[(feat, val)]
-            for val in raw_val.split(",")
-            if (feat, val) in UD2UM
-        ]
+        base_feat, bracket, suffix = feat.partition("[")
+        suffix = suffix.rstrip("]") if bracket else None
+
+        if suffix is None:
+            sub_tags = [
+                UD2UM[(base_feat, val)]
+                for val in raw_val.split(",")
+                if (base_feat, val) in UD2UM
+            ]
+        else:
+            sub_tags = [
+                tag for val in raw_val.split(",")
+                if (tag := _layered_feat_tag(base_feat, suffix, val)) is not None
+            ]
         if sub_tags:
             # dict.fromkeys: dedupe while preserving first-seen order
             tags.append("/".join(dict.fromkeys(sub_tags)))

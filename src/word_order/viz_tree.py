@@ -12,10 +12,10 @@ from matplotlib.colors import to_hex
 
 from .entropy import order_entropy, calculate_base_entropy, calculate_tree_entropy
 from .utils import get_all_orders, build_grew_link, split_pairwise_predictor
-from .html.html_tree import create_html, write_placeholder_html
+from .html.html_tree import create_html, write_placeholder_html, write_html_v2
 
 
-def clean_rule(rule, threshold=None, is_binary=False):
+def clean_rule(rule, threshold=None, is_binary=False, head_label="head"):
     numerical = rule.startswith("num__")
     rule = (
         rule.removeprefix("num__")
@@ -28,6 +28,8 @@ def clean_rule(rule, threshold=None, is_binary=False):
         return "in a question?"
 
     rule_elements = rule.split("_")
+    if head_label != "head" and rule_elements[0].lower() == "head":
+        rule_elements[0] = head_label
     rule_elements[0] = (
         rule_elements[0].replace("nsubj", "subject").replace("obj", "object")
     )
@@ -56,7 +58,7 @@ def clean_rule(rule, threshold=None, is_binary=False):
     return rule
 
 
-def get_correlated_features(prep, clf, dt_df):
+def get_correlated_features(prep, clf, dt_df, head_label="head"):
     X = prep.transform(dt_df)
 
     if isinstance(X, scipy.sparse._csr.csr_matrix):
@@ -76,7 +78,7 @@ def get_correlated_features(prep, clf, dt_df):
     X = X.astype(np.float64)
     feature_names = prep.get_feature_names_out()
 
-    rule_names = [clean_rule(f) for f in feature_names]
+    rule_names = [clean_rule(f, head_label=head_label) for f in feature_names]
 
     tree = clf.tree_
     node_indicator = clf.decision_path(X)
@@ -264,10 +266,13 @@ def _build_feat_columns(full_df, swap_feature=None, highlight_prefixes=()):
     _feats_summary, which skips null values the same way), bolding the
     swap-relevant feature's entry for prefixes in highlight_prefixes.
 
-    Includes each node's upos (extract_node_features's "{prefix}_pos" column
-    -- displayed as "upos=..." rather than the column's own "pos" label,
-    first in the list, ahead of the morphological Feats) alongside the
-    morphological feats proper.
+    Includes each node's upos, deprel, and lemma (extract_node_features's
+    "{prefix}_pos"/"{prefix}_deprel"/"{prefix}_lemma" columns -- "pos" is
+    displayed as "upos=..." rather than the column's own "pos" label;
+    deprel/lemma keep their column names as-is, e.g. "deprel=cop", useful
+    for telling a redirect_nsubj_to_aux cop-redirected row apart from an
+    aux/aux:pass one at a glance), in that order, first in the list, ahead
+    of the morphological Feats proper.
 
     Every row still contributes a (possibly empty) list to every prefix's
     "{prefix}_features" entry, even a row with zero set features for that
@@ -285,8 +290,10 @@ def _build_feat_columns(full_df, swap_feature=None, highlight_prefixes=()):
     # this widens the match without narrowing it for any lowercase-prefixed
     # caller.
     morph_df = full_df.filter(regex=r"^[A-Za-z]+_[A-Z][a-zA-Z]+(?:\[[a-z]+\])?$", axis=1)
-    pos_cols = [c for c in full_df.columns if re.match(r"^[A-Za-z]+_pos$", c)]
-    feat_df = pd.concat([full_df[pos_cols], morph_df], axis=1) if pos_cols else morph_df
+    extra_cols = []
+    for suffix in ("pos", "deprel", "lemma"):
+        extra_cols += [c for c in full_df.columns if re.match(rf"^[A-Za-z]+_{suffix}$", c)]
+    feat_df = pd.concat([full_df[extra_cols], morph_df], axis=1) if extra_cols else morph_df
     feat_cols = list(feat_df.columns)
     prefixes = {label.split("_")[0] for label in feat_cols}
     feat_collect = {f"{p}_features": [] for p in prefixes}
@@ -527,6 +534,9 @@ def _finalize_tree_html(
     correlate_features=True,
     n_palette_colors=None,
     palette_map=None,
+    head_label="head",
+    leaf_threshold=None,
+    correct_swaps_df=None,
 ):
     """
     Core visualization engine shared by tree2html and pipeline2html.
@@ -588,7 +598,7 @@ def _finalize_tree_html(
     )
 
     if correlate_features:
-        correlated_features = get_correlated_features(prep, clf, data_df)
+        correlated_features = get_correlated_features(prep, clf, data_df, head_label=head_label)
     else:
         correlated_features = {}
 
@@ -642,6 +652,7 @@ def _finalize_tree_html(
                     raw_feat,
                     threshold=tree.threshold[node_id],
                     is_binary=feature[node_id] in binary_feature_indices,
+                    head_label=head_label,
                 )
                 rule_map[left_child] = (rule_text, False)  # False branch (left)
                 rule_map[right_child] = (rule_text, True)  # True branch (right)
@@ -683,6 +694,7 @@ def _finalize_tree_html(
                 feature_names[feature[i]],
                 threshold=tree.threshold[i],
                 is_binary=feature[i] in binary_feature_indices,
+                head_label=head_label,
             )
             corr = correlated_features.get(i, [])
             # Isolated for the same reason as meta_style: appended directly
@@ -746,6 +758,20 @@ def _finalize_tree_html(
             "is_leaf": bool(feature[i] == -2),
             "parent": int(parent_map[i]) if i in parent_map else None,
             "rule": rule_map.get(i, None),
+            # n/H: same n_samples[i]/binary_entropy this loop already computed
+            # for the v1 on-node annotation text above -- kept alongside the
+            # existing fields (not folded into a v1-only string) so a second
+            # consumer (create_html_v2) can read them as plain numbers without
+            # re-deriving or re-parsing anything.
+            "n": int(n_samples[i]),
+            "H": float(binary_entropy),
+            # This node's OWN split rule (internal nodes only) -- distinct
+            # from "rule" above, which is the *incoming* branch condition
+            # from the parent. v1's own annotation label recomputes this
+            # locally (as the plain `rule` variable, a few lines up) and
+            # never persists it; stored here so a second consumer doesn't
+            # have to recompute clean_rule() itself.
+            "own_rule": rule if feature[i] != -2 else None,
         }
 
     # ── Plot ──
@@ -858,15 +884,22 @@ def _finalize_tree_html(
         font=dict(family="DM Sans, sans-serif"),
     )
 
-    write_html(
-        fig,
+    # v2 is now the only page written to out_file -- v1's own write_html/
+    # create_html (Plotly chart + separate info panel) stay defined above
+    # and in html_tree.py as a fallback, just no longer called here. `fig`
+    # itself (the Plotly figure this function builds above) is now unused
+    # by this function for the same reason -- kept for fallback too.
+    write_html_v2(
         predictor_samples,
         node_data,
         out_file,
         classes,
         hex_colors,
         label_distribution[0],
-        meta,
+        dict(meta),
+        leaf_threshold=leaf_threshold,
+        head_label=head_label,
+        correct_swaps_df=correct_swaps_df,
     )
 
 
@@ -888,6 +921,7 @@ def tree2html(
     leaf_threshold=None,
     full_label_distribution=None,
     head_label="head",
+    correct_swaps_df=None,
 ):
     """
     pipeline_model:
@@ -929,6 +963,11 @@ def tree2html(
         SVA, "Aux" for subj_aux, "NP head" for npa) -- see
         _display_predictor_var/_relabel_head_columns. "head" (default) is a
         no-op, unchanged from before this existed.
+    correct_swaps_df: create_pairs' own "correct_swaps" bucket (a DataFrame,
+        e.g. sva_trees.create_pairs.create_pairs(...)["correct_swaps"]) for
+        this same language/deprel's tree -- joined by leaf_id into the v2
+        page's generated-pairs section. None (default) leaves that section
+        empty, same as before this existed; has no effect on the v1 page.
     """
     if leaf_threshold is not None:
         meta = dict(meta or {})
@@ -1069,6 +1108,9 @@ def tree2html(
         # Palette sized to all_orders so colours are stable across languages
         n_palette_colors=max(n_classes, len(all_orders)),
         palette_map=palette_map,
+        head_label=head_label,
+        leaf_threshold=leaf_threshold,
+        correct_swaps_df=correct_swaps_df,
     )
 
 

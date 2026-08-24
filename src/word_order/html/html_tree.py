@@ -1,6 +1,10 @@
 import json
 import os
+import re
 import numpy as np
+import pandas as pd
+
+from ..utils import build_grew_link
 
 
 class _NumpyEncoder(json.JSONEncoder):
@@ -1128,6 +1132,439 @@ def create_html(meta, node_samples, node_data, hex_colors, classes, div_id):
     }});
     </script>
     """
+
+
+# ── v2 tree page ──────────────────────────────────────────────────────────
+# v2 integration (see the integration plan): tree + node-click samples
+# browsing, ported from the "Minimal-Pair Attention Trace" mockup's already-
+# verified HTML/CSS/JS, now driven by real per-language data instead of two
+# hand-picked demo trees. Step 2 adds the generated-pairs section itself --
+# correct_swaps_df=None (its default) emits an empty PAIRS, which the ported
+# JS still renders gracefully (a real "N leaves kept, 0 shown" header, no
+# pair cards) for callers/languages that don't have one.
+
+_V2_TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), "tree_v2_template.html")
+
+# The mockup's CSS only themes this fixed agreement-classifier vocabulary
+# (--yes/--no/--unk custom properties); anything else falls back to its own
+# real hex color from the v1 palette rather than a var(...) reference that
+# doesn't exist. Covers every SVA/NPA condition this generator targets --
+# multi-class word-order predictors (get_all_orders/only_show_real_orders)
+# aren't in scope for v2 yet.
+_V2_SEMANTIC_COLOR_VARS = {"yes": "var(--yes)", "no": "var(--no)", "unk": "var(--unk)"}
+
+_TREEBANK_LINK_RE = re.compile(r"href='([^']*)'.*?>([^<]*)</a>")
+_FORM_KEY_RE = re.compile(r"^(.+)_form$")
+
+
+def _v2_class_color(cls, hex_color):
+    return _V2_SEMANTIC_COLOR_VARS.get(str(cls).lower(), hex_color)
+
+
+def _v2_parse_treebank_link(html_str):
+    """v1's row dicts carry treebank_link as a ready-made <a href='...'>NAME</a>
+    string (built by build_treebank_links) -- v2 wants the href and the link
+    text as separate fields instead, so it can render its own compact arrow
+    (title=name) rather than embedding v1's whole anchor tag verbatim."""
+    m = _TREEBANK_LINK_RE.search(html_str or "")
+    if not m:
+        return "", ""
+    return m.group(1), m.group(2)
+
+
+def _v2_strong_to_b(s):
+    # get_samples/_build_feat_columns marks the decisive feature with
+    # <strong>...</strong> (matching v1's own on-page convention); the v2
+    # template's featEntry() looks for <b> specifically instead.
+    return s.replace("<strong>", "<b>").replace("</strong>", "</b>")
+
+
+def _v2_detect_role_prefixes(node_samples, head_label):
+    """The two role column prefixes (e.g. nsubj/head, or DET/HEAD) vary by
+    condition and aren't passed to this function directly -- but every
+    sample row get_samples produced carries exactly two "{prefix}_form"
+    columns, so the first real row found tells us both prefixes without
+    needing the caller to know them ahead of time. Falls back to a generic
+    nsubj/head guess only if no samples exist at all for this tree."""
+    for node_map in node_samples.values():
+        for bucket in node_map.values():
+            for row in bucket.get("rows", []):
+                prefixes = [m.group(1) for m in (_FORM_KEY_RE.match(k) for k in row) if m]
+                if len(prefixes) >= 2:
+                    head_matches = [p for p in prefixes if p.lower() == str(head_label).lower()]
+                    role_b = head_matches[0] if head_matches else prefixes[0]
+                    role_a = next((p for p in prefixes if p != role_b), prefixes[-1])
+                    return role_a, role_b
+    return "nsubj", "head"
+
+
+def _v2_node_samples(node_id, node_samples, role_a, role_b):
+    """Flattens get_samples's {label: {node_id: {rows, count, total_count}}}
+    into one plain list of rows for this node_id, each row carrying its own
+    label inline -- the shape the v2 template's per-node sample table wants,
+    since (unlike v1's client-side grouping) it renders one node's samples
+    from a single already-flat array."""
+    rows_out = []
+    for label, node_map in node_samples.items():
+        bucket = node_map.get(node_id, node_map.get(str(node_id)))
+        if not bucket:
+            continue
+        for r in bucket.get("rows", []):
+            href, name = _v2_parse_treebank_link(r.get("treebank_link", ""))
+            rows_out.append({
+                "sentence": r.get("sen_str", ""),
+                "verb": r.get(f"{role_b}_form", ""),
+                "verbFeats": [_v2_strong_to_b(v) for v in r.get(f"{role_b}_features", [])],
+                "nsubj": r.get(f"{role_a}_form", ""),
+                "nsubjFeats": [_v2_strong_to_b(v) for v in r.get(f"{role_a}_features", [])],
+                "label": label,
+                "treebankLink": href,
+                "treebankName": name,
+            })
+    return rows_out
+
+
+def _v2_layout(node_data):
+    """Maps compute_tree_layout's coordinates (leaves at integer x 0..n-1,
+    y = -depth -- relative DFS positions, never meant to be read as pixels)
+    onto the template's pixel-space canvas (y increasing downward). Canvas
+    size is derived from the actual tree's width/depth rather than the
+    mockup's fixed 900x500, which only ever had to fit two hand-placed demo
+    trees of five and seven nodes."""
+    NODE_SPACING_X, NODE_SPACING_Y = 190, 170
+    MARGIN_X, MARGIN_Y = 100, 60
+    max_leaf_x = max((nd["x"] for nd in node_data.values()), default=0)
+    max_depth = max((-nd["y"] for nd in node_data.values()), default=0)
+    canvas_w = int(max_leaf_x * NODE_SPACING_X + 2 * MARGIN_X) or 900
+    canvas_h = int(max_depth * NODE_SPACING_Y + 2 * MARGIN_Y) or 500
+    screen = {
+        i: (MARGIN_X + nd["x"] * NODE_SPACING_X, MARGIN_Y + (-nd["y"]) * NODE_SPACING_Y)
+        for i, nd in node_data.items()
+    }
+    return screen, canvas_w, canvas_h
+
+
+def _v2_leaf_qualifying_classes(dist):
+    # Mirrors _finalize_tree_html's own leaf_label logic exactly (majority
+    # class plus any other within 50% of it) -- duplicated here rather than
+    # shared since v1 computes and discards this locally, never persisting
+    # it into node_data.
+    if not dist:
+        return []
+    sorted_d = sorted(dist, key=lambda d: d["cnt"], reverse=True)
+    top_cnt = sorted_d[0]["cnt"]
+    quals = [sorted_d[0]["cls"]]
+    for d in sorted_d[1:]:
+        if d["cnt"] > 0 and d["cnt"] >= 0.5 * top_cnt:
+            quals.append(d["cls"])
+    return quals
+
+
+def _v2_raw_pair_role_prefixes(correct_swaps_df):
+    """Like _v2_detect_role_prefixes, but scoped to correct_swaps.parquet's
+    own raw columns -- unlike node_samples' rows, this dataframe never went
+    through _relabel_head_columns, so its head-role prefix is always
+    literally "head" (SVA/subj_aux) or "HEAD" (npa), matched case-
+    insensitively rather than against head_label."""
+    prefixes = [
+        m.group(1) for m in (_FORM_KEY_RE.match(c) for c in correct_swaps_df.columns) if m
+    ]
+    head_matches = [p for p in prefixes if p.lower() == "head"]
+    raw_role_b = head_matches[0] if head_matches else (prefixes[0] if prefixes else "head")
+    raw_role_a = next((p for p in prefixes if p != raw_role_b), prefixes[-1] if len(prefixes) > 1 else "nsubj")
+    return raw_role_a, raw_role_b
+
+
+def _v2_pair_swap_role(row, raw_role_a, raw_role_b):
+    """Which raw role this row's create_pairs reinflection actually swapped
+    -- 'A' or 'B' -- detected from whichever swap_{role} column holds a real
+    value on this row (mirrors create_pairs.py's own _detect_swap_col).
+    Recomputed per row rather than assumed fixed for the whole tree, since a
+    merged-direction bucket (e.g. npa's non-head pairs) can swap either role
+    row by row."""
+    for role, letter in ((raw_role_b, "B"), (raw_role_a, "A")):
+        val = row.get(f"swap_{role}")
+        if isinstance(val, str) and val:
+            return letter
+    return None
+
+
+def _v2_pair_feat_list(row, prefix, decisive_feat):
+    """{prefix}_{Feat}=val strings for one correct_swaps.parquet row's role,
+    lemma/deprel/upos first then morphological feats sorted -- same
+    inclusion/ordering convention as create_pairs.py's own _feats_summary
+    and viz_tree.py's _build_feat_columns. Bolds the decisive feature with
+    <b>, matching _v2_strong_to_b's node-sample markup, so the template's
+    featEntry() finds it the same way regardless of source."""
+    pat = re.compile(rf"^{re.escape(prefix)}_([A-Z][a-zA-Z]*(?:\[[a-z]+\])?)$")
+    morph = []
+    for col, val in row.items():
+        m = pat.match(col)
+        if not m or pd.isna(val) or val in (None, "None", "", "_missing", "nan"):
+            continue
+        feat = m.group(1)
+        entry = f"{feat}={val}"
+        if decisive_feat and feat == decisive_feat:
+            entry = f"<b>{entry}</b>"
+        morph.append((feat, entry))
+    morph.sort(key=lambda p: p[0])
+
+    extra = []
+    for extra_feat, suffix in (("lemma", "lemma"), ("deprel", "deprel"), ("upos", "pos")):
+        val = row.get(f"{prefix}_{suffix}")
+        if pd.notna(val) and val not in (None, "None", "", "_missing", "_"):
+            extra.append(f"{extra_feat}={val}")
+    return extra + [e for _, e in morph]
+
+
+def _v2_sentence_html(sen, highlight_idx):
+    return " ".join(
+        f"<strong>{tok}</strong>" if i in highlight_idx else str(tok)
+        for i, tok in enumerate(sen)
+    )
+
+
+def _v2_pair_treebank_link(row):
+    form_values = [v for c, v in row.items() if c.endswith("_form") and pd.notna(v)]
+    link = build_grew_link(row.get("treebank"), row.get("sent_id"), form_values)
+    return _v2_parse_treebank_link(link or "")
+
+
+def _v2_pair_from_row(row, raw_role_a, raw_role_b, decisive_feat):
+    """One T.PAIRS entry from a single correct_swaps.parquet row, or None if
+    the row can't be turned into one (no sentence, no detectable swap role,
+    or a missing token index)."""
+    sen = row.get("sen")
+    if sen is None:
+        return None
+    sen = list(sen)
+
+    swap_role = _v2_pair_swap_role(row, raw_role_a, raw_role_b)
+    if swap_role is None:
+        return None
+    swap_prefix = raw_role_b if swap_role == "B" else raw_role_a
+    other_prefix = raw_role_a if swap_role == "B" else raw_role_b
+
+    idx = row.get(f"{swap_prefix}_idx")
+    if pd.isna(idx):
+        return None
+    other_idx = row.get(f"{other_prefix}_idx")
+
+    # 1-indexed CoNLL-U token ids -- subtract 1 before indexing into `sen`
+    # (see the memory note on this exact off-by-one, caught building the
+    # mockup's own hand-picked pairs from this same parquet family).
+    highlight_idx = {int(idx) - 1}
+    if pd.notna(other_idx):
+        highlight_idx.add(int(other_idx) - 1)
+
+    swap_form = row.get(f"swap_{swap_prefix}")
+    swapped_sen = list(sen)
+    swapped_sen[int(idx) - 1] = swap_form
+
+    href, name = _v2_pair_treebank_link(row)
+    after_value = row.get(f"after_{swap_prefix}_{decisive_feat}") if decisive_feat else None
+
+    return {
+        "origSentence": _v2_sentence_html(sen, highlight_idx),
+        "swapSentence": _v2_sentence_html(swapped_sen, highlight_idx),
+        "nsubj": row.get(f"{raw_role_a}_form", ""),
+        "verb": row.get(f"{raw_role_b}_form", ""),
+        "nsubjFeats": _v2_pair_feat_list(row, raw_role_a, decisive_feat),
+        "verbFeats": _v2_pair_feat_list(row, raw_role_b, decisive_feat),
+        "ungrammatical": swap_form,
+        "swapRole": swap_role,
+        "afterValue": None if pd.isna(after_value) else str(after_value),
+        "treebankLink": href,
+        "treebankName": name,
+    }
+
+
+def _v2_build_pairs(correct_swaps_df, decisive_feat, max_per_leaf=15):
+    """Builds T.PAIRS from create_pairs' own "correct_swaps" bucket, capped
+    to max_per_leaf real rows per leaf (page-size budget, same idea as
+    node samples' own max_rows) -- and the true per-leaf total, for
+    entry["correctSwaps"] (the leaf badge's real pair count, independent of
+    how many are actually materialized into PAIRS).
+
+    Returns (pairs, total_by_leaf, swapped_role) -- swapped_role ('A'/'B',
+    or None if no pairs) is the majority swap direction observed among the
+    emitted pairs, used as T.swappedRole's tree-level fallback; each pair
+    also carries its own swapRole, so a genuinely mixed-direction bucket
+    (e.g. npa's merged non-head pairs) still renders correctly per pair.
+    """
+    if correct_swaps_df is None or len(correct_swaps_df) == 0 or "leaf_id" not in correct_swaps_df.columns:
+        return [], {}, None
+
+    raw_role_a, raw_role_b = _v2_raw_pair_role_prefixes(correct_swaps_df)
+
+    valid = correct_swaps_df.dropna(subset=["leaf_id"])
+    total_by_leaf = {
+        str(int(k)): int(v) for k, v in valid["leaf_id"].value_counts().items()
+    }
+    sampled = valid.groupby("leaf_id", group_keys=False).head(max_per_leaf)
+
+    pairs = []
+    role_votes = {"A": 0, "B": 0}
+    for row in sampled.to_dict("records"):
+        pair = _v2_pair_from_row(row, raw_role_a, raw_role_b, decisive_feat)
+        if pair is None:
+            continue
+        pair["leaf"] = str(int(row["leaf_id"]))
+        pairs.append(pair)
+        role_votes[pair["swapRole"]] += 1
+
+    swapped_role = "A" if role_votes["A"] > role_votes["B"] else "B" if pairs else None
+    return pairs, total_by_leaf, swapped_role
+
+
+def _v2_build_nodes(node_data, screen, leaf_threshold, pair_counts=None):
+    nodes = {}
+    for i, nd in node_data.items():
+        x, y = screen[i]
+        is_leaf = nd["is_leaf"]
+        branch = "root"
+        if nd["parent"] is not None:
+            _, is_true = nd["rule"]
+            branch = "true" if is_true else "false"
+        entry = {
+            "x": round(x, 1), "y": round(y, 1),
+            "branch": branch,
+            "n": nd["n"], "H": round(nd["H"], 4),
+            "leaf": is_leaf,
+            "corr": nd.get("corr") or [],
+            "dist": [
+                {"cls": d["cls"], "cnt": d["cnt"], "color": _v2_class_color(d["cls"], d["color"])}
+                for d in nd["dist"]
+            ],
+        }
+        if is_leaf:
+            quals = _v2_leaf_qualifying_classes(nd["dist"])
+            entry["rule"] = "predict: " + (" / ".join(quals) if quals else "?")
+            entry["predicted"] = " / ".join(quals)
+            entry["majorityLabel"] = quals[0] if quals else None
+            entry["keep"] = bool(leaf_threshold is not None and nd["H"] < leaf_threshold)
+            # "kept" is the majority class's own count, not the leaf's full n.
+            majority_cnt = next(
+                (d["cnt"] for d in nd["dist"] if d["cls"] == entry["majorityLabel"]), 0
+            )
+            entry["kept"] = majority_cnt if entry["keep"] else 0
+            entry["correctSwaps"] = (pair_counts or {}).get(str(i), 0)
+        else:
+            entry["rule"] = nd.get("own_rule") or ""
+            entry["ruleFeat"] = None
+            entry["ruleRole"] = None
+            entry["ruleValue"] = None
+        nodes[str(i)] = entry
+    return nodes
+
+
+def _v2_build_edges(node_data):
+    edges = []
+    for i, nd in node_data.items():
+        if nd["parent"] is not None:
+            _, is_true = nd["rule"]
+            edges.append([nd["parent"], i, "true" if is_true else "false"])
+    return edges
+
+
+def _v2_build_paths(node_data):
+    paths = {}
+    for i in node_data:
+        path, cur = [i], i
+        while node_data[cur]["parent"] is not None:
+            cur = node_data[cur]["parent"]
+            path.append(cur)
+        paths[str(i)] = list(reversed(path))
+    return paths
+
+
+def _v2_decisive_feat(predictor_display):
+    # meta["Predictor"] (_display_predictor_var's output) is a string like
+    # "head_nsubj_Number" or "Verb_nsubj_Number" -- the decisive agreement
+    # feature is always its last underscore segment.
+    if not predictor_display:
+        return None
+    return str(predictor_display).rsplit("_", 1)[-1]
+
+
+def _v2_build_meta(meta, leaf_threshold):
+    m = {
+        "language": meta.get("Language") or meta.get("language") or "",
+        "accuracy": meta.get("accuracy", ""),
+        "baseEntropy": meta.get("base entropy", ""),
+        "reducedEntropy": meta.get("reduced entropy", ""),
+        "nodes": meta.get("Nodes", ""),
+        "depth": meta.get("Depth", ""),
+        "trainingSamples": meta.get("Training samples", ""),
+        "predictor": meta.get("Predictor", ""),
+    }
+    if leaf_threshold is not None:
+        m["keepThreshold"] = f"entropy < {leaf_threshold:g}"
+        m["keepThresholdH"] = leaf_threshold
+    return m
+
+
+def _v2_build_classes(classes, hex_colors, root_dist_counts):
+    return [
+        {"cls": cls, "cnt": int(cnt), "color": _v2_class_color(cls, hexc)}
+        for cls, hexc, cnt in zip(classes, hex_colors, root_dist_counts)
+    ]
+
+
+def create_html_v2(meta, node_samples, node_data, hex_colors, classes, root_dist_counts,
+                    leaf_threshold=None, head_label="head", correct_swaps_df=None):
+    screen, canvas_w, canvas_h = _v2_layout(node_data)
+    decisive_feat = _v2_decisive_feat(meta.get("Predictor"))
+    pairs, pair_counts, swapped_role = _v2_build_pairs(correct_swaps_df, decisive_feat)
+    nodes = _v2_build_nodes(node_data, screen, leaf_threshold, pair_counts=pair_counts)
+    edges = _v2_build_edges(node_data)
+    paths = _v2_build_paths(node_data)
+    role_a, role_b = _v2_detect_role_prefixes(node_samples, head_label)
+    node_samples_v2 = {
+        str(i): _v2_node_samples(i, node_samples, role_a, role_b) for i in node_data
+    }
+    tree_meta = _v2_build_meta(meta, leaf_threshold)
+    tree_obj = {
+        "title": f"{tree_meta['language']} · {meta.get('Predictor', '')}",
+        "roleA": role_a.lower(),
+        "roleB": role_b.lower(),
+        "decisiveFeat": decisive_feat,
+        # Tree-level fallback only -- each pair also carries its own
+        # swapRole, since a merged-direction bucket can swap either role row
+        # by row (see _v2_build_pairs). 'B' when there are no pairs at all
+        # (no visible effect, matches SVA/subj_aux's always-head convention).
+        "swappedRole": swapped_role or "B",
+        "defaultNode": 0,
+        "CANVAS_W": canvas_w,
+        "CANVAS_H": canvas_h,
+        "META": tree_meta,
+        "CLASSES": _v2_build_classes(classes, hex_colors, root_dist_counts),
+        "NODES": nodes,
+        "EDGES": edges,
+        "PATHS": paths,
+        "NODE_SAMPLES": node_samples_v2,
+        "PAIRS": pairs,
+    }
+    tree_js = (
+        "const TREE_DATA = " + _json(tree_obj) + ";\n"
+        "  const TREES = { main: TREE_DATA };\n"
+        "  let currentTreeKey = 'main';\n"
+    )
+    with open(_V2_TEMPLATE_PATH, "r", encoding="utf-8") as f:
+        template = f.read()
+    body = template.replace("__V2_TREE_DATA_JS__", tree_js)
+    return "<!doctype html>\n<html lang=\"en\">\n" + body + "\n</html>\n"
+
+
+def write_html_v2(node_samples, node_data, out_file, classes, hex_colors, root_dist_counts,
+                   meta, leaf_threshold=None, head_label="head", correct_swaps_df=None):
+    html = create_html_v2(
+        meta, node_samples, node_data, hex_colors, classes, root_dist_counts,
+        leaf_threshold=leaf_threshold, head_label=head_label, correct_swaps_df=correct_swaps_df,
+    )
+    os.makedirs(os.path.dirname(out_file), exist_ok=True)
+    with open(out_file, "w", encoding="utf-8") as f:
+        f.write(html)
 
 
 def write_placeholder_html(out_file, predictor_var, label, meta=None, sample_rows=None):

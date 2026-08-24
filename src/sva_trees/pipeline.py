@@ -22,6 +22,10 @@ from word_order.viz_deprel import generate_html_deprel_index
 from word_order.viz_overview import generate_html_overview_index
 from multiblimp.languages import lang2langcode, gblang2udlang
 from multiblimp.unimorph import load_inflector
+from multiblimp.config import (
+    HTML_DECISION_TREES_DIR, OUTPUT_DECISION_TREES_DIR, OUTPUT_MINIMAL_PAIRS_DIR,
+    OUTPUT_DIAGNOSTICS_DIR,
+)
 from multiblimp.agreement_pipeline_utils import (
     available_system_memory_bytes, find_other_running_instances,
     limit_process_memory, read_unk_counts,
@@ -179,14 +183,14 @@ class Pipeline:
                     traceback.print_exc()
 
         for deprel in self.target.child_deprels:
-            pairs_dir = f"../../minimal_pairs/{self.target_id}/{self.target_id}_{deprel}"
-            decision_trees_dir = f"../../decision_trees/{self.target_id}/{self.target_id}_{deprel}"
+            pairs_dir = os.path.join(OUTPUT_MINIMAL_PAIRS_DIR, self.target_id, f"{self.target_id}_{deprel}")
+            decision_trees_dir = os.path.join(OUTPUT_DECISION_TREES_DIR, self.target_id, f"{self.target_id}_{deprel}")
 
             print("Generating diagnostics table for", deprel)
             diagnostics_df = generate_diagnostics_table(pairs_dir)
             write_diagnostics_csv(
                 diagnostics_df,
-                f"../../diagnostics/{self.target_id}/{self.target_id}_{deprel}.csv",
+                os.path.join(OUTPUT_DIAGNOSTICS_DIR, self.target_id, f"{self.target_id}_{deprel}.csv"),
             )
             # Reshaped here (not inside word_order.viz_deprel) so that module
             # doesn't need to depend on sva_trees.
@@ -199,7 +203,7 @@ class Pipeline:
 
             print("Generating deprel index for", deprel)
             generate_html_deprel_index(data_dir=decision_trees_dir,
-                            html_directory=f"../../decision_trees/{self.target_id}",
+                            html_directory=os.path.join(HTML_DECISION_TREES_DIR, self.target_id),
                             target_col=self.predictor_var,
                             exclude_labels={"unk"} if self.simplify else {"--", "+-"},
                             include_trivial_labels={"Yes"},
@@ -209,7 +213,7 @@ class Pipeline:
                             head_role_label="Verb",
                             )
         print("Generating overview index")
-        generate_html_overview_index(html_directory=f"../../decision_trees/")
+        generate_html_overview_index(html_directory=HTML_DECISION_TREES_DIR)
 
     def _process_language(self, lang):
         # Each language gets its own um_data POS-slices (sva_trees.pipeline.
@@ -221,9 +225,17 @@ class Pipeline:
             gc.collect()
 
     def _process_language_impl(self, lang):
-        # If the minimal pairs for all deprels already exist, skip this language
+        # If the minimal pairs for all deprels already exist, skip this language.
+        # Also requires the tree HTML to exist -- pairs and HTML come from two
+        # separate steps below (create_pairs vs. tree2html) that can fall out
+        # of sync (e.g. a language whose HTML got written as a "too few
+        # samples" placeholder despite a valid cached model existing, from a
+        # since-fixed bug); without this, such a language would stay stuck on
+        # its placeholder forever, since this check alone would keep skipping
+        # it on every future run.
         if not self.never_skip and all(
-            os.path.isdir(f"../../minimal_pairs/{self.target_id}/{self.target_id}_{deprel}/{lang}")
+            os.path.isdir(os.path.join(OUTPUT_MINIMAL_PAIRS_DIR, self.target_id, f"{self.target_id}_{deprel}", lang))
+            and os.path.exists(os.path.join(HTML_DECISION_TREES_DIR, self.target_id, f"{lang}.html"))
             for deprel in self.target.child_deprels
             ):
             print(f"{lang}: Skip, minimal pairs already found")
@@ -291,7 +303,8 @@ class Pipeline:
         for deprel in self.target.child_deprels:
             # Reset per-iteration: each deprel gets its own dt_df/model
             dt_df, model, learn_dt, unk_counts = None, None, False, None
-            decision_trees_dir = f"../../decision_trees/{self.target_id}/{self.target_id}_{deprel}"
+            decision_trees_dir = os.path.join(OUTPUT_DECISION_TREES_DIR, self.target_id, f"{self.target_id}_{deprel}")
+            lang_html_file = os.path.join(HTML_DECISION_TREES_DIR, self.target_id, f"{lang}.html")
 
             pred_values = set(full_df[self.predictor_var].values)
 
@@ -319,15 +332,35 @@ class Pipeline:
                 dt_df = read_df(lang, word_order_dir=decision_trees_dir)
                 model = joblib.load(f"{decision_trees_dir}/{lang}.joblib")
                 unk_counts = read_unk_counts(decision_trees_dir, lang)
+                learn_dt = model is not None
 
-            if self.never_skip or not os.path.exists(f"../../decision_trees/{self.target_id}/{lang}.html"):
+            # Run before tree2html (not after, as before) so the v2 page's
+            # generated-pairs section can join this same run's own
+            # correct_swaps rows in by leaf_id -- create_pairs doesn't depend
+            # on anything tree2html produces, so this reorder is safe.
+            correct_swaps_df = None
+            try:
+                diagnostic_dfs = create_pairs(dt_df, swap_feat=self.predictor_var , inflector=inflector,
+                        leaf_threshold=self.leaf_threshold,
+                        save_to=os.path.join(OUTPUT_MINIMAL_PAIRS_DIR, self.target_id, f"{self.target_id}_{deprel}", lang),
+                        num_lemma=num_lemma,
+                        num_form=num_form,
+                        full_df=full_df,
+                        unk_counts=unk_counts,
+                        label_distribution=label_distribution,
+                        head_label="Verb")
+                correct_swaps_df = diagnostic_dfs.get("correct_swaps")
+            except KeyError:
+                print(f"Skipping {lang} for {deprel}, missing column")
+
+            if self.never_skip or not os.path.exists(lang_html_file):
                 tree2html(
                     pipeline_model=model,
                     dt_df=dt_df,
                     full_df=full_df,
                     predictor_var=self.predictor_var,
                     target=self.target,
-                    out_file=f"../../decision_trees/{self.target_id}/{lang}.html",
+                    out_file=lang_html_file,
                     max_rows=15,
                     meta={"Language": lang},
                     only_show_real_orders=True,
@@ -343,16 +376,5 @@ class Pipeline:
                     leaf_threshold=self.leaf_threshold,
                     full_label_distribution=label_distribution,
                     head_label="Verb",
+                    correct_swaps_df=correct_swaps_df,
                 )
-            try:
-                create_pairs(dt_df, swap_feat=self.predictor_var , inflector=inflector,
-                        leaf_threshold=self.leaf_threshold,
-                        save_to=f"../../minimal_pairs/{self.target_id}/{self.target_id}_{deprel}/{lang}",
-                        num_lemma=num_lemma,
-                        num_form=num_form,
-                        full_df=full_df,
-                        unk_counts=unk_counts,
-                        label_distribution=label_distribution,
-                        head_label="Verb")
-            except KeyError:
-                print(f"Skipping {lang} for {deprel}, missing column")
