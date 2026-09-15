@@ -6,7 +6,14 @@ swap_number_subj = (
         "PL": "SG",
     },
 )
-swap_number_subj_any = (["Number[subj]", "Number"], None)
+# "Number[erg]"/"Number[abs]" cover ergative-split languages (e.g. Basque),
+# where plain Number is essentially never set on finite verbs at all --
+# these candidates only matter as sva_trees.create_pairs' per-row fallback
+# (word_order.process_treebank.resolve_layered_head_key), since which one
+# applies depends on this clause's own transitivity, not the language as a
+# whole; a global pick here (update_inflection_map picking whichever's
+# best-populated corpus-wide) would only ever be right for one of the two.
+swap_number_subj_any = (["Number[subj]", "Number", "Number[erg]", "Number[abs]"], None)
 swap_number = (
     "Number",
     {
@@ -43,7 +50,9 @@ swap_person = (
         "3": "1",
     },
 )
-swap_any_person = ("Person", None)
+# See swap_number_subj_any above for why [erg]/[abs] are here and why a
+# per-row (not global) resolution is what actually makes them useful.
+swap_any_person = (["Person", "Person[erg]", "Person[abs]"], None)
 
 # PERSON -- object-verb / indirect-object-verb agreement. See the NUMBER
 # object/indirect-object entries above for why there's no plain "Person"
@@ -65,7 +74,17 @@ swap_case = (
 )
 
 # GENDER
-swap_gender_any = ("Gender", None)
+# See swap_number_subj_any above for why [erg]/[abs] are here.
+swap_gender_any = (["Gender", "Gender[erg]", "Gender[abs]"], None)
+
+# GENDER -- object-verb / indirect-object-verb agreement. See the NUMBER
+# object/indirect-object entries above for why there's no plain "Gender"
+# fallback, and for the multiple bracket conventions covered here. Rarer
+# signal than Number/Person for polypersonal object marking (e.g. Basque:
+# Gender[erg]/Gender[dat] each occur a couple dozen times vs. thousands for
+# Number/Person), so expect low candidate counts even where it's present.
+swap_gender_obj_any = (["Gender[obj]", "Gender[abs]", "Gender[acc]"], None)
+swap_gender_iobj_any = (["Gender[iobj]", "Gender[io]", "Gender[dat]"], None)
 swap_gender_f2m = (
     "Gender",
     {

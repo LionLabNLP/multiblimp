@@ -467,7 +467,13 @@ def _create_diagnostics_html(
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>MultiBLiMP v2 - Language Overview</title>
+    <script>
+        try {{
+            var t = localStorage.getItem('sva-dt-theme');
+            if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+        }} catch (e) {{}}
+    </script>
+    <title>MultiBLiMP v2 - {agreement_label} Agreement Overview</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
@@ -553,6 +559,15 @@ def _create_diagnostics_html(
         h1 {{ margin: 0 0 0.5rem 0; font-size: 1.75rem; font-weight: 600; text-wrap: balance; }}
         .subtitle {{ color: var(--text-muted); font-size: 0.92rem; line-height: 1.5; max-width: 62ch; }}
         .top-controls {{ display: flex; align-items: center; gap: 0.75rem; flex-shrink: 0; padding-top: 0.25rem; }}
+        .theme-toggle {{
+            width: 2.1rem; height: 2.1rem;
+            border: 1px solid var(--border); border-radius: 6px;
+            background: var(--card); color: var(--text-muted);
+            font-size: 0.9rem; cursor: pointer;
+            display: inline-flex; align-items: center; justify-content: center;
+            padding: 0; transition: border-color .15s, color .15s, background .15s;
+        }}
+        .theme-toggle:hover {{ border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }}
         .back-btn {{
             display: inline-flex; align-items: center; gap: 0.4rem;
             padding: 0.45rem 0.875rem; border: 1px solid var(--border); border-radius: 6px;
@@ -865,7 +880,7 @@ def _create_diagnostics_html(
     <div class="container">
         <div class="header">
             <div class="title-section">
-                <h1>MultiBLiMP v2 - Language Overview</h1>
+                <h1>MultiBLiMP v2 - {agreement_label} Agreement Overview</h1>
                 <div class="subtitle">
                     {agreement_label} agreement prediction through decision trees. Click a language row
                     (or the <strong>Results</strong> button) to open its create_pairs results below.
@@ -886,6 +901,7 @@ def _create_diagnostics_html(
                     <option value="six" selected>Six-class</option>
                     <option value="binary">Binary (majority vs. rest)</option>
                 </select>
+                <button type="button" class="theme-toggle" id="themeToggleBtn" title="Toggle light/dark theme">☾</button>
             </div>
         </div>
 
@@ -1050,6 +1066,24 @@ def _create_diagnostics_html(
     </div>
 
     <script>
+    (function() {{
+      const btn = document.getElementById('themeToggleBtn');
+      function currentTheme() {{
+        const attr = document.documentElement.getAttribute('data-theme');
+        if (attr === 'light' || attr === 'dark') return attr;
+        return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+      }}
+      btn.textContent = currentTheme() === 'dark' ? '☀' : '☾';
+      btn.addEventListener('click', () => {{
+        const next = currentTheme() === 'dark' ? 'light' : 'dark';
+        try {{ localStorage.setItem('sva-dt-theme', next); }} catch (e) {{}}
+        // Reload, not a live attribute flip -- the scatter chart bakes
+        // resolved colors into its Plotly trace at render time
+        // (getComputedStyle), not live var() references.
+        location.reload();
+      }});
+    }})();
+
     const LANGUAGES = {{ six: {languages_six_json}, binary: {languages_binary_json} }};
     const plotData = {{ six: {plot_data_six_json}, binary: {plot_data_binary_json} }};
 

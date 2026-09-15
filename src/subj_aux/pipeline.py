@@ -15,9 +15,9 @@ from word_order.process_treebank import (
     drop_singleton_cols,
 )
 from word_order.decision_tree import fit_dt
+from word_order.entropy import default_leaf_threshold
 from word_order.viz_tree import tree2html
 from word_order.viz_deprel import generate_html_deprel_index
-from word_order.viz_overview import generate_html_overview_index
 from multiblimp.languages import gblang2udlang, lang2langcode
 from multiblimp.unimorph import load_inflector
 from multiblimp.agreement_pipeline_utils import (
@@ -157,7 +157,8 @@ class SubjAuxPipeline:
     def __init__(self, feature: str, inflection_map, langs, resource_dir: str,
                  word_order_dir: str, max_treebank_len: int | None = None,
                  never_skip: bool = False, target_id: str | None = None,
-                 threshold: float = 0.12, simplify: bool = True, drop_unk: bool = True,
+                 threshold: float | None = None, min_samples_leaf: int = 10,
+                 simplify: bool = True, drop_unk: bool = True,
                  include_multi_aux: bool = True,
                  rm_columns=("nsubj_child-deprel_conj",),
                  unimorph_args: dict | None = None,
@@ -182,7 +183,14 @@ class SubjAuxPipeline:
         self.target_id = target_id or (
             f"sa{feature[0]}a" + ("" if include_multi_aux else "_single")
         )
-        self.threshold = threshold
+        self.min_samples_leaf = min_samples_leaf
+        # None (default): derive from min_samples_leaf/Jeffreys smoothing --
+        # see word_order.entropy.default_leaf_threshold and
+        # sva_trees.pipeline.Pipeline's matching parameter.
+        self.threshold = (
+            threshold if threshold is not None
+            else default_leaf_threshold(self.min_samples_leaf)
+        )
         self.simplify = simplify
         self.drop_unk = drop_unk
         self.rm_columns = rm_columns
@@ -349,7 +357,7 @@ class SubjAuxPipeline:
                 verbose=1,
                 predictor_var=self.predictor_var,
                 min_impurity_decrease=min_impurity_decrease,
-                min_samples_leaf=10,
+                min_samples_leaf=self.min_samples_leaf,
                 save_to=f"{decision_trees_dir_full}/{lang}",
                 omit_feats=set(
                     col for col in full_df
@@ -440,5 +448,7 @@ class SubjAuxPipeline:
             head_role_label="Aux",
         )
 
-        print("Generating overview index")
-        generate_html_overview_index(html_directory=self.html_decision_trees_dir)
+        # Cross-pipeline overview index is no longer rebuilt here -- see
+        # sva_trees.pipeline.Pipeline.run's identical comment;
+        # scripts/generate_html_indexes.py now does this once, after all
+        # conditions are (re)built.

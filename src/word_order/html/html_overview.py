@@ -3,6 +3,12 @@ def create_html(sections_html, all_data_json):
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <script>
+        try {{
+            var t = localStorage.getItem('sva-dt-theme');
+            if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+        }} catch (e) {{}}
+    </script>
     <title>MultiBLiMP v2 - Agreement Overview</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
@@ -88,6 +94,15 @@ def create_html(sections_html, all_data_json):
             flex-shrink: 0;
             padding-top: 0.25rem;
         }}
+        .theme-toggle {{
+            width: 2.1rem; height: 2.1rem;
+            border: 1px solid var(--border); border-radius: 6px;
+            background: var(--card); color: var(--text-muted);
+            font-size: 0.9rem; cursor: pointer;
+            display: inline-flex; align-items: center; justify-content: center;
+            padding: 0; transition: border-color .15s, color .15s, background .15s;
+        }}
+        .theme-toggle:hover {{ border-color: var(--accent); color: var(--accent); }}
         .controls label {{
             font-size: 0.875rem;
             font-weight: 500;
@@ -182,6 +197,60 @@ def create_html(sections_html, all_data_json):
             letter-spacing: 0.01em;
         }}
         .panel-label a:hover {{ text-decoration: underline; }}
+        /* NPA's own group section: a role-pair/feature card grid with a
+           toggle switching which axis is the top-level grouping, instead
+           of the flat per-panel grid other groups use -- see
+           word_order.viz_overview._npa_toggle_group_html. */
+        .npa-view-toggle {{
+            display: inline-flex;
+            border: 1px solid var(--border-hover);
+            border-radius: 8px;
+            overflow: hidden;
+            margin-bottom: 1rem;
+        }}
+        .npa-view-toggle button {{
+            border: none;
+            background: transparent;
+            color: var(--text-muted);
+            font-family: inherit;
+            font-size: 0.85rem;
+            font-weight: 500;
+            padding: 0.4rem 0.9rem;
+            cursor: pointer;
+        }}
+        .npa-view-toggle button.active {{
+            background: var(--hover);
+            color: var(--text);
+        }}
+        .npa-card-grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+            gap: 0.85rem;
+        }}
+        .npa-card {{
+            display: block;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            background: var(--panel-bg);
+            padding: 0.85rem 1rem;
+            text-decoration: none;
+            color: inherit;
+            transition: box-shadow 0.15s ease, border-color 0.15s ease;
+        }}
+        .npa-card:hover {{
+            box-shadow: 0 4px 16px rgba(0,0,0,0.10);
+            border-color: var(--border-hover);
+        }}
+        .npa-card-title {{
+            font-weight: 600;
+            font-size: 0.9rem;
+            color: var(--text);
+        }}
+        .npa-card-stat {{
+            font-size: 0.8rem;
+            color: var(--text-muted);
+            margin-top: 0.25rem;
+        }}
     </style>
 </head>
 <body>
@@ -203,6 +272,7 @@ def create_html(sections_html, all_data_json):
                     <option value="six" selected>Six-class</option>
                     <option value="binary">Binary (majority vs. rest)</option>
                 </select>
+                <button type="button" class="theme-toggle" id="themeToggleBtn" title="Toggle light/dark theme">☾</button>
             </div>
         </div>
 
@@ -210,6 +280,24 @@ def create_html(sections_html, all_data_json):
     </div>
 
     <script>
+        (function() {{
+          const btn = document.getElementById('themeToggleBtn');
+          function currentTheme() {{
+            const attr = document.documentElement.getAttribute('data-theme');
+            if (attr === 'light' || attr === 'dark') return attr;
+            return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+          }}
+          btn.textContent = currentTheme() === 'dark' ? '☀' : '☾';
+          btn.addEventListener('click', () => {{
+            const next = currentTheme() === 'dark' ? 'light' : 'dark';
+            try {{ localStorage.setItem('sva-dt-theme', next); }} catch (e) {{}}
+            // Reload, not a live attribute flip -- the charts below bake
+            // resolved colors into Plotly traces at render time
+            // (getComputedStyle), not live var() references.
+            location.reload();
+          }});
+        }})();
+
         const allData = {all_data_json};
 
         let currentType = 'six';
@@ -340,6 +428,37 @@ def create_html(sections_html, all_data_json):
             currentType = e.target.value;
             renderAll(currentType);
         }});
+
+        // NPA's role-pair/feature toggle -- a no-op wherever this markup
+        // doesn't exist (every page except the main overview's own "Noun
+        // Phrase" section), so this can live in the one shared script block.
+        (function() {{
+            const gridPair = document.getElementById('npaGridPair');
+            const gridFeat = document.getElementById('npaGridFeat');
+            const btnPair = document.getElementById('npaBtnPair');
+            const btnFeat = document.getElementById('npaBtnFeat');
+            if (!gridPair || !gridFeat || !btnPair || !btnFeat) return;
+
+            function apply(view) {{
+                gridPair.style.display = view === 'feature' ? 'none' : 'grid';
+                gridFeat.style.display = view === 'feature' ? 'grid' : 'none';
+                btnPair.classList.toggle('active', view !== 'feature');
+                btnFeat.classList.toggle('active', view === 'feature');
+            }}
+
+            let saved = null;
+            try {{ saved = localStorage.getItem('sva-dt-npa-view'); }} catch (e) {{}}
+            apply(saved === 'feature' ? 'feature' : 'pair');
+
+            btnPair.addEventListener('click', () => {{
+                apply('pair');
+                try {{ localStorage.setItem('sva-dt-npa-view', 'pair'); }} catch (e) {{}}
+            }});
+            btnFeat.addEventListener('click', () => {{
+                apply('feature');
+                try {{ localStorage.setItem('sva-dt-npa-view', 'feature'); }} catch (e) {{}}
+            }});
+        }})();
     </script>
 </body>
 </html>"""

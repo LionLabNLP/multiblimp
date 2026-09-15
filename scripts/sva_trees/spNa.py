@@ -83,7 +83,6 @@ if __name__=="__main__":
                                     #"head_child-deprel_aux"
                                     ],
                         target_id=args.target_id or sys.argv[0][:-3],
-                        threshold=0.12,
                         simplify=not args.distinguish_unk,
                         n_jobs=args.n_jobs,
                         max_worker_mem_gb=args.max_worker_mem_gb,

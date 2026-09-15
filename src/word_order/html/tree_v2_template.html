@@ -1,5 +1,11 @@
 <meta charset="utf-8">
 <title>Minimal-Pair Attention Trace</title>
+<script>
+  try {
+    var t = localStorage.getItem('sva-dt-theme');
+    if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+  } catch (e) {}
+</script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
@@ -153,6 +159,19 @@
     color: var(--text-secondary);
   }
   .card-header .hint { font-size: 12px; color: var(--text-tertiary); }
+  .header-right { display: flex; align-items: center; gap: 10px; }
+  .theme-toggle {
+    width: 24px; height: 24px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--text-secondary);
+    cursor: pointer;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 12px;
+    padding: 0;
+  }
+  .theme-toggle:hover { border-color: var(--accent); color: var(--accent); }
 
   /* ── Tree selector (switches between the two real trees) ── */
   .tree-select-row { display: flex; gap: 8px; padding: 12px 18px 0; }
@@ -174,22 +193,71 @@
 
   /* ── Tree panel ── */
   .tree-wrap { position: relative; flex: 0 0 auto; }
+  /* Own scroll viewport for the tree canvas alone (not the whole card): a
+     last-resort safety net for any leftover rounding past .tree-scale-outer's
+     own fit (see its comment below) -- rather than the card's overflow:hidden
+     silently clipping a stray pixel, this lets just the canvas scroll
+     horizontally while the header and tree switcher above it stay put. */
+  .tree-scroll { overflow-x: auto; }
+  /* Sized by JS (sizeTreeBox()) to the tree's fitted *window* -- CANVAS_W x
+     CANVAS_H scaled by whatever factor fills the card's width up to
+     TREE_BOX_MAX_H -- and centered via auto margins once narrower than the
+     card. This is the box that actually reserves layout space and clips
+     overflow; .tree-svg-box inside it is scaled via `transform` (see that
+     rule's own comment for why a *transform* scale, not a narrower CSS
+     width, is what has to do the shrinking here) -- but only ever *down* to
+     match this window exactly. A small tree's own diagram is deliberately
+     capped from scaling *up* past its native size to fill this window the
+     same way (see sizeTreeBox()'s contentScale) -- rendering it oversized
+     wouldn't actually help anyone read it, just look blown up -- so
+     flexbox centers that smaller, native-size .tree-svg-box in the middle
+     of this (still fully fitted) window instead, leaving genuine empty
+     space around it rather than stretching it. The floating info-panel and
+     zoom controls are children of *this* element, not .tree-svg-box,
+     precisely so that transform doesn't shrink or enlarge them too -- they
+     stay a normal, legible/clickable size and just sit pinned to this
+     box's own (already-fitted) corners; being absolutely positioned, the
+     flex centering below doesn't apply to them. */
+  .tree-scale-outer {
+    position: relative;
+    margin: 0 auto;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
   .tree-svg-box {
     position: relative;
-    /* Width is 100% of the card by default, but narrowed by JS (sizeTreeBox(),
-       keyed off CANVAS_W/CANVAS_H) whenever that would push the aspect-locked
-       height below past TREE_BOX_MAX_H -- centered via auto margins once
-       narrower than the card. Kept aspect-locked (not an independent
-       max-height) rather than letting height diverge from width's own
-       ratio: the SVG's viewBox and the HTML node-box overlay below share one
-       coordinate space keyed to this box's width alone (see .tree-viewport's
-       comment) -- an independently-set height would desync them, not just
-       resize them. */
-    width: 100%;
-    margin: 0 auto;
+    /* Always laid out at the tree's native CANVAS_W (set by JS to a literal
+       `${CANVAS_W}px`, never narrower) -- html_tree.py's NODE_SPACING_X lays
+       out sibling nodes assuming ~1 canvas unit == 1 real pixel is the
+       *minimum* safe density for the fixed 168px .node-box; narrowing this
+       box's own CSS width would compress that spacing while every node box
+       stayed the same 168px, letting neighbors overlap. Fitting the whole
+       diagram into the available card is instead done by scaling this
+       already-safely-laid-out box as one rigid unit (`transform`, see
+       sizeTreeBox()) -- spacing and node size scale together, so nothing
+       that didn't already overlap at native size can overlap after it. The
+       SVG's viewBox and the HTML node-box overlay below share this same
+       untransformed CANVAS_W/CANVAS_H coordinate space (a node's `left`/`top`
+       are percentages of this box) -- keeping the box itself at native size
+       keeps both in lockstep for free; scaling it via transform moves both
+       together too, since transform applies to the whole rendered subtree.
+       flex-shrink:0 because .tree-scale-outer is a flex container now (see
+       its own comment) -- without this, flexbox's default shrink-to-fit
+       would override this native width down to the container's own
+       (already scaled-down) size, double-shrinking it out from under the
+       transform instead of leaving native-size layout for the transform to
+       scale. transform-origin left at its "center" default (not 0 0)
+       deliberately: .tree-scale-outer centers this box's native-size,
+       pre-transform layout box on both axes, so scaling from that same
+       center is what keeps the transformed result centered too --
+       anchoring the scale to a corner instead would slide it off-center by
+       however much this shrinks or grows. */
+    flex-shrink: 0;
     /* Clips the pannable/zoomable content below to this box's own frame --
-       without it, zooming in or panning would spill the tree out past the
-       card's edge instead of scrolling within it. */
+       without it, zooming in or panning would spill the tree out past its
+       own edge instead of scrolling within it. */
     overflow: hidden;
     background:
       radial-gradient(circle at 1px 1px, var(--border-subtle) 1px, transparent 0) 0 0/24px 24px,
@@ -203,8 +271,10 @@
      are percentages of this same box), so they're transformed as a single
      unit here rather than the SVG's own viewBox -- that would desync them,
      since the HTML overlay doesn't know about the SVG's viewBox at all. The
-     floating info-panel and zoom controls sit outside this element, as
-     siblings, so they stay fixed in place while the tree moves under them. */
+     floating info-panel and zoom controls sit outside .tree-svg-box, as
+     children of .tree-scale-outer instead, so they stay fixed in place
+     while the tree pans/zooms under them (and don't shrink when the whole
+     diagram is scaled to fit -- see .tree-svg-box's own comment). */
   .tree-viewport { width: 100%; transform-origin: 0 0; }
   .tree-viewport svg { display: block; width: 100%; height: auto; }
 
@@ -711,17 +781,27 @@
   /* ── Feature mini table: one row per role (nsubj/verb), one column per
      feature -- lines the two roles' values up for a direct comparison,
      which is the whole point of an agreement condition. ── */
-  .feat-mini-table {
-    border-collapse: collapse;
-    font-family: var(--font-mono);
-    font-size: 10px;
+  /* Rounding/clipping lives on this wrapper, not the table itself: border-radius
+     + overflow:hidden directly on a <table> clips cell backgrounds unreliably
+     across browsers, collapse mode or not. */
+  .feat-mini-table-wrap {
+    display: inline-block;
     background: var(--surface);
     border: 1px solid var(--border);
     border-radius: 7px;
     overflow: hidden;
   }
-  .feat-mini-table th, .feat-mini-table td { padding: 4px 9px; text-align: left; white-space: nowrap; }
+  .feat-mini-table {
+    border-collapse: separate;
+    border-spacing: 0;
+    font-family: var(--font-mono);
+    font-size: 10px;
+  }
+  .feat-mini-table th, .feat-mini-table td { padding: 4px 9px; text-align: left; white-space: nowrap; vertical-align: middle; }
   .feat-mini-table thead th {
+    /* Re-declared: .node-table thead th (a different table) ties this
+       selector's specificity and was winning the padding otherwise. */
+    padding: 4px 9px;
     font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em;
     color: var(--text-tertiary); border-bottom: 1px solid var(--border); background: var(--surface-raised);
     /* All-caps text has no descenders, but the default line-height still
@@ -818,7 +898,17 @@
     color: var(--text-primary);
   }
   .pairs-list { padding: 12px 18px 18px; display: flex; flex-direction: column; gap: 10px; }
+  .pairs-leaf-group { border-radius: 8px; }
   .pairs-leaf-group + .pairs-leaf-group { margin-top: 6px; }
+  /* Briefly marks the leaf a node's "kept › pairs" badge jumped to -- with
+     several kept leaves in one pairs card, landing on the card alone
+     doesn't say *which* group is the one just navigated to; this fades out
+     on its own so it reads as "you arrived here", not a persistent state. */
+  .pairs-leaf-group.jump-highlight { animation: pairsJumpFlash 1.6s ease; }
+  @keyframes pairsJumpFlash {
+    0%, 100% { background: transparent; }
+    15%, 55% { background: var(--keep-light); }
+  }
   .pairs-leaf-heading-row { display: flex; align-items: baseline; gap: 8px; margin-bottom: 8px; }
   .pairs-leaf-heading {
     font-family: var(--font-mono); font-size: 11px; font-weight: 700;
@@ -838,7 +928,7 @@
      still renders as a table inside that block box) -- unlike the sample
      table above, nothing already wraps this one, so without this it would
      just push the pairs card wider than the page on a narrow screen. */
-  .pair-example .feat-mini-table { margin-top: 8px; display: block; max-width: 100%; overflow-x: auto; }
+  .pair-example .feat-mini-table-wrap { margin-top: 8px; display: block; max-width: 100%; overflow-x: auto; }
   .pair-sentence-row { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
   .pair-sentence-row .mark { font-weight: 700; flex-shrink: 0; }
   .pair-sentence-row.grammatical .mark { color: var(--ok); }
@@ -864,9 +954,14 @@
   <div class="card tree-wrap">
     <div class="card-header">
       <h2 id="treeTitle">Tree</h2>
-      <span class="hint">click a node to browse its samples</span>
+      <div class="header-right">
+        <span class="hint">click a node to browse its samples</span>
+        <button type="button" class="theme-toggle" id="themeToggleBtn" title="Toggle light/dark theme">☾</button>
+      </div>
     </div>
     <div class="tree-select-row" id="treeSelectRow"></div>
+    <div class="tree-scroll" id="treeScroll">
+    <div class="tree-scale-outer" id="treeScaleOuter">
     <div class="tree-svg-box grabbable" id="treeBox">
       <div class="tree-viewport" id="treeViewport">
         <svg id="treeSvg" viewBox="0 0 900 500" xmlns="http://www.w3.org/2000/svg">
@@ -875,6 +970,7 @@
         </svg>
         <div id="nodesLayer" style="position:absolute; inset:0;"></div>
       </div>
+    </div>
 
       <div class="zoom-controls">
         <button type="button" class="zoom-btn" id="zoomInBtn" title="Zoom in">+</button>
@@ -904,6 +1000,7 @@
           </div>
         </div>
       </div>
+    </div>
     </div>
   </div>
 
@@ -965,6 +1062,8 @@ __V2_TREE_DATA_JS__
   const edgesBase = document.getElementById('edgesBase');
   const ringsLayer = document.getElementById('ringsLayer');
   const nodesLayer = document.getElementById('nodesLayer');
+  const treeScroll = document.getElementById('treeScroll');
+  const treeScaleOuter = document.getElementById('treeScaleOuter');
   const treeBox = document.getElementById('treeBox');
   const treeViewport = document.getElementById('treeViewport');
   const scrollPane = document.getElementById('scrollPane');
@@ -984,6 +1083,7 @@ __V2_TREE_DATA_JS__
   const infoPanelAccuracy = document.getElementById('infoPanelAccuracy');
   const infoPanelMeta = document.getElementById('infoPanelMeta');
   const minimizeBtn = document.getElementById('minimizeBtn');
+  const themeToggleBtn = document.getElementById('themeToggleBtn');
   const distToggleRow = document.getElementById('distToggleRow');
   const distToggleSwitch = document.getElementById('distToggleSwitch');
 
@@ -1000,30 +1100,55 @@ __V2_TREE_DATA_JS__
     treeViewport.style.transform = `translate(${zoom.tx}px, ${zoom.ty}px) scale(${zoom.scale})`;
   }
 
-  // Caps treeBox's own height by narrowing its width (not by setting an
-  // independent height) -- treeBox is aspect-locked to CANVAS_W/CANVAS_H via
-  // its child SVG's own width:100%;height:auto, and fitToContent's
-  // toPxX/toPxY below assume that same lock to keep a single zoom.scale
-  // valid for both axes (see the "shared parent" comment above). At 100%
-  // card width, a wide-but-shallow tree (or a trivial one-leaf tree, whose
-  // own tiny logical canvas still gets stretched to the card's full width)
-  // could render several viewport-heights tall, pushing the node-samples
-  // panel below the tree fully offscreen on load. Keeping the box's
-  // rendered height under TREE_BOX_MAX_H by shrinking width instead (CSS
-  // centers the narrower result) means the samples panel's own top edge is
-  // reliably visible without scrolling, on any tree shape.
+  // Fits the whole diagram into the available card width and TREE_BOX_MAX_H
+  // by scaling .tree-svg-box -- always laid out at its native CANVAS_W (see
+  // that rule's own comment for why narrowing it instead would let fixed
+  // 168px node boxes overlap) -- as one rigid unit via CSS `transform`.
+  // Two separate scales, not one, because "fill the available window" and
+  // "how big should the diagram itself render" pull in different
+  // directions for a small tree: fitScale sizes .tree-scale-outer -- the
+  // window -- and is NOT capped at 1, so a trivial one-leaf tree's tiny
+  // logical canvas still gets a properly roomy window (same as the old
+  // plain `width:100%` did), rather than one so small the info-panel/
+  // zoom-controls -- sized in real, unscaled px and pinned to
+  // .tree-scale-outer's own corners -- overlap it. contentScale is what
+  // actually transforms .tree-svg-box, and IS capped at 1: a small tree's
+  // diagram rendered at native size, centered in that roomier window (see
+  // .tree-scale-outer's flexbox), reads better than the same diagram
+  // stretched up to fill it -- bigger text and node boxes than the layout
+  // was ever designed for, not more legible for it. Scaling *down* is
+  // exactly as before (fitScale === contentScale whenever the tree doesn't
+  // fit natively; node spacing and the fixed 168px node boxes shrink
+  // together, so nothing that didn't already overlap at native size can
+  // start overlapping by getting smaller) -- the two only diverge once
+  // fitScale climbs past 1. The height cap matters as much for a
+  // wide-but-shallow (or trivial) tree's *window* as for an oversized
+  // tree's: without it, fitScale alone could still render several
+  // viewport-heights tall, pushing the node-samples panel below fully
+  // offscreen on load.
+  let fitScale = 1;
+  let contentScale = 1;
   function sizeTreeBox() {
-    const maxW = treeBox.parentElement.clientWidth;
+    const maxW = treeScroll.clientWidth;
     const maxH = Math.min(window.innerHeight * 0.46, 460);
-    const naturalH = maxW * (CANVAS_H / CANVAS_W);
-    treeBox.style.width = naturalH > maxH ? `${maxH * (CANVAS_W / CANVAS_H)}px` : '';
+    fitScale = Math.min(maxW / CANVAS_W, maxH / CANVAS_H);
+    contentScale = Math.min(1, fitScale);
+    treeBox.style.width = `${CANVAS_W}px`;
+    treeBox.style.transform = `scale(${contentScale})`;
+    treeScaleOuter.style.width = `${CANVAS_W * fitScale}px`;
+    treeScaleOuter.style.height = `${CANVAS_H * fitScale}px`;
   }
 
   // Both demo trees' node coordinates were hand-placed to already fit the
   // fixed 900x500 canvas, so this reduces to the identity transform for
   // them -- but it's computed from T.NODES' actual bounding box, not
   // hardcoded to that fact, so a tree whose layout doesn't fit 900x500 still
-  // opens fully visible instead of clipped or half off-screen.
+  // opens fully visible instead of clipped or half off-screen. Operates
+  // entirely within .tree-svg-box's own native CANVAS_W/CANVAS_H frame --
+  // this is the *interactive* pan/zoom the user drives via the zoom
+  // controls/wheel/drag, layered underneath (and independent of) the
+  // fitScale/contentScale pair above, which only fit the box as a whole
+  // into the card.
   function fitToContent() {
     const nodes = Object.values(T.NODES);
     // Real, fixed CSS pixels -- not "canvas units" -- because that's what a
@@ -1057,9 +1182,15 @@ __V2_TREE_DATA_JS__
   }
 
   function zoomBy(factor, centerX, centerY) {
-    const rect = treeBox.getBoundingClientRect();
-    const cx = centerX ?? rect.width / 2;
-    const cy = centerY ?? rect.height / 2;
+    // treeBox.clientWidth/Height, not getBoundingClientRect(): the latter
+    // reports the *visual*, contentScale-scaled size, but centerX/centerY
+    // (both the default here and the wheel handler's cursor-relative
+    // values below) need to land in treeBox's own untransformed local
+    // frame, same as zoom.tx/zoom.ty -- clientWidth/Height are a layout
+    // property and stay at the native CANVAS_W/CANVAS_H regardless of the
+    // `transform` sizeTreeBox() applies to this element.
+    const cx = centerX ?? treeBox.clientWidth / 2;
+    const cy = centerY ?? treeBox.clientHeight / 2;
     const newScale = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, zoom.scale * factor));
     const ratio = newScale / zoom.scale;
     // Keep the point under the cursor (or the box's center, for the +/-
@@ -1077,8 +1208,18 @@ __V2_TREE_DATA_JS__
   treeBox.addEventListener('wheel', e => {
     if (e.target.closest('.info-panel')) return;
     e.preventDefault();
+    // getBoundingClientRect() here IS the visual (contentScale-scaled)
+    // rect -- exactly what's needed to turn the cursor's real screen
+    // position into an offset from the box's visible top-left. Dividing
+    // that offset by contentScale then undoes the scale, converting it
+    // into treeBox's own untransformed local frame that zoomBy() (and
+    // zoom.tx/ty) work in.
     const rect = treeBox.getBoundingClientRect();
-    zoomBy(e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP, e.clientX - rect.left, e.clientY - rect.top);
+    zoomBy(
+      e.deltaY < 0 ? ZOOM_STEP : 1 / ZOOM_STEP,
+      (e.clientX - rect.left) / contentScale,
+      (e.clientY - rect.top) / contentScale
+    );
   }, { passive: false });
 
   // Drag-to-pan, but only when the drag starts on empty canvas -- starting
@@ -1092,34 +1233,40 @@ __V2_TREE_DATA_JS__
   });
   window.addEventListener('mousemove', e => {
     if (!panState) return;
-    zoom.tx = panState.origTx + (e.clientX - panState.startX);
-    zoom.ty = panState.origTy + (e.clientY - panState.startY);
+    // Screen-space mouse movement divided by contentScale for the same
+    // reason as the wheel handler's cursor offset: zoom.tx/ty live in
+    // treeBox's untransformed local frame, so a real on-screen drag of N px
+    // should move content by N/contentScale local units to track the
+    // cursor 1:1.
+    zoom.tx = panState.origTx + (e.clientX - panState.startX) / contentScale;
+    zoom.ty = panState.origTy + (e.clientY - panState.startY) / contentScale;
     applyZoom();
   });
   window.addEventListener('mouseup', () => {
     if (panState) { panState = null; treeBox.classList.remove('panning'); }
   });
 
-  // Re-fit whenever treeBox's own rendered size changes, for any reason --
-  // not just a window resize event. A ResizeObserver on the box itself
-  // also catches the box being compressed by something that never fires
-  // "resize" on window at all: this artifact's own panel narrowing, a host
-  // page's sidebar toggling, a container query breakpoint, etc. Without
-  // this, the pan/zoom transform stays keyed to whatever size the box
-  // happened to be at the last real window resize, so the fixed-width node
-  // boxes (children of the zoomed treeViewport) can end up scaled for a box
-  // that no longer exists, spilling out past the page's own edge instead of
-  // shrinking with it.
+  // Re-fit whenever the *available* space changes, for any reason -- not
+  // just a window resize event. treeBox itself is always CANVAS_W x
+  // CANVAS_H now (see sizeTreeBox()), so it never fires its own resize;
+  // treeScroll is the element whose actual rendered width sizeTreeBox()
+  // reads as maxW, so a ResizeObserver on it also catches the available
+  // width changing for reasons that never fire "resize" on window at all:
+  // this artifact's own panel narrowing, a host page's sidebar toggling, a
+  // container query breakpoint, etc. Without this, fitScale stays keyed to
+  // whatever space was available at the last real window resize, so the
+  // fitted tree can end up sized for a card that no longer exists, spilling
+  // out past the page's own edge instead of shrinking with it.
   let resizeTimer = null;
   const scheduleRefit = () => {
     clearTimeout(resizeTimer);
     resizeTimer = setTimeout(() => { sizeTreeBox(); fitToContent(); }, 150);
   };
-  new ResizeObserver(scheduleRefit).observe(treeBox);
+  new ResizeObserver(scheduleRefit).observe(treeScroll);
   // Kept alongside the observer above, not replaced by it: an actual
   // window resize always fires this reliably, so it's a guaranteed
   // fallback in case something about a given host page's layout ever
-  // stops treeBox's own box size from changing in step with the window
+  // stops treeScroll's own box size from changing in step with the window
   // (e.g. a CSS containment quirk) -- redundant in the common case, but
   // that just means fitToContent() gets called twice, which is harmless.
   window.addEventListener('resize', scheduleRefit);
@@ -1201,12 +1348,12 @@ __V2_TREE_DATA_JS__
       return `<tr${rowCls}><th>${r.label} <span class="role-form${roleCls}">${r.form}</span></th>${cells}</tr>`;
     };
     return `
-      <table class="feat-mini-table">
+      <div class="feat-mini-table-wrap"><table class="feat-mini-table">
         <thead><tr><th></th>${headHtml}</tr></thead>
         <tbody>
           ${rows.map(rowHtml).join('\n          ')}
         </tbody>
-      </table>`;
+      </table></div>`;
   }
 
   function nextColor() {
@@ -1350,9 +1497,16 @@ __V2_TREE_DATA_JS__
       slot.style.left = (node.x / CANVAS_W * 100) + '%';
       slot.style.top = (node.y / CANVAS_H * 100) + '%';
 
+      // Minimal pairs are only ever generated from an Agree-majority leaf
+      // (create_pairs never swaps out of a Disagree majority), so the
+      // "not kept" note on a Disagree leaf would only ever be trivially
+      // true -- omitted there instead of showing a note that can't inform
+      // anything.
       const keepHtml = !node.leaf ? '' : node.keep
         ? `<span class="node-keep yes" data-keep-toggle="1">🔑 ${node.kept.toLocaleString()} kept › ${node.correctSwaps.toLocaleString()} pairs ▸</span>`
-        : `<span class="node-keep no">not kept (H≥${T.META.keepThresholdH})</span>`;
+        : (node.majorityLabel && node.majorityLabel.toLowerCase() === 'yes'
+          ? `<span class="node-keep no">not kept (H≥${T.META.keepThresholdH.toFixed(2)})</span>`
+          : '');
       const fill = nodeFillColor(node);
       // [+] marker: flags a split rule where some other feature was >99%
       // correlated with the chosen one in the rows reaching this node (the
@@ -1400,7 +1554,21 @@ __V2_TREE_DATA_JS__
         const openPairs = e => {
           e.stopPropagation();
           pairsCard.open = true;
-          pairsCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+          // Scroll straight to *this* leaf's own group, not just the pairs
+          // card in general -- with more than one leaf kept, landing on the
+          // top of the card could leave the one the badge was actually
+          // about scrolled well out of view. Falls back to the card itself
+          // if the group isn't found for some reason (e.g. stale T.NODES).
+          const leafGroup = pairsList.querySelector(`[data-leaf-group="${CSS.escape(id)}"]`);
+          (leafGroup || pairsCard).scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+          if (leafGroup) {
+            // Restart the animation even if this leaf was just jumped to a
+            // moment ago (removing the class before re-adding it forces the
+            // browser to treat it as a fresh animation, not a no-op).
+            leafGroup.classList.remove('jump-highlight');
+            void leafGroup.offsetWidth;
+            leafGroup.classList.add('jump-highlight');
+          }
         };
         keepEl.addEventListener('click', openPairs);
         keepEl.addEventListener('keydown', e => {
@@ -1471,6 +1639,22 @@ __V2_TREE_DATA_JS__
     minimizeBtn.textContent = minimized ? '+' : '−';
     minimizeBtn.title = minimized ? 'Expand panel' : 'Minimize panel';
   });
+
+  function currentTheme() {
+    const attr = document.documentElement.getAttribute('data-theme');
+    if (attr === 'light' || attr === 'dark') return attr;
+    return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  }
+  function updateThemeToggleBtn() {
+    themeToggleBtn.textContent = currentTheme() === 'dark' ? '☀' : '☾';
+  }
+  themeToggleBtn.addEventListener('click', () => {
+    const next = currentTheme() === 'dark' ? 'light' : 'dark';
+    document.documentElement.setAttribute('data-theme', next);
+    try { localStorage.setItem('sva-dt-theme', next); } catch (e) {}
+    updateThemeToggleBtn();
+  });
+  updateThemeToggleBtn();
 
   let showNodeDist = true;
   distToggleRow.addEventListener('click', () => {
@@ -1786,6 +1970,10 @@ __V2_TREE_DATA_JS__
       const leafPairs = allPairs.slice(0, PAIR_LIMIT);
       const group = document.createElement('div');
       group.className = 'pairs-leaf-group';
+      // Stable target for a node's "kept › pairs" badge (see openPairs
+      // below) to scroll straight to *this* leaf's group, not just the
+      // pairs card in general -- matters once more than one leaf is kept.
+      group.setAttribute('data-leaf-group', leafId);
       // One "show features" toggle per leaf, always present (not just once
       // there's more than one kept leaf) -- it opens/closes every one of
       // this leaf's pairs at once, independently of activePairKey below.

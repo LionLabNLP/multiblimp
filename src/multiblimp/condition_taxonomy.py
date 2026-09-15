@@ -1,9 +1,11 @@
 """Naming convention shared by every agreement condition this project runs:
-sv/sp/sa + Na/Ga/Pa for subject-verb/participle/auxiliary agreement (e.g.
-"svNa" = Subject-Verb, Number), and npa/{ROLE1}-{ROLE2}_{FeatAbbrev} for
-noun-phrase agreement role pairs (e.g. "npa/HEAD-DET_N" = Head-Determiner
-Number). Both scripts/overview/build_stats.py (the published-site stats
-scraper) and word_order.viz_overview.py (the local decision-tree index page)
+sv/sp/sa + Na/Ga/Pa for subject-verb/participle/auxiliary agreement,
+ov + Na/Ga/Pa for verb-object agreement, iov + Na/Ga/Pa for indirect-object-
+verb agreement (e.g. "svNa" = Subject-Verb, Number), and
+npa/{ROLE1}-{ROLE2}_{FeatAbbrev} for noun-phrase agreement role pairs
+(e.g. "npa/HEAD-DET_N" = Head-Determiner Number). Both
+scripts/overview/build_stats.py (the stats-overview aggregator) and
+word_order.viz_overview.py (the local decision-tree index page)
 independently classified conditions by this same convention before this
 module existed; it's the single source of truth for it now, so the two
 pages can't drift apart on what a condition id means.
@@ -13,6 +15,8 @@ GROUP_PREFIXES = {
     "sv": "Subject–Verb",
     "sp": "Subject–Participle",
     "sa": "Subject–Auxiliary",
+    "ov": "Object–Verb",
+    "iov": "Indirect Object–Verb",
 }
 FEATURE_SUFFIXES = {
     "Na": "Number",

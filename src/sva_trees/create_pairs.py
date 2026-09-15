@@ -12,8 +12,10 @@ from tqdm import tqdm
 sys.path.append("../")
 from multiblimp.swap_features import *
 from word_order.prediction_target import PredictionTarget, nsubj_target
+from word_order.process_treebank import resolve_layered_head_key
 from word_order.utils import build_grew_link
 from word_order.decision_tree import UNK_LABELS
+from word_order.entropy import default_leaf_threshold
 from multiblimp.unimorph import load_inflector
 
 
@@ -562,7 +564,7 @@ def process_item(
 
 def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_target,
                   swap_target=["head",], context_inflector=None, max_num_of_pairs=None,
-                  leaf_threshold=0.1, save_to=None,
+                  leaf_threshold=default_leaf_threshold(10), save_to=None,
                   max_examples=5, num_lemma=None, num_form=None, full_df=None,
                   unk_counts=None, label_distribution=None, head_label=None):
     """
@@ -684,6 +686,8 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
             for kind in swap_target
         }
 
+        target_feature = feat_match_unk.group(1) if feat_match_unk else None
+
         for row_tuple in tqdm(swap_df.itertuples(index=False, name=None), total=swap_df.shape[0]):
             # get nsubj and head; extract their features; swap the features; re-inflect the words;
             # create a new sentence with the re-inflected words; add the new sentence to the dataframe
@@ -705,6 +709,45 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
                 swap_forms, feature_vals, swap_feats = inflector.inflect(
                     form, og_feats, return_swap_feats=True
                 )
+                row_ufeat = ufeat
+
+                # ufeat (inflector.inflection_map[0]) is resolved once,
+                # language-wide -- wrong for ergative-split languages (e.g.
+                # Basque, where whether the verb's agreement lives under
+                # Number[erg] or Number[abs] depends on THIS clause's own
+                # transitivity, not a language-wide constant) and for
+                # languages whose UniMorph lexicon and UD treebank disagree
+                # on which bracket convention to use for the same argument
+                # (Georgian: UM's [acc]/[nom] vs the treebank's [obj]/
+                # [subj]). Only retried as a FALLBACK, when the ordinary
+                # call above found nothing at all -- forcing the override
+                # unconditionally regressed real languages (Georgian object-
+                # Person: 721 -> 30 correct_swaps) by disabling the primary
+                # lexicon's own opportunistic matching: inflect() finds
+                # candidates by matching shared context features (Tense,
+                # Aspect, ...) against lexicon rows and reading THEIR OWN
+                # value at inflection_map[0], regardless of what this row's
+                # own og_feats says under that key -- forcing a column the
+                # primary lexicon's schema doesn't even have at all (e.g.
+                # Georgian's real-UM lexicon has no "Person[obj]" column,
+                # only "Person[acc]") makes every one of its rows fail the
+                # swap_ufeat-not-in-row.keys() check, so only retry with the
+                # narrower per-row key once the unconstrained default has
+                # already had its chance and failed outright.
+                if kind == "head" and not swap_forms and target_feature:
+                    layered_key = resolve_layered_head_key(
+                        base_item, base_item, target_feature, child_deprel
+                    )
+                    if layered_key is not None:
+                        retry_forms, retry_vals, retry_swap_feats = inflector.inflect(
+                            form, og_feats, return_swap_feats=True,
+                            swap_ufeat_override=layered_key,
+                        )
+                        if retry_forms:
+                            swap_forms, feature_vals, swap_feats = (
+                                retry_forms, retry_vals, retry_swap_feats,
+                            )
+                            row_ufeat = layered_key
 
                 if swap_forms!=None:
                     if len(swap_forms) > 0:
@@ -715,7 +758,7 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
                                 form,
                                 swap_form,
                                 og_feats,
-                                ufeat,
+                                row_ufeat,
                                 feature_vals,
                                 feature_distribution,
                                 inflector,
@@ -800,5 +843,5 @@ if __name__ == "__main__":
                     inflection_map=swap_number_subj_any,
                     resource_dir=resource_dir,)
 
-    create_pairs(dt_df, swap_feat=swap_feat, inflector=inflector, leaf_threshold=0.12,
+    create_pairs(dt_df, swap_feat=swap_feat, inflector=inflector,
                  save_to="../../output/minimal_pairs/svNa/svNa_nsubj/German")

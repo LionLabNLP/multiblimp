@@ -18,7 +18,7 @@ random.seed(42)
 if __name__=="__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--langs", "-l", nargs="*", help="Languages to process", default=[])
-    parser.add_argument("--never_skip", "-ns", action="store_true", 
+    parser.add_argument("--never_skip", "-ns", action="store_true",
                         help="Always create new df's, decesion trees, and HTML files")
     parser.add_argument("--distinguish_unk", "-d", action="store_true",
                         help="Keep +-/-- labels distinct instead of collapsing them "
@@ -42,7 +42,7 @@ if __name__=="__main__":
     parser.add_argument("--target_id", default=None,
                         help="Override the output dir name (decision_trees/<id>, "
                              "minimal_pairs/<id>, ...). Default: this script's "
-                             "filename (svNa). Useful for A/B runs that shouldn't "
+                             "filename (ovGa). Useful for A/B runs that shouldn't "
                              "overwrite each other, e.g. --keep_unk comparisons.")
     parser.add_argument("--max_tasks_per_child", type=int, default=1,
                         help="Recycle each worker process after this many "
@@ -53,17 +53,22 @@ if __name__=="__main__":
                              "startup overhead.")
     args = parser.parse_args()
 
-    target = nsubj_target
+    # Object-verb agreement (polypersonal object indexing) -- see ovNa.py's
+    # comment and word_order.prediction_target.obj_agr_target's docstring.
+    # Gender is the rarest of the three object-agreement dimensions in the
+    # UD languages that mark this at all (e.g. Basque: Gender[erg]/
+    # Gender[dat] each occur only a couple dozen times vs. thousands for
+    # Number/Person) -- expect low candidate counts even where present.
+    target = obj_agr_target
     target.head_feats = {"VerbForm": partial(filter_head_feats, exclude="Part")}
-    target.swap_feat = "Number"
-    # target.child_feats = {}
+    target.swap_feat = "Gender"
     deprel_dir = "_".join(target.child_deprels)
     resource_dir = "../../resources"
 
     pipeline = Pipeline(target=target,
-                        predictor_var=f"head_nsubj_{target.swap_feat}_agreement",
-                        langs=(args.langs if args.langs else get_ud_langs(resource_dir)), 
-                        inflection_map=swap_number_subj_any,
+                        predictor_var=f"head_obj_{target.swap_feat}_agreement",
+                        langs=(args.langs if args.langs else get_ud_langs(resource_dir)),
+                        inflection_map=swap_gender_obj_any,
                         unimorph_args = {
                             "filter_entries": {
                                 "upos": ["V"],
@@ -71,15 +76,12 @@ if __name__=="__main__":
                                 "combine_um_ud": True,
                                 "remove_multiword_forms": True,
                                 },
-                        deprel_dir="_".join(target.child_deprels), 
-                        resource_dir="../../resources", 
+                        deprel_dir="_".join(target.child_deprels),
+                        resource_dir="../../resources",
                         word_order_dir=os.path.join(TREEBANK_FEATURES_DIR, f"{deprel_dir}_fin"),
                         max_treebank_len=args.max_treebank_len,
                         never_skip=args.never_skip,
-                        rm_columns=["nsubj_child-deprel_conj",
-                                    #"head_child-deprel_cop",
-                                    #"head_child-deprel_aux"
-                                    ],
+                        rm_columns=["obj_child-deprel_conj"],
                         target_id=args.target_id or sys.argv[0][:-3],
                         simplify=not args.distinguish_unk,
                         n_jobs=args.n_jobs,

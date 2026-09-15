@@ -713,6 +713,7 @@ class UnimorphInflector:
         ud_features: Dict[str, str],
         strategies: List[Dict[str, Optional[str]]] = [],
         return_swap_feats: bool = False,
+        swap_ufeat_override: Optional[str] = None,
     ) -> Union[
         Tuple[Union[None, str, List[str]], Optional[Set[str]]],
         Tuple[Union[None, str, List[str]], Optional[Set[str]], Dict[str, Dict[str, Set[str]]]],
@@ -722,8 +723,16 @@ class UnimorphInflector:
         produced each swap_form, instead of a separate get_form_feature_bundle
         lookup by result form. Default False keeps the old 2-tuple return
         shape so existing callers (e.g. multiblimp.pipeline) don't break.
+
+        swap_ufeat_override: use this column instead of self.inflection_map[0]
+        for this call only -- see yield_row_features' docstring for why
+        (ergative-split languages need this resolved per row, not once per
+        language). Passed through to self.ud_inflector.inflect() too, so the
+        UD-derived fallback lexicon honors the same per-row choice.
         """
-        prev_inflect_key = (form, frozenset(ud_features.items()), return_swap_feats)
+        prev_inflect_key = (
+            form, frozenset(ud_features.items()), return_swap_feats, swap_ufeat_override,
+        )
         if prev_inflect_key in self.prev_inflections:
             return self.prev_inflections[prev_inflect_key]
 
@@ -733,18 +742,21 @@ class UnimorphInflector:
             swap_feats = {}
         else:
             swap_forms, feature_vals, swap_feats = self.inflect_features(
-                form, ud_features, strategies, return_swap_feats
+                form, ud_features, strategies, return_swap_feats,
+                swap_ufeat_override=swap_ufeat_override,
             )
 
             if not self.form_found(swap_forms) and self.inflect_wo_ud_features:
                 swap_forms, feature_vals, swap_feats = self.inflect_features(
-                    form, {}, strategies, return_swap_feats
+                    form, {}, strategies, return_swap_feats,
+                    swap_ufeat_override=swap_ufeat_override,
                 )
 
         if self.ud_inflector is not None and not self.form_found(swap_forms):
             ud_result = self.ud_inflector.inflect(
                 form, ud_features, strategies=strategies,
                 return_swap_feats=return_swap_feats,
+                swap_ufeat_override=swap_ufeat_override,
             )
             if return_swap_feats:
                 ud_forms, ud_feature_vals, ud_swap_feats = ud_result
@@ -781,15 +793,18 @@ class UnimorphInflector:
         ud_features: Dict[str, str],
         strategies: List[Dict[str, Optional[str]]],
         return_swap_feats: bool = False,
+        swap_ufeat_override: Optional[str] = None,
     ) -> Tuple[Optional[Set[str]], Optional[Set[str]], Dict[str, Dict[str, Set[str]]]]:
         """Inflect form based on provided `ud_features`."""
         swap_forms, feature_vals, swap_feats = self.inflect_strategy(
-            form, ud_features, return_swap_feats=return_swap_feats
+            form, ud_features, return_swap_feats=return_swap_feats,
+            swap_ufeat_override=swap_ufeat_override,
         )
         if not self.form_found(swap_forms):
             for strat in strategies:
                 swap_forms, feature_vals, swap_feats = self.inflect_strategy(
-                    form, ud_features, strategy=strat, return_swap_feats=return_swap_feats
+                    form, ud_features, strategy=strat, return_swap_feats=return_swap_feats,
+                    swap_ufeat_override=swap_ufeat_override,
                 )
                 if self.form_found(swap_forms):
                     break
@@ -806,6 +821,7 @@ class UnimorphInflector:
         ud_features: Dict[str, str],
         strategy: Dict[str, Optional[str]] = {},
         return_swap_feats: bool = False,
+        swap_ufeat_override: Optional[str] = None,
     ) -> Tuple[Optional[Set[str]], Optional[Set[str]], Dict[str, Dict[str, Set[str]]]]:
         um_features = self.ud2um_features(ud_features, strategy)
         form_rows = self.form2rows(form, um_features)
@@ -819,7 +835,7 @@ class UnimorphInflector:
         swap_feats = {}
 
         for row_features, feature_val in self.yield_row_features(
-            um_features, form_rows, strategy
+            um_features, form_rows, strategy, swap_ufeat_override=swap_ufeat_override
         ):
             inflected_forms, bundles = self.lemma2form(row_features, return_swap_feats)
 
@@ -1035,12 +1051,25 @@ class UnimorphInflector:
         um_features: Dict[str, str],
         form_rows: pd.DataFrame,
         strategy: Dict[str, Optional[str]],
+        swap_ufeat_override: Optional[str] = None,
     ):
         """
         Based on all matching rows, set and yield the (swapped) features
         we use for finding the inflected form.
+
+        swap_ufeat_override: use this column instead of self.inflection_map[0]
+        (the language-wide default resolved once in update_inflection_map).
+        Needed for languages whose argument-marking bracket depends on the
+        specific row being processed, not just the language -- e.g. Basque's
+        ergative-absolutive split, where whether the verb's SUBJECT marking
+        lives under Number[erg] or Number[abs] depends on that clause's own
+        transitivity, not a language-wide constant. See
+        word_order.process_treebank.resolve_layered_head_key, which callers
+        (sva_trees.create_pairs) use to compute this per row.
         """
         swap_ufeat, swap_map = self.inflection_map
+        if swap_ufeat_override is not None:
+            swap_ufeat = swap_ufeat_override
 
         for _, row in form_rows.iterrows():
             row_features = dict(um_features)  # make a copy

@@ -627,10 +627,18 @@ _DEPREL_BRACKET_ALIASES = {
 }
 
 
-def _resolve_layered_head_val(head_features, child_features, target_feature, deprel):
-    """head_{target_feature}[{...}] fallback for extract_instances' agreement-
-    label comparison -- tries two different bracket conventions treebanks
-    use for polypersonal/ergative verbal argument-indexing, in order:
+def resolve_layered_head_key(head_features, child_features, target_feature, deprel):
+    """The bracketed feature NAME (e.g. "Number[erg]" -- unprefixed, matching
+    sva_trees.create_pairs' kind_feat_cols/og_feats convention, NOT
+    process_treebank's own "head_"-prefixed head_features convention) that
+    _resolve_layered_head_val would read the value of, or None. Split out
+    from that function so sva_trees.create_pairs can reuse the exact same
+    resolution to decide which lexicon column to reinflect -- there the key
+    itself, not its value, is what's needed (see create_pairs' per-row
+    swap_ufeat resolution, right before its inflector.inflect() call).
+
+    Tries two different bracket conventions treebanks use for polypersonal/
+    ergative verbal argument-indexing, in order:
 
     1. Relation-named: head_{feat}[{deprel}] (or a known alias, e.g. "io"
        for iobj) -- e.g. Georgian's head_Person[obj]/head_Person[io].
@@ -646,6 +654,25 @@ def _resolve_layered_head_val(head_features, child_features, target_feature, dep
     Both are no-ops (return None) for languages/targets that don't use the
     relevant convention: a deprel name/case value with no matching
     head_{feat}[...] column just falls through.
+    """
+    for suffix in _DEPREL_BRACKET_ALIASES.get(deprel, [deprel]):
+        feat_name = f"{target_feature}[{suffix}]"
+        if head_features.get(f"head_{feat_name}") is not None:
+            return feat_name
+
+    child_case = child_features.get(f"{deprel}_Case")
+    if child_case is not None:
+        feat_name = f"{target_feature}[{str(child_case).lower()}]"
+        if head_features.get(f"head_{feat_name}") is not None:
+            return feat_name
+
+    return None
+
+
+def _resolve_layered_head_val(head_features, child_features, target_feature, deprel):
+    """head_{target_feature}[{...}] fallback for extract_instances' agreement-
+    label comparison -- see resolve_layered_head_key (this just looks up the
+    value at whatever key that resolves to).
 
     Caller contract differs by deprel (see extract_instances): for
     deprel="nsubj", this is only tried as a fallback when the plain
@@ -663,18 +690,8 @@ def _resolve_layered_head_val(head_features, child_features, target_feature, dep
     "3", including rows where head_Person[obj] itself was genuinely
     missing.
     """
-    for suffix in _DEPREL_BRACKET_ALIASES.get(deprel, [deprel]):
-        val = head_features.get(f"head_{target_feature}[{suffix}]")
-        if val is not None:
-            return val
-
-    child_case = child_features.get(f"{deprel}_Case")
-    if child_case is not None:
-        val = head_features.get(f"head_{target_feature}[{str(child_case).lower()}]")
-        if val is not None:
-            return val
-
-    return None
+    feat_name = resolve_layered_head_key(head_features, child_features, target_feature, deprel)
+    return head_features.get(f"head_{feat_name}") if feat_name is not None else None
 
 
 def extract_instances(

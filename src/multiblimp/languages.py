@@ -78,12 +78,6 @@ udlang2iso639 = {
     "Ancient Greek": "Ancient Greek (to 1453)",
     "Apurina": "Apurinã",
     "Arabic": "Standard Arabic",
-    # UD's "Assyrian" treebank (UD_Assyrian-AS) is actually Assyrian
-    # Neo-Aramaic (Syriac script) -- a distinct modern language from
-    # ancient Akkadian (UD_Akkadian-RIAO/PISANDUB, Latin-transliterated
-    # cuneiform). Mapping this to "Akkadian" collided both onto iso639
-    # code "akk", so whichever processed later (alphabetically: Assyrian)
-    # silently overwrote Akkadian's UD-derived UniMorph table with its own.
     "Assyrian": "Assyrian Neo-Aramaic",
     "Bororo": "Borôro",
     "Buryat": "Buriat",
@@ -144,36 +138,33 @@ add_langs = {"Aromanian": "UD_Romanian-ArT"}
 # TODO: rewrite this as exclusion list rather than inclusion
 # Maps a language to all the treebanks that should be used for that language.
 # If a language is not in this dictionary we take all available treebanks.
+# Note: a language listed here overrides flag_treebanks -- a treebank pinned
+# here is used even if it's flagged. Flag exclusion only applies to
+# languages with no entry here.
 udlang2treebanks = {
-    "Vietnamese": ["VTB"],
-    "Hebrew": ["HTB"],
-    "Latvian": ["LVTB"],
-    "German": ["GSD", "PUD", "HDT"],
-    "Czech": ["CAC", "CLTT", "FicTree", "PDT", "PUD"],
-    "Russian": ["GSD", "PUD", "SynTagRus", "Taiga"],
-    "Slovenian": ["SSJ"],
-    "Faroese": ["OFT"],
-    "Icelandic": ["GC", "Modern", "PUD"],
-    "English": ["EWT", "LinES", "ParTUT", "PUD"],
-    "Sanskrit": ["Vedic"],
-    "French": ["FQB", "GSD", "ParTUT", "PUD", "Sequoia"],
-    "Swedish": ["LinES", "PUD", "SweLL", "Talbanken"],
-    "Galician": ["PUD", "TreeGal"],
-    "Italian": [
-        "ISDT",
-        "MarkIT",
-        "ParlaMint",
-        "ParTUT",
-        "PoSTWITA",
-        "PUD",
-        "TWITTIRO",
-        "VIT",
-    ],
-    "Romanian": ["RRT", "SiMoNERo", "TueCL"],
-    "Spanish": ["AnCora", "GSD", "PUD"],
-    "Japanese": ["GSD", "PUD", "BCCWJ"],
-    "Classical_Chinese": ["Kyoto"],
     "Arabic": ["PADT", "PUD"],
+    "Classical_Chinese": ["Kyoto"],
+    "Czech": ["CAC", "CLTT", "FicTree", "PDT", "PUD"],
+    "English": ["EWT", "LinES", "ParTUT", "PUD"],
+    "Faroese": ["OFT"],
+    "French": ["FQB", "GSD", "ParTUT", "PUD", "Sequoia"],
+    "Galician": ["PUD", "TreeGal"],
+    "German": ["GSD", "PUD", "HDT"],
+    "Gheg": ["GPS"],
+    "Guarani": ["OldTuDeT"],
+    "Hebrew": ["HTB"],
+    "Icelandic": ["GC", "Modern", "PUD"],
+    "Italian": [ "ISDT", "MarkIT", "ParlaMint", "ParTUT", "PUD",
+              "VIT"],
+    "Japanese": ["GSD", "PUD", "BCCWJ"],
+    "Latvian": ["LVTB"],
+    "Romanian": ["RRT", "SiMoNERo"],
+    "Russian": ["GSD", "PUD", "SynTagRus", "Taiga"],
+    "Sanskrit": ["Vedic"],
+    "Slovenian": ["SSJ"],
+    "Spanish": ["AnCora", "GSD", "PUD"],
+    "Swedish": ["LinES", "PUD", "Talbanken"],
+    "Vietnamese": ["VTB"],
 }
 
 lang2unimorph_lang = {
@@ -343,10 +334,20 @@ def get_ud_langs(resource_dir, ud_dir=None, do_skip_langs=True):
     if ud_dir is None:
         ud_dir = UD_PATH
 
+    # Local import: multiblimp.treebank imports from this module at load
+    # time, so importing it back at module level here would be circular.
+    from .treebank import get_excluded_treebanks
+    excluded_treebanks = get_excluded_treebanks(resource_dir, ud_dir)
+
     def ud_dir2lang(x):
         return("_".join(x.split("/")[-1].replace("UD_", "").split("-")[:-1]))
 
-    treebank_dirs = glob(os.path.join(resource_dir, ud_dir, "*"))
+    # A language with an explicit udlang2treebanks pin is exempt from
+    # flag-based exclusion (see get_lang_treebanks docstring).
+    treebank_dirs = [
+        d for d in glob(os.path.join(resource_dir, ud_dir, "*"))
+        if os.path.basename(d) not in excluded_treebanks or ud_dir2lang(d) in udlang2treebanks
+    ]
     treebank_langs = map(ud_dir2lang, treebank_dirs)
     treebank_langs = sorted(set(treebank_langs).union(set(add_langs.keys())))
 
@@ -365,9 +366,20 @@ def get_lang_treebanks(resource_dir, ud_dir=None):
     below are the same two overrides get_ud_langs and the actual pipeline
     already apply, so this reflects real treebank selection rather than
     "everything that happens to exist in the UD release for that language".
+    Treebanks flagged by multiblimp.treebank.flag_treebanks (historical
+    variants filed under a modern language, poetry-only, learner-essay,
+    Twitter, and code-switching treebanks) are excluded, same as Treebank()
+    itself -- a language left with no treebanks at all after that is
+    dropped entirely. A language with an explicit udlang2treebanks pin is
+    exempt from this exclusion: the pin is a deliberate, reviewed choice
+    and overrides flag-based exclusion rather than having it silently drop
+    a pinned treebank.
     """
     if ud_dir is None:
         ud_dir = UD_PATH
+
+    from .treebank import get_excluded_treebanks
+    excluded_treebanks = get_excluded_treebanks(resource_dir, ud_dir)
 
     def ud_dir2lang(x):
         return "_".join(os.path.basename(x).replace("UD_", "").split("-")[:-1])
@@ -378,6 +390,17 @@ def get_lang_treebanks(resource_dir, ud_dir=None):
         if not folder.startswith("UD_"):
             continue
         by_lang.setdefault(ud_dir2lang(path), []).append(folder)
+
+    # Drop flagged treebanks, and any language left with none at all -- but
+    # only for that reason, so a language that's merely absent from the
+    # current udlang2treebanks selection below still ends up with an empty
+    # list rather than disappearing, same as before this exclusion existed.
+    # Languages with an explicit pin are exempt (see docstring).
+    by_lang = {
+        lang: (tbs if lang in udlang2treebanks else [tb for tb in tbs if tb not in excluded_treebanks])
+        for lang, tbs in by_lang.items()
+    }
+    by_lang = {lang: tbs for lang, tbs in by_lang.items() if tbs}
 
     for lang, codes in udlang2treebanks.items():
         if lang in by_lang:

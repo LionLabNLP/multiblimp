@@ -1,13 +1,15 @@
 """Aggregate samples/minimal-pair counts across every condition into a
 single JSON blob, consumed by overview.html.
 
-Source: the deployed MultiBLiMP v2 site (jshrdt.github.io/multiblimp),
-scraped from each condition's index.html LANGUAGES.six blob (the same
+Source: this repo's own local html/decision_trees/ output, read straight
+from each condition's rendered index.html LANGUAGES.six blob (the same
 per-language diagnostics dict sva_trees.diagnostics.diagnostics_row_to_json
 produces -- nRaw/nPairs/diag.buckets map directly onto this script's
-samples/pairs/bucket fields). See EXTERNAL_FLAT_CONDITIONS/
-EXTERNAL_NPA_SUBGROUPS below for exactly which conditions it covers; this
-repo's own in-progress minimal_pairs/ runs are intentionally not pulled in.
+samples/pairs/bucket fields). Conditions/subgroups are discovered from
+whatever's actually on disk under HTML_DECISION_TREES_DIR (see
+_discover_local_conditions), not a hardcoded list, so a newly (re)built
+condition shows up automatically. See scripts/generate_html_indexes.py to
+(re)build those pages from cached model/pairs data without refitting.
 
 Run from the repo root: python scripts/overview/build_stats.py
 """
@@ -32,32 +34,29 @@ from multiblimp.condition_taxonomy import (  # noqa: E402
     FLAT_CONDITION_META, NPA_ROLE_PROSE, NPA_FEATURE_NAMES, npa_subgroup_label,
 )
 from multiblimp.languages import get_lang_treebanks  # noqa: E402
-from multiblimp.config import OUTPUT_DECISION_TREES_DIR, OUTPUT_OVERVIEW_DIR  # noqa: E402
+from multiblimp.config import (  # noqa: E402
+    OUTPUT_DECISION_TREES_DIR, OUTPUT_OVERVIEW_DIR, HTML_DECISION_TREES_DIR,
+)
 
 OUT_PATH = os.path.join(OUTPUT_OVERVIEW_DIR, "stats.json")
 
 RESOURCE_DIR = os.path.join(REPO_ROOT, "resources")
 
-# Sibling checkout of the deployed site -- github.io repos have no fixed
-# location relative to this one, so this is just where it happens to live
-# on this machine.
-EXTERNAL_SITE_ORIGIN = "https://jshrdt.github.io"
-EXTERNAL_ROOT = "/Users/jacobleesuchardt/projects/jshrdt.github.io/multiblimp"
-EXTERNAL_FLAT_CONDITIONS = ["svGa", "svNa", "svPa", "spGa", "spNa", "spPa", "saGa", "saNa", "saPa"]
-EXTERNAL_NPA_SUBGROUPS = ["DET-ADJ_G", "HEAD-DET_C", "HEAD-DET_G", "HEAD-DET_N"]
+# Where the real per-language pages/index.html this script reads live --
+# tree2html/generate_html_deprel_index's own output, same tree the site
+# deploys from.
+LOCAL_HTML_ROOT = HTML_DECISION_TREES_DIR
 
-# This repo's own local, in-progress pipeline output -- unlike everything
-# else in this script, which deliberately reads only the published site
-# (see this module's docstring). Used for exactly one thing: the raw
-# per-sample "treebank" column the published site's LANGUAGES.six never
-# carries (see local_treebank_samples() below). Coverage here is real but
-# partial -- comprehensive for npa, sparse for the flat sv/sp/sa conditions
-# (as of writing: svNa 7 languages, saGa/spPa 0) -- so anything built from
+# This repo's own local pipeline output (model/pairs caches, not the
+# rendered HTML above). Used for exactly one thing: the raw per-sample
+# "treebank" column LANGUAGES.six never carries (see
+# local_treebank_samples() below). Coverage here is real but partial and
+# shifts as local runs progress -- so anything built from
 # it must say so, not imply the same completeness as the rest of this page.
 LOCAL_ROOT = OUTPUT_DECISION_TREES_DIR
 
-# The published site itself is inconsistent about this one language's name
-# across condition dumps (ASCII "aa" digraph vs. the real "å"), which
+# The rendered pages themselves are inconsistent about this one language's
+# name across condition dumps (ASCII "aa" digraph vs. the real "å"), which
 # otherwise splits Norwegian Bokmål's counts into two separate rows
 # everywhere downstream (language table, heatmap, scatter). Checked every
 # other language name for the same aa/oe/ae-digraph collision -- this is the
@@ -75,7 +74,7 @@ BUCKET_LABELS = {
     "ambiguous_subjects": "Ambiguous subject",
 }
 
-# (group, label) per condition the published site covers -- the flat
+# (group, label) per condition this page covers -- the flat
 # sv/sp/sa x Na/Ga/Pa conditions from the shared taxonomy, plus NPA's own
 # aggregate condition (no single flat id there; see FLAT_CONDITION_META's
 # own docstring). Mirrors src/word_order/viz_overview.py's _classify_deprel,
@@ -129,7 +128,15 @@ def _record(entry: dict, cond: str, subgroup: str) -> dict:
         # below can skip it rather than silently treating "no accuracy" as
         # "zero accuracy".
         acc=entry.get("acc"),
-        url=(EXTERNAL_SITE_ORIGIN + lang_url) if lang_url else None,
+        # langUrl is embedded as e.g. "/multiblimp/npa/HEAD-DET_N/German" --
+        # extensionless and site-root-relative, matching how the deployed
+        # site serves it. Rewritten here to an actual relative path from
+        # html/index.html (this page's own location) to the real .html file
+        # on disk, so links work when browsing html/ directly.
+        url=(
+            "decision_trees/" + lang_url.removeprefix("/multiblimp/") + ".html"
+            if lang_url else None
+        ),
         # Distinct lemmas/surface forms seen for this language x condition --
         # a rough lexical-diversity/treebank-richness signal, independent of
         # how many of those forms actually became usable minimal pairs.
@@ -167,23 +174,48 @@ def _tried_languages(dir_path: str) -> set[str]:
     }
 
 
+def _discover_local_conditions() -> tuple[list[str], list[str]]:
+    """(flat_condition_ids, npa_subgroup_ids) -- every condition/subgroup
+    that currently has a real index.html under LOCAL_HTML_ROOT, discovered
+    fresh each build rather than a hardcoded list, so a newly (re)built
+    condition (see scripts/generate_html_indexes.py) shows up here without
+    editing this file."""
+    if not os.path.isdir(LOCAL_HTML_ROOT):
+        return [], []
+
+    flat = sorted(
+        entry for entry in os.listdir(LOCAL_HTML_ROOT)
+        if entry != "npa"
+        and os.path.exists(os.path.join(LOCAL_HTML_ROOT, entry, "index.html"))
+    )
+    npa_root = os.path.join(LOCAL_HTML_ROOT, "npa")
+    npa_subs = sorted(
+        entry for entry in os.listdir(npa_root)
+        if os.path.exists(os.path.join(npa_root, entry, "index.html"))
+    ) if os.path.isdir(npa_root) else []
+    return flat, npa_subs
+
+
 def collect_records() -> tuple[list[dict], dict[str, set[str]]]:
-    if not os.path.isdir(EXTERNAL_ROOT):
+    flat_conditions, npa_subgroups = _discover_local_conditions()
+    if not flat_conditions and not npa_subgroups:
         raise FileNotFoundError(
-            f"Published site not found at {EXTERNAL_ROOT} -- this script only reads from it now."
+            f"No condition index.html pages found under {LOCAL_HTML_ROOT} -- "
+            "run scripts/generate_html_indexes.py (or a pipeline's own "
+            "fit script) first."
         )
 
     records = []
     tried = {}
-    for cond in EXTERNAL_FLAT_CONDITIONS:
-        cond_dir = os.path.join(EXTERNAL_ROOT, cond)
+    for cond in flat_conditions:
+        cond_dir = os.path.join(LOCAL_HTML_ROOT, cond)
         tried[cond] = _tried_languages(cond_dir)
         six = _load_languages_six(os.path.join(cond_dir, "index.html"))
         if six:
             records += [_record(e, cond, cond) for e in six]
 
-    for sub in EXTERNAL_NPA_SUBGROUPS:
-        sub_dir = os.path.join(EXTERNAL_ROOT, "npa", sub)
+    for sub in npa_subgroups:
+        sub_dir = os.path.join(LOCAL_HTML_ROOT, "npa", sub)
         tried[sub] = _tried_languages(sub_dir)
         six = _load_languages_six(os.path.join(sub_dir, "index.html"))
         if six:
@@ -193,27 +225,32 @@ def collect_records() -> tuple[list[dict], dict[str, set[str]]]:
 
 
 def _local_parquet_paths(cond: str, is_npa_sub: bool) -> list[str]:
-    # Flat sv/sp/sa conditions nest one level deeper than npa's own
-    # convention -- decision_trees/{cond}/{cond}_nsubj/*.parquet vs.
+    # Flat conditions nest one level deeper than npa's own convention --
+    # decision_trees/{cond}/{cond}_{deprel}/*.parquet vs.
     # decision_trees/npa/{subgroup}/*.parquet -- both observed directly on
-    # disk (see LOCAL_ROOT's comment); {cond}_keepunk variants and anything
-    # outside this exact pattern are deliberately not globbed for, so an
-    # experimental/trial run never gets silently folded into a real
-    # condition's counts.
+    # disk (see LOCAL_ROOT's comment). The nested deprel varies by condition
+    # family (svNa -> nsubj, ovNa -> obj, iovNa -> iobj, ...), so it's read
+    # off disk rather than assumed; a condition dir with more than one
+    # subdirectory (shouldn't happen -- one deprel per target_id by
+    # convention) uses whichever sorts first rather than guessing further.
     if is_npa_sub:
         pattern = os.path.join(LOCAL_ROOT, "npa", cond, "*.parquet")
-    else:
-        pattern = os.path.join(LOCAL_ROOT, cond, f"{cond}_nsubj", "*.parquet")
-    return sorted(glob(pattern))
+        return sorted(glob(pattern))
+
+    cond_dir = os.path.join(LOCAL_ROOT, cond)
+    subdirs = sorted(
+        d for d in glob(os.path.join(cond_dir, "*")) if os.path.isdir(d)
+    )
+    if not subdirs:
+        return []
+    return sorted(glob(os.path.join(subdirs[0], "*.parquet")))
 
 
 def local_treebank_samples() -> list[dict]:
     """Per-sample treebank attribution from this repo's own local pipeline
-    output -- the one thing the published site's data never carries (see
-    LOCAL_ROOT's comment on why this is the sole exception to "only read the
-    published site"). Real counts, not estimates: each row in one of these
-    parquet files is one raw candidate sample, tagged with the exact UD
-    treebank it came from.
+    output (LOCAL_ROOT) -- the one thing LANGUAGES.six never carries. Real
+    counts, not estimates: each row in one of these parquet files is one raw
+    candidate sample, tagged with the exact UD treebank it came from.
 
     Deliberately reports *samples* by treebank, not *pairs* by treebank --
     there's no per-row flag distinguishing "became an accepted minimal pair"
@@ -225,8 +262,10 @@ def local_treebank_samples() -> list[dict]:
     a treebank's share of samples is a treebank's share of where the pairs
     *could* have come from.
     """
+    flat_conditions, npa_subgroups = _discover_local_conditions()
     out = []
-    for cond, (group, label) in FLAT_CONDITION_META.items():
+    for cond in flat_conditions:
+        group, label = FLAT_CONDITION_META.get(cond, ("Other", cond))
         for path in _local_parquet_paths(cond, is_npa_sub=False):
             lang = NAME_ALIASES.get(
                 os.path.splitext(os.path.basename(path))[0].replace("_", " "),
@@ -237,7 +276,7 @@ def local_treebank_samples() -> list[dict]:
                 "language": lang, "condition_id": cond, "condition_label": f"{label} ({group})",
                 "group": group, "samples_by_treebank": counts.to_dict(), "total_samples": int(counts.sum()),
             })
-    for sub in EXTERNAL_NPA_SUBGROUPS:
+    for sub in npa_subgroups:
         for path in _local_parquet_paths(sub, is_npa_sub=True):
             lang = NAME_ALIASES.get(
                 os.path.splitext(os.path.basename(path))[0].replace("_", " "),
@@ -477,13 +516,11 @@ def build():
 
     # Which UD treebank(s) each attempted language's samples could come from
     # -- an inventory (which treebanks the pipeline is *eligible* to draw
-    # from for this language), not a per-sample/per-pair count. The
-    # published-site source this whole script otherwise reads never carries
-    # a per-sample treebank field (it only shows up in a handful of
-    # illustrative example rows, not a full accounting); local_treebank_
-    # samples() below fills that gap from this repo's own local runs instead
-    # -- see LOCAL_ROOT's comment on why that's the one exception to
-    # "published site only" and how partial its coverage still is.
+    # from for this language), not a per-sample/per-pair count. LANGUAGES.six
+    # never carries a per-sample treebank field (it only shows up in a
+    # handful of illustrative example rows, not a full accounting);
+    # local_treebank_samples() below fills that gap straight from the
+    # per-language parquet caches instead.
     all_tried_langs = set().union(*tried_by_key.values()) if tried_by_key else set()
     lang_treebanks_raw = get_lang_treebanks(RESOURCE_DIR)
 
@@ -653,7 +690,7 @@ def build():
     }
 
     os.makedirs(os.path.dirname(OUT_PATH), exist_ok=True)
-    with open(OUT_PATH, "w") as f:
+    with open(OUT_PATH, "w", encoding="utf-8") as f:
         json.dump(out, f, indent=2, ensure_ascii=False)
     print(f"Wrote {OUT_PATH}")
     print(f"  {out['totals']}")

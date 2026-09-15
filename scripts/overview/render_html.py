@@ -8,18 +8,26 @@ Run from the repo root: python scripts/overview/render_html.py
 import json
 import os
 import sys
+from collections import defaultdict
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.append(os.path.join(REPO_ROOT, "src"))
+from multiblimp.condition_taxonomy import GROUP_PREFIXES  # noqa: E402
 from multiblimp.config import HTML_DIR, OUTPUT_OVERVIEW_DIR  # noqa: E402
 
 STATS_PATH = os.path.join(OUTPUT_OVERVIEW_DIR, "stats.json")
 OUT_PATH = os.path.join(HTML_DIR, "index.html")
 
-# Category tabs, in display order. Matches the sv/sp/sa/ov/npa grouping
-# CONDITION_META (build_stats.py) already assigns each condition.
-GROUP_ORDER = ["Subject–Verb", "Subject–Participle", "Subject–Auxiliary", "Noun Phrase"]
-GROUP_SLUGS = {"Subject–Verb": "sv", "Subject–Participle": "sp", "Subject–Auxiliary": "sa", "Noun Phrase": "npa"}
+# Category tabs, in display order. Derived from GROUP_PREFIXES (the same
+# shared taxonomy CONDITION_META/build_stats.py assigns each condition
+# from) rather than a second hardcoded list here -- a prefix added there
+# (e.g. "ov"/"iov") used to need a matching manual edit in this file too,
+# and didn't get one, so its conditions were computed correctly into
+# stats.json but never appeared as a tab here at all. "Noun Phrase" is
+# appended separately since it isn't a GROUP_PREFIXES entry (see that
+# dict's own docstring -- NPA has no single flat prefix).
+GROUP_ORDER = list(dict.fromkeys(GROUP_PREFIXES.values())) + ["Noun Phrase"]
+GROUP_SLUGS = {label: prefix for prefix, label in GROUP_PREFIXES.items()} | {"Noun Phrase": "npa"}
 
 
 def _category_items(data: dict, group: str) -> list[dict]:
@@ -276,10 +284,29 @@ def render(data: dict) -> str:
     )
     category_tabs_html = "".join(_category_tab_html(data, g, lang_idx, npa_lang_idx) for g in groups_present)
 
+    # Coverage shape of the local per-treebank preview (see
+    # local_treebank_samples()'s docstring) changes as local runs progress --
+    # this repo's own local decision-tree cache moved location during the
+    # html/output split, and started over near-empty there, so a hardcoded
+    # "comprehensive for X, thin elsewhere" claim goes stale the moment
+    # coverage shifts groups. Computed fresh each build instead.
+    local_group_counts = defaultdict(int)
+    for entry in data["local_treebank_pairs"]:
+        local_group_counts[entry["group"]] += 1
+    local_coverage_by_group = ", ".join(
+        f"{group}: {n}" for group, n in sorted(local_group_counts.items(), key=lambda kv: -kv[1])
+    ) or "none yet"
+
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <script>
+        try {{
+            var t = localStorage.getItem('sva-dt-theme');
+            if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+        }} catch (e) {{}}
+    </script>
     <title>sva-dt &mdash; Dataset Overview</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
@@ -466,6 +493,16 @@ def render(data: dict) -> str:
             border-radius: 6px;
         }}
         .nav-link:hover {{ border-color: var(--accent); background: var(--accent-soft); }}
+        .header-right {{ display: flex; align-items: center; gap: 0.75rem; }}
+        .theme-toggle {{
+            width: 2.1rem; height: 2.1rem;
+            border: 1px solid var(--border); border-radius: 6px;
+            background: var(--card); color: var(--text-muted);
+            font-size: 0.9rem; cursor: pointer;
+            display: inline-flex; align-items: center; justify-content: center;
+            padding: 0; transition: border-color .15s, color .15s, background .15s;
+        }}
+        .theme-toggle:hover {{ border-color: var(--accent); color: var(--accent); }}
 
         .lang-link {{
             font: inherit;
@@ -856,9 +893,12 @@ def render(data: dict) -> str:
                         inflected forms are valid contrasts, so pairs isn't a subset of samples and the ratio
                         between them can exceed 1&times;.
                     </p>
-                    <p class="meta-line">Generated {data["generated_at"]} &middot; from the published MultiBLiMP v2 site</p>
+                    <p class="meta-line">Generated {data["generated_at"]} &middot; from this repo's own local pipeline output</p>
                 </div>
-                <a class="nav-link" href="https://jshrdt.github.io/multiblimp/" target="_blank" rel="noopener">Decision tree diagnostics &rarr;</a>
+                <div class="header-right">
+                    <a class="nav-link" href="decision_trees/index.html">Decision tree diagnostics &rarr;</a>
+                    <button type="button" class="theme-toggle" id="themeToggleBtn" title="Toggle light/dark theme">☾</button>
+                </div>
             </div>
         </header>
 
@@ -970,8 +1010,8 @@ def render(data: dict) -> str:
                     Which treebank each language's raw candidate samples actually came from, for every minimal pair
                     those samples could produce &mdash; not an estimate, real per-row counts from this repo's own
                     local pipeline runs. This is genuinely partial and evolving, not a scoped-down version of the
-                    rest of this page: local processing is comprehensive for Noun Phrase but has barely started on
-                    Subject&ndash;Verb/Participle/Auxiliary (currently {len(data["local_treebank_pairs"])} language
+                    rest of this page: coverage right now, by category &mdash; {local_coverage_by_group} &mdash;
+                    shifts as local runs progress (currently {len(data["local_treebank_pairs"])} language
                     &times; condition combinations across {len(set(e["language"] for e in data["local_treebank_pairs"]))}
                     languages, out of this page's full {data["totals"]["languages"]}). It also isn't the same pipeline
                     run as the rest of this page (a separate, newer local pass) &mdash; its own sample counts can
@@ -1095,6 +1135,24 @@ def render(data: dict) -> str:
     </div>
 
     <script>
+        (function() {{
+          const btn = document.getElementById('themeToggleBtn');
+          function currentTheme() {{
+            const attr = document.documentElement.getAttribute('data-theme');
+            if (attr === 'light' || attr === 'dark') return attr;
+            return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+          }}
+          btn.textContent = currentTheme() === 'dark' ? '☀' : '☾';
+          btn.addEventListener('click', () => {{
+            const next = currentTheme() === 'dark' ? 'light' : 'dark';
+            try {{ localStorage.setItem('sva-dt-theme', next); }} catch (e) {{}}
+            // Reload, not a live attribute flip -- charts below bake resolved
+            // colors into Plotly traces at render time (getComputedStyle),
+            // not live var() references, so they wouldn't otherwise update.
+            location.reload();
+          }});
+        }})();
+
         const DATA = {data_json};
 
         const THEME = (() => {{
@@ -1248,9 +1306,9 @@ def render(data: dict) -> str:
                 ? `<p class="section-desc">Eligible treebanks: ${{treebanks.join(', ')}}</p>` : '';
 
             // Same local-run preview as the "Samples by treebank" section --
-            // covers a language here whenever that section covers it, which
-            // as of writing is comprehensive for Noun Phrase and sparse
-            // elsewhere (see that section's own caveat copy).
+            // covers a language here whenever that section covers it (see
+            // that section's own caveat copy for current coverage shape,
+            // which shifts as local runs progress).
             const localEntries = DATA.local_treebank_pairs.filter(e => e.language === lang);
             const localNote = localEntries.length ? `
                 <p class="section-desc" style="margin-top:1rem;">
@@ -2008,8 +2066,8 @@ def render(data: dict) -> str:
 
         function decisionTreeUrl(condId, isNpaSub) {{
             return isNpaSub
-                ? `https://jshrdt.github.io/multiblimp/npa/${{condId}}/index.html`
-                : `https://jshrdt.github.io/multiblimp/${{condId}}/index.html`;
+                ? `decision_trees/npa/${{condId}}/index.html`
+                : `decision_trees/${{condId}}/index.html`;
         }}
 
         // One color per unk category, reusing colors already established
@@ -2313,10 +2371,10 @@ def render(data: dict) -> str:
 
 
 def main():
-    with open(STATS_PATH) as f:
+    with open(STATS_PATH, encoding="utf-8") as f:
         data = json.load(f)
     html = render(data)
-    with open(OUT_PATH, "w") as f:
+    with open(OUT_PATH, "w", encoding="utf-8") as f:
         f.write(html)
     print(f"Wrote {OUT_PATH}")
 

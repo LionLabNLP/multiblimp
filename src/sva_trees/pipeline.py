@@ -17,9 +17,9 @@ from word_order.process_treebank import (
     create_word_order_df, read_df, clear_form_groups_cache,
 )
 from word_order.decision_tree import fit_dt
+from word_order.entropy import default_leaf_threshold
 from word_order.viz_tree import tree2html
 from word_order.viz_deprel import generate_html_deprel_index
-from word_order.viz_overview import generate_html_overview_index
 from multiblimp.languages import lang2langcode, gblang2udlang
 from multiblimp.unimorph import load_inflector
 from multiblimp.config import (
@@ -34,6 +34,20 @@ from sva_trees.create_pairs import create_pairs
 from sva_trees.diagnostics import generate_diagnostics_table, write_diagnostics_csv, diagnostics_row_to_json
 
 random.seed(42)
+
+# Prose labels for generate_html_deprel_index's "subject"/"nsubj"/agreement-
+# pair wording, keyed by the target's own child deprel -- without this, a
+# report for obj_agr_target/iobj_agr_target (e.g. ovNa, iovNa) would say
+# "Subject-Verb agreement"/"subject"/"nsubj" throughout despite actually
+# being object or indirect-object agreement. Falls back to the "nsubj"
+# entry (both html_deprel.py params' own no-op defaults) for any deprel not
+# listed here.
+_DEPREL_REPORT_LABELS = {
+    "nsubj": ("subject", "nsubj", "Subject-Verb"),
+    "obj": ("object", "obj", "Object-Verb"),
+    "iobj": ("indirect object", "iobj", "Indirect-Object-Verb"),
+}
+
 
 def get_impurity(n, min_n=300, max_n=4000, max_val=0.1, min_val=0.01):
     if n <= min_n:
@@ -78,7 +92,7 @@ class Pipeline:
     def __init__(self, target, predictor_var, langs, inflection_map, unimorph_args,
                  deprel_dir, resource_dir, word_order_dir,
                  max_treebank_len, never_skip=False, rm_columns=[], target_id=False,
-                 threshold=0.12, simplify=False, n_jobs=1,
+                 threshold=None, min_samples_leaf=10, simplify=False, n_jobs=1,
                  max_worker_mem_gb=None, mem_headroom=0.8, force=False,
                  agreement_feats=None, drop_unk=True, max_tasks_per_child=1):
         self.target = target
@@ -98,7 +112,17 @@ class Pipeline:
         self.never_skip = never_skip
         self.rm_columns = rm_columns
         self.target_id = target_id if target_id else predictor_var.split("_")[2][0]
-        self.leaf_threshold = threshold
+        self.min_samples_leaf = min_samples_leaf
+        # None (default): derive from min_samples_leaf/Jeffreys smoothing
+        # rather than an arbitrary constant -- see
+        # word_order.entropy.default_leaf_threshold's docstring for why
+        # (a fixed 0.12 silently required ~30-sample leaves to ever pass,
+        # regardless of purity, orphaning min_samples_leaf's own 10-29
+        # range). Pass an explicit value to override.
+        self.leaf_threshold = (
+            threshold if threshold is not None
+            else default_leaf_threshold(self.min_samples_leaf)
+        )
         self.simplify = simplify  # collapse +-/-- to "unk" for decision tree
         # If False, unk-labeled rows stay in the DT fit instead of being
         # dropped (word_order.decision_tree.fit_dt's UNK_LABELS drop).
@@ -201,6 +225,9 @@ class Pipeline:
                 for _, row in diagnostics_df.iterrows()
             }
 
+            subject_label, nsubj_label, agreement_label = _DEPREL_REPORT_LABELS.get(
+                deprel, ("subject", deprel, "Subject-Verb")
+            )
             print("Generating deprel index for", deprel)
             generate_html_deprel_index(data_dir=decision_trees_dir,
                             html_directory=os.path.join(HTML_DECISION_TREES_DIR, self.target_id),
@@ -211,9 +238,16 @@ class Pipeline:
                             pairs_dir=pairs_dir,
                             diagnostics_by_lang=diagnostics_by_lang,
                             head_role_label="Verb",
+                            agreement_label=agreement_label,
+                            subject_label=subject_label,
+                            nsubj_label=nsubj_label,
                             )
-        print("Generating overview index")
-        generate_html_overview_index(html_directory=HTML_DECISION_TREES_DIR)
+        # Cross-pipeline overview index (word_order.viz_overview.
+        # generate_html_overview_index) is no longer rebuilt here -- it
+        # rescans every condition's index.html recursively, so doing it once
+        # per condition run is wasted work across a multi-condition sweep.
+        # scripts/generate_html_indexes.py now does this exactly once, after
+        # all conditions are (re)built.
 
     def _process_language(self, lang):
         # Each language gets its own um_data POS-slices (sva_trees.pipeline.
@@ -317,10 +351,11 @@ class Pipeline:
                         verbose=1,
                         predictor_var=self.predictor_var,
                         min_impurity_decrease=min_impurity_decrease,
-                        min_samples_leaf=10,
+                        min_samples_leaf=self.min_samples_leaf,
                         save_to=f"{decision_trees_dir}/{lang}",
-                        omit_feats=set([col for col in full_df if col.endswith(f"_{self.target.swap_feat}") and not col.startswith("swap_")]),
-                        drop_unk=self.drop_unk,
+                        omit_feats=set([col for col in full_df if col.endswith(f"_{self.target.swap_feat}") 
+                                        and not col.startswith("swap_")
+                                        and col!=f"nsubj_{self.target.swap_feat}"]),                        drop_unk=self.drop_unk,
                         )
                     if model:
                         learn_dt=True

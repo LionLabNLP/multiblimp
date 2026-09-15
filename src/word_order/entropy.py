@@ -40,6 +40,36 @@ def order_entropy(
     return safe_term(p_ab) + safe_term(p_ba)
 
 
+def default_leaf_threshold(min_samples_leaf: int, smoothing_a: float = 0.5) -> float:
+    """The entropy a leaf of exactly `min_samples_leaf` samples has when
+    perfectly unanimous, under order_entropy's own smoothing -- i.e. the
+    natural floor for "the tree said this is definitely one answer".
+
+    A fixed constant threshold (this pipeline used a bare 0.12 for a while)
+    implicitly demands a much larger leaf than min_samples_leaf actually
+    allows before ANY leaf, however pure, can pass it: at
+    min_samples_leaf=10, smoothing_a=0.5, a literal 0.12 requires ~30
+    samples even at 100% purity (order_entropy(30, 0) ~= 0.119), silently
+    orphaning every leaf in the 10-29 range min_samples_leaf says should be
+    allowed to exist at all -- e.g. this was Basque svNa's entire blocker:
+    97% tree accuracy, but its best leaf (666/677 rows, 97.7% pure) sat at
+    entropy 0.159, just above 0.12, so num_ud_candidates_keep was 0.
+
+    Deriving the threshold from the same smoothing formula instead keeps
+    the "smallest allowed leaf, if unanimous, passes" invariant
+    automatically for whatever min_samples_leaf/smoothing_a are actually in
+    use, and doesn't loosen the bar for large, well-populated leaves at
+    all: Jeffreys smoothing's influence decays as 1/n, so a large leaf's
+    entropy is barely changed by it either way -- this raises the large-
+    leaf raw-disagreement tolerance from ~1.6% at the old constant 0.12 to
+    ~4.6% here (min_samples_leaf=10, smoothing_a=0.5), still a demanding
+    bar, and a leaf with genuine higher disagreement (a real split the tree
+    just can't resolve further, regardless of how much data backs it) is
+    correctly still rejected.
+    """
+    return order_entropy(min_samples_leaf, 0, smoothing_a)
+
+
 def calculate_base_entropy(
     df: pd.DataFrame, target_col: str, binary: bool = False, smoothing: float = 0.5
 ) -> float:
