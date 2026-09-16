@@ -244,6 +244,17 @@ class SubjAuxPipeline:
                 )
 
         langs = sorted(self.langs)
+
+        # Filtered here, in the main process, before ProcessPoolExecutor
+        # spawns a worker per language -- see Pipeline.__call__'s comment for
+        # why this can't live inside _process_language_impl.
+        langs_to_run = []
+        for lang in langs:
+            if self._is_done(lang):
+                print(f"{lang}: Skip, minimal pairs already found")
+            else:
+                langs_to_run.append(lang)
+
         worker_mem_bytes = self._worker_mem_bytes()
         if worker_mem_bytes is not None:
             print(f"Capping each of {self.n_jobs} worker(s) to "
@@ -260,7 +271,7 @@ class SubjAuxPipeline:
                                   max_tasks_per_child=self.max_tasks_per_child,
                                   initializer=initializer, initargs=initargs) as executor:
             future_to_lang = {
-                executor.submit(self._process_language, lang): lang for lang in langs
+                executor.submit(self._process_language, lang): lang for lang in langs_to_run
             }
             for future in as_completed(future_to_lang):
                 lang = future_to_lang[future]
@@ -289,13 +300,12 @@ class SubjAuxPipeline:
     def _pairs_dir(self, lang):
         return f"{self.minimal_pairs_dir}/{self.target_id}/{self.target_id}_{self.deprel}/{lang}"
 
-    def _process_language_impl(self, lang: str):
-        # Skip the whole language if its minimal pairs already exist --
+    def _is_done(self, lang):
+        # True if the minimal pairs for this language already exist --
         # matches Pipeline's top-of-language skip check.
-        if not self.never_skip and os.path.isdir(self._pairs_dir(lang)):
-            print(f"  skip, minimal pairs already found")
-            return
+        return not self.never_skip and os.path.isdir(self._pairs_dir(lang))
 
+    def _process_language_impl(self, lang: str):
         # Built once, up front, and reused both for extraction-time UM/UD
         # feature enrichment (fetch_all=True below) and for create_pairs'
         # reinflection later -- matches Pipeline's _process_language_impl,

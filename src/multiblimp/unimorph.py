@@ -63,6 +63,24 @@ DEFAULTS = {
 # raw UM upos codes (not UD tags) for the two verbal POS
 VERB_UPOS_VALUES = {"V", "AUX"}
 
+# Every raw UM upos code this pipeline recognizes as "this token IS the
+# part of speech", checked before feature_for()'s generic value->feature
+# lookup in ufeats2dict. Necessary because several of these codes are
+# ALSO legitimate values of other features in the vendored UM2UD_mapper's
+# own tables (e.g. "DET"/"ART"/"PRO" appear there as PronType values,
+# "PROPN" as a NounType value, "NUM" as a NumType value) -- feature_for()
+# has no notion of tag position, so without this an upos token silently
+# gets classified as one of those other features instead of "upos",
+# leaving the upos column empty for every entry tagged with it. Restored
+# from the pre-refactor val2feat table (deleted unimorph_features.py's own
+# "upos" bucket), which correctly special-cased these before this
+# function was rewritten to route through feature_for().
+UPOS_VALUES = {
+    "N", "PROPN", "ADJ", "PRO", "CLF", "ART", "DET", "V", "ADV", "AUX",
+    "ADP", "COMP", "CONJ", "NUM", "PART", "INTJ", "AJD", "PRE", "ADJ.CVB",
+    "PRON",
+}
+
 # UM2UD[tag] is the tag's full {UD_feature: UD_value} dict, e.g.
 # UM2UD["V.PTCP"] == {"upos": "VERB", "VerbForm": "Part"}.
 UM2UD = UM2UD_values
@@ -682,7 +700,10 @@ class UnimorphInflector:
             if len(val) == 0:
                 continue
             val = FIX_TYPOS.get(val, val)
-            if LAYERED_FEAT_SEP in val:
+            if val in UPOS_VALUES:
+                ufeat_dict["upos"] = val
+                continue
+            elif LAYERED_FEAT_SEP in val:
                 code, _, suffix = val.partition(LAYERED_FEAT_SEP)
                 base_feat = self.val2feat.get(code) or self.val2feat.get(code.upper())
                 if base_feat is None:

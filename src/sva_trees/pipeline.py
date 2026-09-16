@@ -171,6 +171,22 @@ class Pipeline:
                 )
 
         langs = sorted(self.langs)
+
+        # Filtered here, in the main process, rather than inside
+        # _process_language_impl: that check is just a couple of os.path
+        # calls, but running it there means it only fires after
+        # ProcessPoolExecutor has already spawned a fresh worker for the
+        # language (max_tasks_per_child recycles a worker per task -- see
+        # below), which on macOS/spawn re-imports pandas/sklearn/etc. from
+        # scratch. That import cost dwarfs the check itself, so an
+        # already-done language should never pay it.
+        langs_to_run = []
+        for lang in langs:
+            if self._is_done(lang):
+                print(f"{lang}: Skip, minimal pairs already found")
+            else:
+                langs_to_run.append(lang)
+
         worker_mem_bytes = self._worker_mem_bytes()
         if worker_mem_bytes is None:
             print("Could not detect system RAM; running without a memory cap")
@@ -196,7 +212,7 @@ class Pipeline:
                                   max_tasks_per_child=self.max_tasks_per_child,
                                   initializer=initializer, initargs=initargs) as executor:
             future_to_lang = {
-                executor.submit(self._process_language, lang): lang for lang in langs
+                executor.submit(self._process_language, lang): lang for lang in langs_to_run
             }
             for future in as_completed(future_to_lang):
                 lang = future_to_lang[future]
@@ -249,6 +265,21 @@ class Pipeline:
         # scripts/generate_html_indexes.py now does this exactly once, after
         # all conditions are (re)built.
 
+    def _is_done(self, lang):
+        # True if the minimal pairs for all deprels already exist. Also
+        # requires the tree HTML to exist -- pairs and HTML come from two
+        # separate steps below (create_pairs vs. tree2html) that can fall out
+        # of sync (e.g. a language whose HTML got written as a "too few
+        # samples" placeholder despite a valid cached model existing, from a
+        # since-fixed bug); without this, such a language would stay stuck on
+        # its placeholder forever, since this check alone would keep skipping
+        # it on every future run.
+        return not self.never_skip and all(
+            os.path.isdir(os.path.join(OUTPUT_MINIMAL_PAIRS_DIR, self.target_id, f"{self.target_id}_{deprel}", lang))
+            and os.path.exists(os.path.join(HTML_DECISION_TREES_DIR, self.target_id, f"{lang}.html"))
+            for deprel in self.target.child_deprels
+            )
+
     def _process_language(self, lang):
         # Each language gets its own um_data POS-slices (sva_trees.pipeline.
         # get_um_lookup_table), can be dropped as soon as lang is done.
@@ -259,22 +290,6 @@ class Pipeline:
             gc.collect()
 
     def _process_language_impl(self, lang):
-        # If the minimal pairs for all deprels already exist, skip this language.
-        # Also requires the tree HTML to exist -- pairs and HTML come from two
-        # separate steps below (create_pairs vs. tree2html) that can fall out
-        # of sync (e.g. a language whose HTML got written as a "too few
-        # samples" placeholder despite a valid cached model existing, from a
-        # since-fixed bug); without this, such a language would stay stuck on
-        # its placeholder forever, since this check alone would keep skipping
-        # it on every future run.
-        if not self.never_skip and all(
-            os.path.isdir(os.path.join(OUTPUT_MINIMAL_PAIRS_DIR, self.target_id, f"{self.target_id}_{deprel}", lang))
-            and os.path.exists(os.path.join(HTML_DECISION_TREES_DIR, self.target_id, f"{lang}.html"))
-            for deprel in self.target.child_deprels
-            ):
-            print(f"{lang}: Skip, minimal pairs already found")
-            return
-
         print(lang)
 
         cached_lang = gblang2udlang.get(lang, lang).replace(" ", "_")
