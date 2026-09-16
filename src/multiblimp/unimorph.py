@@ -13,8 +13,8 @@ from functools import lru_cache
 sys.path.append("../../")
 from resources.um2ud_annotation.UM2UD_mapper import (
     UM2UD_values, shortened_vals as SHORTENED_UM_VALS, map_um_value_to_ud,
-    fix_typos as FIX_TYPOS, blacklist as PKG_BLACKLIST, unk_values as PKG_UNK_VALUES,
-    LGSPEC_PATTERN, val2feat as PKG_VAL2FEAT, feat2val as PKG_FEAT2VAL,
+    fix_typos as FIX_TYPOS, val2feat as PKG_VAL2FEAT, feat2val as PKG_FEAT2VAL,
+    feature_for,
 )
 from resources.um2ud_annotation.UD2UM_mapper import UD2UM_values
 
@@ -698,41 +698,30 @@ class UnimorphInflector:
                     key = f"{base_feat}[{suffix}]" if suffix else base_feat
                     ufeat_dict[key] = f"{ufeat_dict[key]}+{um_code}" if key in ufeat_dict else um_code
                 continue
-            elif LGSPEC_PATTERN.match(val.upper()):
-                # UniMorph's numbered language-specific placeholders -- same
-                # "we dont handle LGSPEC" stance map_um_value_to_ud already
-                # takes (see LGSPEC_PATTERN's docstring), applied here too so
-                # a plain-tag LGSPEC value gets the same real-but-unmapped
-                # "Language_Specific" bucket instead of falling to "UNK".
-                ufeat = "Language_Specific"
-            elif val in PKG_BLACKLIST:
-                # Real UM values resources.um2ud_annotation already knows
-                # are real but has deliberately chosen not to map to UD --
-                # blacklist/unk_values key each to its UM tagset category
-                # (not a UD feature, since there isn't one), so e.g.
-                # Basque's HYP mood stays distinguishable from actually-
-                # unrecognized input instead of collapsing into a shared
-                # "UNK" column. See that file's own per-value comments for
-                # occurrence languages/counts and rationale.
-                ufeat = PKG_BLACKLIST[val]
-            elif val in PKG_UNK_VALUES:
-                ufeat = PKG_UNK_VALUES[val]
-            elif val in self.val2feat:
-                ufeat = self.val2feat[val]
-            elif val.strip() in self.val2feat:
-                ufeat = self.val2feat[val.strip()]  # Livvi
+            elif (resolved := feature_for(val)) is not None:
+                # feature_for (resources.um2ud_annotation) is the single
+                # authoritative "what feature bucket does this UM value
+                # belong to" lookup -- covers a real UD mapping (val2feat),
+                # or a value the package knows is real but has deliberately
+                # chosen not to map (LGSPEC*, blacklist, unk_values), so
+                # e.g. Basque's HYP mood stays distinguishable from
+                # genuinely-unrecognized input instead of collapsing into
+                # "UNK". No local duplicate of that decision here.
+                ufeat = resolved
+            elif (resolved := feature_for(val.strip())) is not None:
+                ufeat = resolved  # Livvi
             elif "." in val:
                 val1, val2 = val.split(".")
-                ufeat1 = self.val2feat[val1]
-                ufeat2 = self.val2feat[val2]
+                ufeat1 = feature_for(val1) or "UNK"
+                ufeat2 = feature_for(val2) or "UNK"
                 ufeat_dict[ufeat1] = val1
                 ufeat_dict[ufeat2] = val2
                 continue
             elif "+" in val:
                 subval = val.split("+")[0]
-                ufeat = self.val2feat[subval]
-            elif val.upper() in self.val2feat:
-                ufeat = self.val2feat[val.upper()]
+                ufeat = feature_for(subval) or "UNK"
+            elif (resolved := feature_for(val.upper())) is not None:
+                ufeat = resolved
             else:
                 ufeat = "UNK"
 
@@ -928,6 +917,10 @@ class UnimorphInflector:
         """Maps a value from a UD/UM feature map to the compatible
         feature format of the inflector (which can be either UM/UD)
         """
+        # val can be a list here (see the isinstance(val, list) branch
+        # below) -- FIX_TYPOS.get would try to hash it and crash.
+        if isinstance(val, str):
+            val = FIX_TYPOS.get(val, val)
         if ("," in val) or ("|" in val) or ("/" in val):
             val = val.replace(",", "+").replace("|", "+").replace("/", "+")
             subvals = val.split("+")
@@ -942,7 +935,11 @@ class UnimorphInflector:
             return val
         elif isinstance(val, list):
             return [self.val2ud_um(feat, subval) for subval in val]
-        elif val in self.val2feat:
+        elif feature_for(val) is not None:
+            # Covers both a real val2feat entry and a value the package
+            # knows is real but deliberately unmapped (blacklist/
+            # unk_values/LGSPEC*) -- see ufeats2dict's own use of
+            # feature_for for why both matter here.
             return val
         elif (feat, val) in UD2UM:
             # Must come before val.upper() below: e.g. "PART" is also a valid
@@ -951,7 +948,7 @@ class UnimorphInflector:
         elif val in UM2UD and feat in UM2UD[val]:
             # val is already a UM tag carrying a value for this feature.
             return self.val2ud_um(feat, UM2UD[val][feat])
-        elif val.upper() in self.val2feat:
+        elif feature_for(val.upper()) is not None:
             return val.upper()
         elif val.startswith("-"):
             return "-" + self.val2ud_um(feat, val[1:])
