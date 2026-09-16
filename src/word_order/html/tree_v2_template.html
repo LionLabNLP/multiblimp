@@ -48,6 +48,11 @@
     --shadow-sm: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
     --shadow-md: 0 4px 12px rgba(0,0,0,0.08), 0 2px 4px rgba(0,0,0,0.04);
     --shadow-lg: 0 8px 24px rgba(0,0,0,0.10), 0 4px 8px rgba(0,0,0,0.04);
+    /* The info-panel-body scroll hint's shadow tint: a flat black reads as
+       a soft shadow on the dark theme's already-dark surface, but the same
+       opacity over a plain white light-mode surface reads as a dirty smudge
+       rather than a shadow -- lighter here so it stays a hint, not a stain. */
+    --scroll-shadow: rgba(0, 0, 0, 0.12);
   }
 
   @media (prefers-color-scheme: dark) {
@@ -68,6 +73,7 @@
       --ok: #4ade80; --danger: #f0605a;
       --keep: #b18cf5; --keep-light: #2a2140;
       --role-a: #f0a743; --role-b: #8b93f8;
+      --scroll-shadow: rgba(0, 0, 0, 0.25);
     }
   }
   :root[data-theme="dark"] {
@@ -87,6 +93,7 @@
     --ok: #4ade80; --danger: #f0605a;
     --keep: #b18cf5; --keep-light: #2a2140;
     --role-a: #f0a743; --role-b: #8b93f8;
+    --scroll-shadow: rgba(0, 0, 0, 0.25);
   }
 
   body {
@@ -193,12 +200,23 @@
 
   /* ── Tree panel ── */
   .tree-wrap { position: relative; flex: 0 0 auto; }
+  /* :fullscreen alone would work in most browsers, but this class (toggled
+     in JS off the fullscreenchange event) is the reliable cross-browser
+     hook -- the UA's own fullscreen sizing can otherwise fight this card's
+     flex:0 0 auto / border-radius. */
+  .tree-wrap.is-fullscreen {
+    flex: none;
+    width: 100vw;
+    height: 100vh;
+    border-radius: 0;
+    background: var(--bg);
+  }
   /* Own scroll viewport for the tree canvas alone (not the whole card): a
      last-resort safety net for any leftover rounding past .tree-scale-outer's
      own fit (see its comment below) -- rather than the card's overflow:hidden
      silently clipping a stray pixel, this lets just the canvas scroll
      horizontally while the header and tree switcher above it stay put. */
-  .tree-scroll { overflow-x: auto; }
+  .tree-scroll { position: relative; overflow-x: auto; }
   /* Sized by JS (sizeTreeBox()) to the tree's fitted *window* -- CANVAS_W x
      CANVAS_H scaled by whatever factor fills the card's width up to
      TREE_BOX_MAX_H -- and centered via auto margins once narrower than the
@@ -271,10 +289,14 @@
      are percentages of this same box), so they're transformed as a single
      unit here rather than the SVG's own viewBox -- that would desync them,
      since the HTML overlay doesn't know about the SVG's viewBox at all. The
-     floating info-panel and zoom controls sit outside .tree-svg-box, as
-     children of .tree-scale-outer instead, so they stay fixed in place
-     while the tree pans/zooms under them (and don't shrink when the whole
-     diagram is scaled to fit -- see .tree-svg-box's own comment). */
+     zoom controls sit outside .tree-svg-box, as a child of .tree-scale-outer
+     instead, so they stay fixed in place while the tree pans/zooms under
+     them (and don't shrink when the whole diagram is scaled to fit -- see
+     .tree-svg-box's own comment). The info-panel sits a level further out
+     still, in .tree-scroll -- unlike the controls it needs the *card's*
+     full width to float in, not just the diagram's own (often narrower)
+     box, so it can land in the empty space beside the tree instead of
+     overlapping it. */
   .tree-viewport { width: 100%; transform-origin: 0 0; }
   .tree-viewport svg { display: block; width: 100%; height: auto; }
 
@@ -484,12 +506,11 @@
     width: 250px;
     max-width: calc(100% - 32px);
     /* Expanded, this panel's content (meta rows + class legend + toggle +
-       branch legend + notes) can end up taller than the tree canvas behind
-       it, especially on a shorter/narrower tree like Hindi's -- and
-       .tree-svg-box has its own overflow:hidden for the pan/zoom feature,
-       which would silently clip the panel's bottom instead of scrolling it.
-       Capping height here and scrolling the body below (not this element)
-       keeps the header pinned in view while the rest scrolls. */
+       branch legend + notes) can end up taller than .tree-scroll itself,
+       especially on a shorter/narrower tree like Hindi's. Capping height
+       here and scrolling the body below (not this element) keeps the
+       header pinned in view while the rest scrolls, rather than the panel
+       just running off the bottom of the card uncapped. */
     max-height: calc(100% - 32px);
     display: flex;
     flex-direction: column;
@@ -521,8 +542,8 @@
     background-image:
       linear-gradient(var(--surface), rgba(0, 0, 0, 0)),
       linear-gradient(rgba(0, 0, 0, 0), var(--surface)),
-      radial-gradient(farthest-side at 50% 0%, rgba(0, 0, 0, .25), rgba(0, 0, 0, 0)),
-      radial-gradient(farthest-side at 50% 100%, rgba(0, 0, 0, .25), rgba(0, 0, 0, 0));
+      radial-gradient(farthest-side at 50% 0%, var(--scroll-shadow), rgba(0, 0, 0, 0)),
+      radial-gradient(farthest-side at 50% 100%, var(--scroll-shadow), rgba(0, 0, 0, 0));
     background-repeat: no-repeat;
     background-position: top, bottom, top, bottom;
     background-size: 100% 24px, 100% 24px, 100% 10px, 100% 10px;
@@ -976,28 +997,29 @@
         <button type="button" class="zoom-btn" id="zoomInBtn" title="Zoom in">+</button>
         <button type="button" class="zoom-btn" id="zoomOutBtn" title="Zoom out">−</button>
         <button type="button" class="zoom-btn reset" id="zoomResetBtn" title="Fit tree to frame">⤢</button>
+        <button type="button" class="zoom-btn" id="fullscreenBtn" title="Fullscreen">⛶</button>
       </div>
+    </div>
 
-      <div class="info-panel minimized" id="infoPanel">
-        <div class="info-panel-header">
-          <button type="button" class="minimize-button" id="minimizeBtn" title="Expand panel">+</button>
-          <div class="language-name" id="infoPanelTitle"></div>
-          <div class="accuracy-badge"><span class="accuracy-dot"></span><span id="infoPanelAccuracy"></span> accuracy</div>
+    <div class="info-panel minimized" id="infoPanel">
+      <div class="info-panel-header">
+        <button type="button" class="minimize-button" id="minimizeBtn" title="Expand panel">+</button>
+        <div class="language-name" id="infoPanelTitle"></div>
+        <div class="accuracy-badge"><span class="accuracy-dot"></span><span id="infoPanelAccuracy"></span> accuracy</div>
+      </div>
+      <div class="info-panel-body">
+        <div class="info-panel-meta" id="infoPanelMeta"></div>
+        <div class="info-panel-legend">
+          <div class="legend-title">Classes · dataset distribution</div>
+          <div id="classDistLegend"></div>
         </div>
-        <div class="info-panel-body">
-          <div class="info-panel-meta" id="infoPanelMeta"></div>
-          <div class="info-panel-legend">
-            <div class="legend-title">Classes · dataset distribution</div>
-            <div id="classDistLegend"></div>
-          </div>
-          <div class="toggle-row" id="distToggleRow">
-            <span class="toggle-label">Show node distributions</span>
-            <span class="toggle-switch" id="distToggleSwitch"></span>
-          </div>
-          <div class="branch-legend">
-            <span class="branch-pill"><span class="branch-line dashed"></span>False</span>
-            <span class="branch-pill"><span class="branch-line" style="background:var(--ok)"></span>True</span>
-          </div>
+        <div class="toggle-row" id="distToggleRow">
+          <span class="toggle-label">Show node distributions</span>
+          <span class="toggle-switch" id="distToggleSwitch"></span>
+        </div>
+        <div class="branch-legend">
+          <span class="branch-pill"><span class="branch-line dashed"></span>False</span>
+          <span class="branch-pill"><span class="branch-line" style="background:var(--ok)"></span>True</span>
         </div>
       </div>
     </div>
@@ -1072,11 +1094,14 @@ __V2_TREE_DATA_JS__
   const nodeNote = document.getElementById('nodeNote');
   const nodeDistDetail = document.getElementById('nodeDistDetail');
   const pairsCard = document.getElementById('pairsCard');
+  const sampleCard = document.getElementById('sampleCard');
   const pairsIntro = document.getElementById('pairsIntro');
   const pairsList = document.getElementById('pairsList');
   const pairsTitle = document.getElementById('pairsTitle');
   const treeTitle = document.getElementById('treeTitle');
   const treeSelectRow = document.getElementById('treeSelectRow');
+  const treeWrap = document.querySelector('.tree-wrap');
+  const fullscreenBtn = document.getElementById('fullscreenBtn');
   const classDistLegend = document.getElementById('classDistLegend');
   const infoPanel = document.getElementById('infoPanel');
   const infoPanelTitle = document.getElementById('infoPanelTitle');
@@ -1130,7 +1155,14 @@ __V2_TREE_DATA_JS__
   let contentScale = 1;
   function sizeTreeBox() {
     const maxW = treeScroll.clientWidth;
-    const maxH = Math.min(window.innerHeight * 0.46, 460);
+    // Fullscreen drops the 460px/46%-of-viewport cap entirely -- that cap
+    // exists so the node-samples panel below stays reachable without
+    // scrolling, which no longer matters once this card is the only thing
+    // on screen; almost the full viewport height goes to the tree instead,
+    // minus the header/tree-select-row still visible above it.
+    const maxH = document.fullscreenElement === treeWrap
+      ? window.innerHeight - treeWrap.querySelector('.card-header').offsetHeight - treeSelectRow.offsetHeight - 16
+      : Math.min(window.innerHeight * 0.46, 460);
     fitScale = Math.min(maxW / CANVAS_W, maxH / CANVAS_H);
     contentScale = Math.min(1, fitScale);
     treeBox.style.width = `${CANVAS_W}px`;
@@ -1204,6 +1236,41 @@ __V2_TREE_DATA_JS__
   document.getElementById('zoomInBtn').addEventListener('click', () => zoomBy(ZOOM_STEP));
   document.getElementById('zoomOutBtn').addEventListener('click', () => zoomBy(1 / ZOOM_STEP));
   document.getElementById('zoomResetBtn').addEventListener('click', () => fitToContent());
+
+  // Real Fullscreen API on the tree card itself (not just a CSS-expanded
+  // overlay), so it also fills the screen on the browsers that support it --
+  // .tree-wrap already contains everything the tree needs (canvas,
+  // zoom-controls, info-panel), so nothing else has to move for this.
+  function isTreeFullscreen() {
+    return document.fullscreenElement === treeWrap;
+  }
+  // Runs fn immediately outside fullscreen; inside it, leaves fullscreen
+  // first and waits for that to actually finish before running fn --
+  // exitFullscreen is async, and anything fn does that depends on layout
+  // outside .tree-wrap (scrolling to it, measuring it) would otherwise run
+  // while that content is still hidden behind the fullscreen element.
+  function leaveFullscreenThen(fn) {
+    if (isTreeFullscreen()) {
+      document.exitFullscreen().then(fn);
+    } else {
+      fn();
+    }
+  }
+  fullscreenBtn.addEventListener('click', () => {
+    if (isTreeFullscreen()) {
+      document.exitFullscreen();
+    } else if (treeWrap.requestFullscreen) {
+      treeWrap.requestFullscreen().catch(() => {});
+    } else if (treeWrap.webkitRequestFullscreen) {
+      treeWrap.webkitRequestFullscreen();
+    }
+  });
+  document.addEventListener('fullscreenchange', () => {
+    fullscreenBtn.textContent = isTreeFullscreen() ? '⤡' : '⛶';
+    fullscreenBtn.title = isTreeFullscreen() ? 'Exit fullscreen' : 'Fullscreen';
+    treeWrap.classList.toggle('is-fullscreen', isTreeFullscreen());
+    scheduleRefit();
+  });
 
   treeBox.addEventListener('wheel', e => {
     if (e.target.closest('.info-panel')) return;
@@ -1498,15 +1565,15 @@ __V2_TREE_DATA_JS__
       slot.style.top = (node.y / CANVAS_H * 100) + '%';
 
       // Minimal pairs are only ever generated from an Agree-majority leaf
-      // (create_pairs never swaps out of a Disagree majority), so the
-      // "not kept" note on a Disagree leaf would only ever be trivially
-      // true -- omitted there instead of showing a note that can't inform
-      // anything.
-      const keepHtml = !node.leaf ? '' : node.keep
+      // (create_pairs never swaps out of a Disagree majority) -- node.keep
+      // is computed from H alone, with no majority-label check, so it can
+      // still come back true for a Disagree leaf whose H happens to clear
+      // the threshold; omit the badge entirely there rather than show a
+      // "kept" or "not kept" note that can't ever inform anything.
+      const isAgreeLeaf = node.majorityLabel && node.majorityLabel.toLowerCase() === 'yes';
+      const keepHtml = !node.leaf || !isAgreeLeaf ? '' : node.keep
         ? `<span class="node-keep yes" data-keep-toggle="1">🔑 ${node.kept.toLocaleString()} kept › ${node.correctSwaps.toLocaleString()} pairs ▸</span>`
-        : (node.majorityLabel && node.majorityLabel.toLowerCase() === 'yes'
-          ? `<span class="node-keep no">not kept (H≥${T.META.keepThresholdH.toFixed(2)})</span>`
-          : '');
+        : `<span class="node-keep no">not kept (H≥${T.META.keepThresholdH.toFixed(2)})</span>`;
       const fill = nodeFillColor(node);
       // [+] marker: flags a split rule where some other feature was >99%
       // correlated with the chosen one in the rows reaching this node (the
@@ -1546,6 +1613,26 @@ __V2_TREE_DATA_JS__
       nodeBoxEl.addEventListener('keydown', e => {
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectNode(id); }
       });
+      // Double-click is the fullscreen equivalent of the plain click above
+      // (which already ran twice by the time this fires, same as any
+      // dblclick): the node-samples table it updates lives outside
+      // .tree-wrap, in .scroll-pane, so it's not enough on its own while
+      // fullscreen -- this leaves fullscreen and jumps to it too.
+      nodeBoxEl.addEventListener('dblclick', () => {
+        leaveFullscreenThen(() => {
+          selectNode(id);
+          sampleCard.open = true;
+          // A tick after opening the <details>, not the same one: a smooth
+          // scroll started before the browser's committed the reflow from
+          // open=true can animate toward stale (still-collapsed)
+          // coordinates. setTimeout, not requestAnimationFrame -- rAF is
+          // suspended entirely while the document isn't the active,
+          // rendering one, which a plain deferred timer isn't.
+          setTimeout(() => {
+            sampleCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          }, 0);
+        });
+      });
       const keepEl = slot.querySelector('[data-keep-toggle]');
       if (keepEl) {
         keepEl.tabIndex = 0;
@@ -1553,22 +1640,34 @@ __V2_TREE_DATA_JS__
         keepEl.setAttribute('aria-label', `View the ${node.correctSwaps.toLocaleString()} minimal pairs this leaf produced`);
         const openPairs = e => {
           e.stopPropagation();
-          pairsCard.open = true;
-          // Scroll straight to *this* leaf's own group, not just the pairs
-          // card in general -- with more than one leaf kept, landing on the
-          // top of the card could leave the one the badge was actually
-          // about scrolled well out of view. Falls back to the card itself
-          // if the group isn't found for some reason (e.g. stale T.NODES).
-          const leafGroup = pairsList.querySelector(`[data-leaf-group="${CSS.escape(id)}"]`);
-          (leafGroup || pairsCard).scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-          if (leafGroup) {
-            // Restart the animation even if this leaf was just jumped to a
-            // moment ago (removing the class before re-adding it forces the
-            // browser to treat it as a fresh animation, not a no-op).
-            leafGroup.classList.remove('jump-highlight');
-            void leafGroup.offsetWidth;
-            leafGroup.classList.add('jump-highlight');
-          }
+          // The pairs table lives outside .tree-wrap, in .scroll-pane --
+          // invisible while fullscreen (a fullscreened element is the only
+          // thing the browser renders) -- so this leaves fullscreen first.
+          leaveFullscreenThen(() => {
+            pairsCard.open = true;
+            // A tick after opening the <details>, not the same one -- see
+            // the node dblclick handler's own comment on this same pattern
+            // and why setTimeout, not requestAnimationFrame.
+            setTimeout(() => {
+              // Scroll straight to *this* leaf's own group, not just the
+              // pairs card in general -- with more than one leaf kept,
+              // landing on the top of the card could leave the one the
+              // badge was actually about scrolled well out of view. Falls
+              // back to the card itself if the group isn't found (e.g.
+              // stale T.NODES).
+              const leafGroup = pairsList.querySelector(`[data-leaf-group="${CSS.escape(id)}"]`);
+              (leafGroup || pairsCard).scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+              if (leafGroup) {
+                // Restart the animation even if this leaf was just jumped
+                // to a moment ago (removing the class before re-adding it
+                // forces the browser to treat it as a fresh animation, not
+                // a no-op).
+                leafGroup.classList.remove('jump-highlight');
+                void leafGroup.offsetWidth;
+                leafGroup.classList.add('jump-highlight');
+              }
+            }, 0);
+          });
         };
         keepEl.addEventListener('click', openPairs);
         keepEl.addEventListener('keydown', e => {
@@ -1775,6 +1874,29 @@ __V2_TREE_DATA_JS__
     if (after) scrollPane.scrollBy(0, after.getBoundingClientRect().top - before);
   }
 
+  // Wires single- and double-click as genuinely distinct actions on the
+  // same element, not just an addition on top of each other: a native
+  // dblclick fires *after* two ordinary click events already have, so a
+  // plain "click" + "dblclick" listener pair still runs onSingle twice
+  // (each its own unprotected rebuild/scroll-jump) before onDouble ever
+  // gets a turn -- by the time onDouble's own preservingScroll runs, it's
+  // only protecting against its own mutation, not undoing the jump those
+  // two already caused. Delaying onSingle instead, and swallowing it
+  // entirely when a second click arrives within the window, means a real
+  // double-click runs onDouble alone.
+  function onSingleOrDoubleClick(el, onSingle, onDouble) {
+    let pending = null;
+    el.addEventListener('click', () => {
+      if (pending) {
+        clearTimeout(pending);
+        pending = null;
+        return;
+      }
+      pending = setTimeout(() => { pending = null; onSingle(); }, 300);
+    });
+    el.addEventListener('dblclick', () => onDouble());
+  }
+
   function setLabelFeatsOpen(label, open) {
     if (open) openLabels.add(label); else openLabels.delete(label);
     document.querySelectorAll(`#sampleGrid tr.feat-row[data-label="${CSS.escape(label)}"]`).forEach(el => { el.hidden = !open; });
@@ -1896,7 +2018,12 @@ __V2_TREE_DATA_JS__
         buildSampleGrid();
         render();
       };
-      row.addEventListener('click', toggleTrace);
+      // Double-click anywhere on the row is a shortcut for the row's own
+      // "features" button -- same toggle, same target, just discoverable
+      // without hunting for the small button specifically.
+      onSingleOrDoubleClick(row, toggleTrace, () => {
+        preservingScroll(featBtn, `samplerow_${key}`, () => setLabelFeatsOpen(s.label, !openLabels.has(s.label)));
+      });
       row.addEventListener('keydown', e => {
         if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleTrace(); }
       });
@@ -2063,7 +2190,16 @@ __V2_TREE_DATA_JS__
           activePairKey = (activePairKey === key) ? null : key;
           preservingScroll(el, `pair_${key}`, () => buildPairsList());
         };
-        el.addEventListener('click', toggleHighlight);
+        // Double-click anywhere on the card is a shortcut for its own
+        // "features" button -- same toggle (all of this leaf's pairs open
+        // or close together, same as the button), just discoverable
+        // without hunting for the small button specifically.
+        onSingleOrDoubleClick(el, toggleHighlight, () => {
+          preservingScroll(itemFeatBtn, `pairitem_${key}`, () => {
+            if (openLeaves.has(leafId)) openLeaves.delete(leafId); else openLeaves.add(leafId);
+            buildPairsList();
+          });
+        });
         el.addEventListener('keydown', e => {
           if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleHighlight(); }
         });

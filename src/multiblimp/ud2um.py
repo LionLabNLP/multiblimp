@@ -11,13 +11,18 @@ from .treebank import Treebank, has_typo
 from .unimorph import UD2UM, LAYERED_FEAT_SEP
 
 sys.path.append("../../")
-from resources.um2ud_annotation.UM2UD_mapper import UM2UD_values
-
-
-def _fuses_upos(tag: str) -> bool:
-    """True if `tag` (or a "/" disjunction component) is a compound UM tag
-    that already implies a upos, e.g. "V.PTCP" implies upos=VERB."""
-    return any(UM2UD_values.get(sub, {}).get("upos") is not None for sub in tag.split("/"))
+# The plain (non-bracketed) UD-feats-dict -> UM-tag-list conversion lives in
+# the vendored package now (resources.um2ud_annotation.UD2UM_mapper): it
+# already handles upos lookup, comma-valued disjunctions, and deciding
+# whether a compound tag "fuses" upos (see that module's ud_feats_to_um_tags
+# docstring). This module only adds the layered/argument-marking bracket
+# handling below (_layered_feat_tag, LAYERED_FEAT_SEP) on top of it --
+# that's this project's own round-trip encoding, not a UM or UD tagset
+# convention, so it doesn't belong in the package. See ud_feats_to_um_tags
+# below for how the two are combined.
+from resources.um2ud_annotation.UD2UM_mapper import (
+    ud_feats_to_um_tags as _plain_ud_feats_to_um_tags,
+)
 
 
 def _layered_feat_tag(base_feat: str, suffix: str, val: str) -> Optional[str]:
@@ -41,43 +46,39 @@ def _layered_feat_tag(base_feat: str, suffix: str, val: str) -> Optional[str]:
 
 def ud_feats_to_um_tags(upos: str, feats: Optional[Dict[str, str]]) -> Optional[List[str]]:
     """Convert a UD token's upos + feats into real UniMorph tag strings
-    (e.g. ["V", "PST", "3", "SG"]) via UD2UM. Comma-valued UD features
-    (syncretic forms) map to UM's "/" disjunction syntax. Layered/argument-
-    marking features (Number[obj], Person[erg], Number[psor], ...) are kept
-    too, via _layered_feat_tag, rather than skipped -- e.g. Basque/Georgian
-    verbal object/indirect-object agreement is annotated exclusively this
-    way, with no plain-feature fallback. Values with no UD2UM entry are
-    skipped (same for plain and layered features). Returns None if upos
-    itself has no UM counterpart (PUNCT, SYM, X, ...).
+    (e.g. ["V", "PST", "3", "SG"]). Plain features are delegated to
+    resources.um2ud_annotation.UD2UM_mapper.ud_feats_to_um_tags (handles the
+    upos tag, comma-valued disjunctions, and skipping values with no UD2UM
+    entry -- see that function's docstring). Layered/argument-marking
+    features (Number[obj], Person[erg], Number[psor], ...) are this
+    project's own addition on top, via _layered_feat_tag -- e.g. Basque/
+    Georgian verbal object/indirect-object agreement is annotated
+    exclusively this way, with no plain-feature fallback. Returns None if
+    upos itself has no UM counterpart (PUNCT, SYM, X, ...).
     """
-    upos_tag = UD2UM.get(("upos", upos))
-    if upos_tag is None:
-        return None
-
-    tags = []
+    plain_feats = {}
+    layered_feats = []
     for feat, raw_val in (feats or {}).items():
         base_feat, bracket, suffix = feat.partition("[")
-        suffix = suffix.rstrip("]") if bracket else None
-
-        if suffix is None:
-            sub_tags = [
-                UD2UM[(base_feat, val)]
-                for val in raw_val.split(",")
-                if (base_feat, val) in UD2UM
-            ]
+        if bracket:
+            layered_feats.append((base_feat, suffix.rstrip("]"), raw_val))
         else:
-            sub_tags = [
-                tag for val in raw_val.split(",")
-                if (tag := _layered_feat_tag(base_feat, suffix, val)) is not None
-            ]
+            plain_feats[feat] = raw_val
+
+    tags = _plain_ud_feats_to_um_tags(upos, plain_feats)
+    if tags is None:
+        return None
+
+    for base_feat, suffix, raw_val in layered_feats:
+        sub_tags = [
+            tag for val in raw_val.split(",")
+            if (tag := _layered_feat_tag(base_feat, suffix, val)) is not None
+        ]
         if sub_tags:
             # dict.fromkeys: dedupe while preserving first-seen order
             tags.append("/".join(dict.fromkeys(sub_tags)))
 
-    if not any(_fuses_upos(tag) for tag in tags):
-        tags.insert(0, upos_tag)
-
-    return tags or None
+    return tags
 
 
 def create_all_unimorph_from_ud(

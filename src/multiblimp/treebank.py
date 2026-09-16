@@ -373,6 +373,14 @@ class Treebank:
             for item in remove_items:
                 tree.remove(item)
 
+        # Some noisier treebanks (e.g. Runyankore) have real tokens with a
+        # missing HEAD ("_", parsed as None) rather than a proper int --
+        # invalid per the UD spec outside of MWT/empty-node lines, which are
+        # already stripped above. Such tokens can't be placed in the
+        # dependency tree at all, so drop the whole sentence rather than let
+        # None reach downstream head/child comparisons.
+        treebank = [tree for tree in treebank if all(tok["head"] is not None for tok in tree)]
+
         if lang in convert_arabic_to_latin_langs:
             for tree in treebank:
                 for item in tree:

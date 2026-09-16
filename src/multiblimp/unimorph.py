@@ -7,14 +7,16 @@ import pandas as pd
 
 from .inflection_maps import InflectionMap
 from .languages import latin_to_cyrillic, remove_diacritics_langs, remove_multiples_langs
-from .unimorph_features import load_um_features
 
 import sys
 from functools import lru_cache
 sys.path.append("../../")
 from resources.um2ud_annotation.UM2UD_mapper import (
     UM2UD_values, shortened_vals as SHORTENED_UM_VALS, map_um_value_to_ud,
+    fix_typos as FIX_TYPOS, blacklist as PKG_BLACKLIST, unk_values as PKG_UNK_VALUES,
+    LGSPEC_PATTERN, val2feat as PKG_VAL2FEAT, feat2val as PKG_FEAT2VAL,
 )
+from resources.um2ud_annotation.UD2UM_mapper import UD2UM_values
 
 
 @lru_cache(maxsize=None)
@@ -43,6 +45,7 @@ def _cached_map_um_value_to_ud(val: str):
 # ";+/.,{}" this module's own preprocessing already treats specially).
 LAYERED_FEAT_SEP = "$"
 
+
 unmarked_features = {
     "Degree",
 }
@@ -63,14 +66,11 @@ VERB_UPOS_VALUES = {"V", "AUX"}
 # UM2UD[tag] is the tag's full {UD_feature: UD_value} dict, e.g.
 # UM2UD["V.PTCP"] == {"upos": "VERB", "VerbForm": "Part"}.
 UM2UD = UM2UD_values
-# Pass 1: (feature, value) -> UM tag via each tag's first dict item (matches
-# UM2UD_values' longest-tag-first order, e.g. Mood/Ind -> "IND" over "REAL").
-UD2UM = {tuple(v.items())[0]: k for k, v in UM2UD_values.items() if v.items()}
-# Pass 2: backfill (feature, value) pairs compound tags set beyond their
-# first (e.g. VerbForm/Part for "V.PTCP"), without overwriting pass 1's picks.
-for um_tag, ud_feats in UM2UD_values.items():
-    for feat, val in ud_feats.items():
-        UD2UM.setdefault((feat, val), um_tag)
+# (feature, value) -> UM tag, e.g. UD2UM[("Number", "Plur")] == "PL". Built
+# in resources.um2ud_annotation.UD2UM_mapper (the reverse index of
+# UM2UD_values above) -- re-exported under this name here since every
+# existing caller in this codebase imports UD2UM from multiblimp.unimorph.
+UD2UM = UD2UM_values
 
 
 
@@ -204,7 +204,12 @@ class UnimorphInflector:
 
         # ud_unimorph/ now stores real UM tag syntax too (multiblimp.ud2um),
         # so use_ud_inflections only changes which file gets read, not the vocabulary.
-        self.feat2val, self.val2feat = load_um_features()
+        # feat2val/val2feat come straight from the vendored package -- the
+        # single source of truth for what a bare UM tag/value means -- and
+        # are never mutated in place anywhere in this class, so sharing its
+        # module-level dicts directly (instead of copying per instance) is
+        # safe.
+        self.feat2val, self.val2feat = PKG_FEAT2VAL, PKG_VAL2FEAT
 
         self.inflection_map = inflection_map
         self.use_ud_inflections = use_ud_inflections
@@ -632,6 +637,16 @@ class UnimorphInflector:
     def ufeats2dict(self, ufeats: str) -> Dict[str, str]: # replace with um2ud_mapper
         """Translates the unimorph X;Y;Z format to a dictionary.
 
+        Every value is first normalized through the vendored package's own
+        fix_typos table (resources/um2ud_annotation/UM2UD_mapper.py) -- the
+        same table map_um_value_to_ud already applies for ARG*/PSS* tags,
+        but until this normalization was added here too, a plain typo'd tag
+        (e.g. Irish "MASV", a documented alias for "MASC") reached the val2feat
+        lookup below unfixed and silently landed in an _EXTRA_FEAT2VAL patch
+        entry for the misspelling instead of the correct value -- or, for a
+        typo'd ARG*-prefixed tag ("ARBAB1S" for "ARGAB1S"), didn't even reach
+        the ARG*/PSS* branch below, since it fails that literal prefix check.
+
         Two argument-marking encodings are handled ahead of the plain-tag
         lookup below (both produce "{feat}[{suffix}]" keys, e.g.
         "Number[obj]"):
@@ -657,6 +672,7 @@ class UnimorphInflector:
             .replace("}", "")
             .replace("V.PTCP", "V;V.PTCP")
             .replace("V.PCTP", "V;V.PTCP")
+            .replace(":", ";")
         )
         ufeats = ufeats.strip()
         ufeat_vals = ufeats.split(";")
@@ -665,7 +681,8 @@ class UnimorphInflector:
         for val in ufeat_vals:
             if len(val) == 0:
                 continue
-            elif LAYERED_FEAT_SEP in val:
+            val = FIX_TYPOS.get(val, val)
+            if LAYERED_FEAT_SEP in val:
                 code, _, suffix = val.partition(LAYERED_FEAT_SEP)
                 base_feat = self.val2feat.get(code) or self.val2feat.get(code.upper())
                 if base_feat is None:
@@ -681,6 +698,25 @@ class UnimorphInflector:
                     key = f"{base_feat}[{suffix}]" if suffix else base_feat
                     ufeat_dict[key] = f"{ufeat_dict[key]}+{um_code}" if key in ufeat_dict else um_code
                 continue
+            elif LGSPEC_PATTERN.match(val.upper()):
+                # UniMorph's numbered language-specific placeholders -- same
+                # "we dont handle LGSPEC" stance map_um_value_to_ud already
+                # takes (see LGSPEC_PATTERN's docstring), applied here too so
+                # a plain-tag LGSPEC value gets the same real-but-unmapped
+                # "Language_Specific" bucket instead of falling to "UNK".
+                ufeat = "Language_Specific"
+            elif val in PKG_BLACKLIST:
+                # Real UM values resources.um2ud_annotation already knows
+                # are real but has deliberately chosen not to map to UD --
+                # blacklist/unk_values key each to its UM tagset category
+                # (not a UD feature, since there isn't one), so e.g.
+                # Basque's HYP mood stays distinguishable from actually-
+                # unrecognized input instead of collapsing into a shared
+                # "UNK" column. See that file's own per-value comments for
+                # occurrence languages/counts and rationale.
+                ufeat = PKG_BLACKLIST[val]
+            elif val in PKG_UNK_VALUES:
+                ufeat = PKG_UNK_VALUES[val]
             elif val in self.val2feat:
                 ufeat = self.val2feat[val]
             elif val.strip() in self.val2feat:
@@ -752,7 +788,20 @@ class UnimorphInflector:
                     swap_ufeat_override=swap_ufeat_override,
                 )
 
-        if self.ud_inflector is not None and not self.form_found(swap_forms):
+        # Always consult the UD-derived fallback and merge its candidates in,
+        # even when the primary (real-UM) lexicon already found exactly one
+        # match: each lexicon resolves its own inflection_map key
+        # independently (e.g. primary "Person[nom]" vs. fallback
+        # "Person[subj]" for Georgian -- see swap_features.py), and a single
+        # primary match can still be an ambiguous/syncretic paradigm form
+        # (lands in create_pairs.process_item's "undefined_features" bucket)
+        # where the fallback's corpus-annotated form would have been usable.
+        # create_pairs already classifies every candidate form independently
+        # (one process_item call per swap_form), so widening the candidate
+        # set here can only add opportunities for "correct_swaps", never
+        # remove one -- unlike the old exactly-one-match short circuit, which
+        # could silently starve a row of its only usable candidate.
+        if self.ud_inflector is not None:
             ud_result = self.ud_inflector.inflect(
                 form, ud_features, strategies=strategies,
                 return_swap_feats=return_swap_feats,
@@ -1195,8 +1244,24 @@ class UnimorphInflector:
         if self.ud_inflector is not None:
             if only_try_ud_if_no_um and len(form_features) > 0:
                 return form_features
+            # A caller-supplied ufeat (e.g. create_pairs.process_item passing
+            # this instance's own resolved key, "Person[nom]" for Georgian)
+            # is only meaningful against this instance's own columns. Forcing
+            # it onto self.ud_inflector too silently breaks the readback
+            # whenever the two lexicons resolved to different bracket
+            # conventions (ud_inflector's own key is "Person[subj]" here) --
+            # the column just doesn't exist there, so the lookup finds
+            # nothing even though ud_inflector's own default key would have
+            # read the value cleanly. Only pass it through when it's actually
+            # one of ud_inflector's own columns; otherwise let it fall back
+            # to its own resolved key (ufeat=None -> self.ufeat below).
+            ud_ufeat = (
+                ufeat
+                if (ufeat is None) or (ufeat in self.ud_inflector.columns)
+                else None
+            )
             ud_form_features = self.ud_inflector.get_form_features(
-                form, features, ufeat,
+                form, features, ud_ufeat,
                 only_try_ud_if_no_um=only_try_ud_if_no_um,
                 prefer_tight_match=prefer_tight_match,
                 fetch_all=fetch_all,

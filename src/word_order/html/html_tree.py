@@ -1232,13 +1232,21 @@ def _v2_layout(node_data):
     mockup's fixed 900x500, which only ever had to fit two hand-placed demo
     trees of five and seven nodes."""
     NODE_SPACING_X, NODE_SPACING_Y = 190, 170
-    MARGIN_X, MARGIN_Y = 100, 60
+    # Left margin only, not symmetric: the floating info-panel sits at
+    # top:16px/left:16px and can run 250px wide once unfolded (panel right
+    # edge at 266px), which a shallow-but-wide subtree's own leftmost nodes
+    # could otherwise render underneath at native (1:1) scale. A node's own
+    # box extends 84px either side of its own x (NODE_HALF_W in the
+    # template's fitToContent), so clearing 266px needs at least 350px here;
+    # 380 leaves a small buffer. The right side has no such fixed overlay to
+    # clear, so it keeps the tighter original margin.
+    MARGIN_LEFT, MARGIN_RIGHT, MARGIN_Y = 380, 100, 60
     max_leaf_x = max((nd["x"] for nd in node_data.values()), default=0)
     max_depth = max((-nd["y"] for nd in node_data.values()), default=0)
-    canvas_w = int(max_leaf_x * NODE_SPACING_X + 2 * MARGIN_X) or 900
+    canvas_w = int(max_leaf_x * NODE_SPACING_X + MARGIN_LEFT + MARGIN_RIGHT) or 900
     canvas_h = int(max_depth * NODE_SPACING_Y + 2 * MARGIN_Y) or 500
     screen = {
-        i: (MARGIN_X + nd["x"] * NODE_SPACING_X, MARGIN_Y + (-nd["y"]) * NODE_SPACING_Y)
+        i: (MARGIN_LEFT + nd["x"] * NODE_SPACING_X, MARGIN_Y + (-nd["y"]) * NODE_SPACING_Y)
         for i, nd in node_data.items()
     }
     return screen, canvas_w, canvas_h

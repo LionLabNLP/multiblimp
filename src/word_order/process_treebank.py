@@ -17,7 +17,7 @@ from typing import *
 
 from multiblimp.treebank import Treebank
 from multiblimp.languages import remove_diacritics_langs, gblang2udlang
-from multiblimp.unimorph import UD2UM, UnimorphInflector
+from multiblimp.unimorph import UD2UM, UnimorphInflector, LAYERED_FEAT_SEP
 from resources.um2ud_annotation.UM2UD_mapper import map_um_value_to_ud
 
 from .prediction_target import PredictionTarget
@@ -248,6 +248,23 @@ def partial_df_match(
         return candidate_rows[min_features_added_mask]
 
 
+def _strip_layered_ufeat(ufeat_string: str) -> str:
+    """Drop any LAYERED_FEAT_SEP-encoded component (multiblimp.unimorph.
+    LAYERED_FEAT_SEP, e.g. "SG$subj" for a UD argument-marked feature like
+    Number[subj]=Sing that survived into the UD-derived fallback lexicon --
+    see that constant's own docstring) from a raw UM tag string before
+    handing it to the vendored UM2UD_mapper, which has no concept of "$"
+    and would otherwise print "Unknown Unimorph value" and drop the
+    component anyway (parse_ufeat_value's catch-all branch never resolves
+    it to anything). Same information loss as before, just without the
+    warning spam -- multiblimp.unimorph.UnimorphInflector.ufeats2dict
+    already intercepts these the same way for its own callers.
+    """
+    return ";".join(
+        part for part in str(ufeat_string).split(";") if LAYERED_FEAT_SEP not in part
+    )
+
+
 def expand_anno(node, morph_feats, target, um_split):
     # make copy to keep upos/lemma separate from conllu Token's feats
     inflect_feats = morph_feats
@@ -274,7 +291,7 @@ def expand_anno(node, morph_feats, target, um_split):
         for i, row in form_rows.iterrows():
             # go through all plausible match rows
             # -> if more than one, only use features for which all rows agree on the value
-            transformed =  map_um_value_to_ud(row["ufeat"])
+            transformed = map_um_value_to_ud(_strip_layered_ufeat(row["ufeat"]))
             for k, v in transformed["morpho"].items():
                 unified[k] = unified.get(k, list()) + [v]
             unified["upos"] = unified.get("upos", list()) + [transformed["upos"]]
