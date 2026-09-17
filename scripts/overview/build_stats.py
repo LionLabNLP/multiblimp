@@ -110,7 +110,7 @@ def _load_languages_six(index_html_path: str) -> list[dict] | None:
     return json.loads(match.group(1))
 
 
-def _record(entry: dict, cond: str, subgroup: str) -> dict:
+def _record(entry: dict, cond: str, subgroup: str, dir_rel: str) -> dict:
     diag = entry.get("diag") or {}
     buckets = {
         PUBLISHED_BUCKET_KEYS[k]: v[0]
@@ -128,15 +128,14 @@ def _record(entry: dict, cond: str, subgroup: str) -> dict:
         # below can skip it rather than silently treating "no accuracy" as
         # "zero accuracy".
         acc=entry.get("acc"),
-        # langUrl is embedded as e.g. "/multiblimp/npa/HEAD-DET_N/German" --
-        # extensionless and site-root-relative, matching how the deployed
-        # site serves it. Rewritten here to an actual relative path from
-        # html/index.html (this page's own location) to the real .html file
-        # on disk, so links work when browsing html/ directly.
-        url=(
-            "decision_trees/" + lang_url.removeprefix("/multiblimp/") + ".html"
-            if lang_url else None
-        ),
+        # langUrl is just the language page's bare filename (e.g.
+        # "German.html"), relative to its own condition's index.html.
+        # dir_rel is that condition's directory relative to
+        # LOCAL_HTML_ROOT (html/decision_trees), e.g. "svNa" or NPA's
+        # "npa/HEAD-DET_N" -- joined here into an actual path from
+        # html/index.html (this page's own location) to the real .html
+        # file on disk, so links work when browsing html/ directly.
+        url=(f"decision_trees/{dir_rel}/{lang_url}" if lang_url else None),
         # Distinct lemmas/surface forms seen for this language x condition --
         # a rough lexical-diversity/treebank-richness signal, independent of
         # how many of those forms actually became usable minimal pairs.
@@ -212,14 +211,14 @@ def collect_records() -> tuple[list[dict], dict[str, set[str]]]:
         tried[cond] = _tried_languages(cond_dir)
         six = _load_languages_six(os.path.join(cond_dir, "index.html"))
         if six:
-            records += [_record(e, cond, cond) for e in six]
+            records += [_record(e, cond, cond, cond) for e in six]
 
     for sub in npa_subgroups:
         sub_dir = os.path.join(LOCAL_HTML_ROOT, "npa", sub)
         tried[sub] = _tried_languages(sub_dir)
         six = _load_languages_six(os.path.join(sub_dir, "index.html"))
         if six:
-            records += [_record(e, "npa", sub) for e in six]
+            records += [_record(e, "npa", sub, f"npa/{sub}") for e in six]
 
     return records, tried
 

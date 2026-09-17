@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 
 from ..utils import build_grew_link
+from ..process_treebank import resolve_layered_head_key
 
 
 class _NumpyEncoder(json.JSONEncoder):
@@ -1297,7 +1298,18 @@ def _v2_pair_swap_role(row, raw_role_a, raw_role_b):
     return None
 
 
-def _v2_pair_feat_list(row, prefix, decisive_feat):
+# Verbal argument-indexing dimensions that use UD's bracket-suffix layered-
+# feature convention (Number[obj], Person[erg], Gender[abs], ...) instead of
+# a plain feature name -- see viz_tree.py's own _LAYERED_DISPLAY_FEATS
+# (duplicated here rather than imported: viz_tree.py itself imports from
+# this module, so the reverse import would be circular) and
+# multiblimp.swap_features' swap_{number,person,gender}_{obj,iobj}_any.
+# Case isn't among these: it's the argument's own morphology, not something
+# a verb indexes, so it's never bracketed on the head/verb side.
+_LAYERED_DISPLAY_FEATS = ("Number", "Person", "Gender")
+
+
+def _v2_pair_feat_list(row, prefix, decisive_feat, deprel=None):
     """{prefix}_{Feat}=val strings for one correct_swaps.parquet row's role,
     lemma/deprel/upos first then morphological feats sorted -- same
     inclusion/ordering convention as create_pairs.py's own _feats_summary
@@ -1305,16 +1317,47 @@ def _v2_pair_feat_list(row, prefix, decisive_feat):
     <b>, matching _v2_strong_to_b's node-sample markup, so the template's
     featEntry() finds it the same way regardless of source."""
     pat = re.compile(rf"^{re.escape(prefix)}_([A-Z][a-zA-Z]*(?:\[[a-z]+\])?)$")
+    # obj/iobj (and ergative-marked subj) agreement never folds a bracketed
+    # feature (Number[obj], Number[abs], Number[erg], ...) into the plain
+    # feature name the way nsubj's merge_subj_layered_feats does -- and
+    # per-row, a populated plain head_{feat} here is actually the SUBJECT's
+    # folded value, not this argument's own agreement marker (mirrors
+    # process_treebank.extract_instances' own head_val resolution, which
+    # never falls back to the plain feature for any deprel other than
+    # "nsubj" either -- see e.g. the Georgian ovNa case this was caught on,
+    # where a sample's plain head_Number is simply the verb agreeing with
+    # its subject in Number, coincidentally often equal to the object's but
+    # not the same signal). So for these targets the plain entry is
+    # suppressed below and only ever populated by resolving the real
+    # per-row bracketed key -- for every one of these dimensions, not just
+    # the tree's own decisive feature.
+    resolve_bracket_feats = bool(deprel) and deprel != "nsubj" and prefix.lower() == "head"
     morph = []
     for col, val in row.items():
         m = pat.match(col)
         if not m or pd.isna(val) or val in (None, "None", "", "_missing", "nan"):
             continue
         feat = m.group(1)
+        if resolve_bracket_feats and feat in _LAYERED_DISPLAY_FEATS:
+            continue  # resolved below instead, from the real bracketed key
         entry = f"{feat}={val}"
         if decisive_feat and feat == decisive_feat:
             entry = f"<b>{entry}</b>"
         morph.append((feat, entry))
+
+    if resolve_bracket_feats:
+        for feat in _LAYERED_DISPLAY_FEATS:
+            layered_key = resolve_layered_head_key(row, row, feat, deprel)
+            if layered_key is None:
+                continue
+            value = row.get(f"head_{layered_key}")
+            if pd.isna(value):
+                continue
+            entry = f"{feat}={value}"
+            if decisive_feat and feat == decisive_feat:
+                entry = f"<b>{entry}</b>"
+            morph.append((feat, entry))
+
     morph.sort(key=lambda p: p[0])
 
     extra = []
@@ -1378,7 +1421,7 @@ def _v2_pair_from_row(row, raw_role_a, raw_role_b, decisive_feat):
         "nsubj": row.get(f"{raw_role_a}_form", ""),
         "verb": row.get(f"{raw_role_b}_form", ""),
         "nsubjFeats": _v2_pair_feat_list(row, raw_role_a, decisive_feat),
-        "verbFeats": _v2_pair_feat_list(row, raw_role_b, decisive_feat),
+        "verbFeats": _v2_pair_feat_list(row, raw_role_b, decisive_feat, deprel=raw_role_a),
         "ungrammatical": swap_form,
         "swapRole": swap_role,
         "afterValue": None if pd.isna(after_value) else str(after_value),

@@ -125,20 +125,28 @@ def _classify_deprel(deprel: str) -> tuple[str, str, int, tuple | None]:
     return "Other", deprel, 99, None
 
 
-def _panel_html(deprel: str, panel_label: str) -> str:
+def _panel_html(deprel: str, panel_label: str, prefix: str = "") -> str:
+    # deprel is always a path relative to html_directory (e.g. "svNa" or
+    # NPA's "npa/HEAD-DET_N"), so "{deprel}/index.html" is only a valid
+    # href when this panel is embedded in a page that itself lives at
+    # html_directory's own root. _write_npa_subpages embeds the same
+    # markup two levels deeper (html_directory/npa/_by_pair|_by_feature/),
+    # so it passes prefix="../../" to walk back up to that root first --
+    # see its own call site.
+    url = f"{prefix}{deprel}/index.html"
     return (
         f'            <div class="panel">\n'
         f'                <div id="plot-{_safe_id(deprel)}" class="mini-plot"'
-        f' data-url="/multiblimp/{deprel}" data-deprel="{deprel}"></div>\n'
-        f'                <div class="panel-label"><a href="/multiblimp/{deprel}">{panel_label}</a></div>\n'
+        f' data-url="{url}" data-deprel="{deprel}"></div>\n'
+        f'                <div class="panel-label"><a href="{url}">{panel_label}</a></div>\n'
         f"            </div>"
     )
 
 
-def _grid_html(entries: list) -> str:
+def _grid_html(entries: list, prefix: str = "") -> str:
     return (
         '            <div class="grid">\n'
-        + "\n".join(_panel_html(deprel, panel_label) for _, panel_label, deprel in sorted(entries))
+        + "\n".join(_panel_html(deprel, panel_label, prefix) for _, panel_label, deprel in sorted(entries))
         + "\n            </div>"
     )
 
@@ -215,7 +223,7 @@ def _write_npa_subpages(npa_deprels: dict[str, dict], html_directory: Path) -> N
             sections_html = (
                 f'        <div class="group-section">\n'
                 f'            <h2 class="group-title">{group["label"]}</h2>\n'
-                + _grid_html(entries)
+                + _grid_html(entries, prefix="../../")
                 + "\n        </div>"
             )
             html_content = create_html(sections_html, json.dumps(page_deprels))
@@ -234,14 +242,14 @@ def _npa_toggle_group_html(npa_deprels: dict[str, dict]) -> str:
 
     pair_cards = "\n".join(
         _npa_card_html(
-            group, f"/multiblimp/npa/_by_pair/{_npa_page_filename(0, key, group['label'])}.html",
+            group, f"npa/_by_pair/{_npa_page_filename(0, key, group['label'])}.html",
             _npa_languages_covered(npa_deprels, group["entries"]), "feature",
         )
         for key, group in sorted(by_pair.items(), key=lambda kv: kv[1]["order"])
     )
     feature_cards = "\n".join(
         _npa_card_html(
-            group, f"/multiblimp/npa/_by_feature/{_npa_page_filename(1, key, group['label'])}.html",
+            group, f"npa/_by_feature/{_npa_page_filename(1, key, group['label'])}.html",
             _npa_languages_covered(npa_deprels, group["entries"]), "role pair",
         )
         for key, group in sorted(by_feature.items(), key=lambda kv: kv[1]["order"])

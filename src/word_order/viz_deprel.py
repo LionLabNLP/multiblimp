@@ -260,6 +260,7 @@ def generate_html_deprel_index(
     smoothing: float = 0.5,
     exclude_labels: set | None = None,
     include_trivial_labels: set | None = None,
+    include_trivial_min_count: int = 0,
     leaf_threshold: float = 0.1,
     pairs_dir: str | None = None,
     diagnostics_by_lang: dict | None = None,
@@ -267,7 +268,6 @@ def generate_html_deprel_index(
     head_role_label: str = "head",
     subject_label: str = "subject",
     nsubj_label: str = "nsubj",
-    url_path: str | None = None,
 ) -> None:
     """Generate interactive overview page with metrics and language links.
 
@@ -276,16 +276,6 @@ def generate_html_deprel_index(
         html_directory: Directory to save the index.html file
         target_col: Column name containing word order labels
         smoothing: Smoothing factor for entropy calculation
-        url_path: The "/multiblimp/{url_path}/..." prefix this page's own
-            per-language links (and word_order.viz_overview.
-            generate_html_overview_index's link back to this page) should
-            use. None (default) falls back to html_directory's own leaf
-            folder name, exactly what every pre-existing caller already
-            gets implicitly -- only needed when html_directory is nested
-            more than one level below wherever "/multiblimp/" is served
-            from (e.g. NPA's "decision_trees/npa/{ROLE1}-{ROLE2}_{Feat}",
-            where the correct link prefix is "npa/{ROLE1}-{ROLE2}_{Feat}",
-            not just the leaf folder name).
         agreement_label: Prose label for the page subtitle on the diagnostics-enabled
             page (e.g. "Subject-Verb" / "Subject-Auxiliary") -- only meaningful
             alongside "agreement" in target_col. Defaults to "Subject-Verb" so every
@@ -307,6 +297,16 @@ def generate_html_deprel_index(
         include_trivial_labels: Trivial labels that are still linguistically interesting
             and should be kept in the table/scatter plot with a green marker instead of
             being omitted (e.g. {"Yes"}).
+        include_trivial_min_count: A kept trivial language (see include_trivial_labels)
+            also needs strictly more than this many rows of that label to actually be
+            shown -- a language whose ENTIRE signal is e.g. 2 "yes" rows is still just
+            noise, even though the label itself is the interesting one. Real pairs/
+            diagnostics still get computed and shown for it (via _agreement_row_stats,
+            reading the same pairs_dir every fitted-tree language's row does) -- only
+            entropy/accuracy are left blank (there's no tree, so nothing to report
+            there), everything else is a genuine, non-synthetic row. Default 0 (any
+            count at all qualifies) matches every pre-existing caller's behavior
+            unchanged.
         leaf_threshold, pairs_dir: only used when "agreement" is in target_col (the
             SVA pipeline). In that case the word-order "N 1 swap"/"N 4 swap"/"N Pairs"
             columns (based on get_all_orders word-order permutation codes, meaningless
@@ -379,14 +379,22 @@ def generate_html_deprel_index(
     for l in metrics_six[metrics_six["base_entropy"] == 0.0]["language"]:
         trivial_langs[l] = dict(language_data[l][1][target_col].value_counts())
 
-    # Split trivial langs: any language with at least one row in an
-    # include_trivial_labels value (e.g. "Yes") goes back into the main
-    # table/plot, even if the rest of its rows carry other values.
+    # Split trivial langs: any language with MORE than include_trivial_min_count
+    # rows in an include_trivial_labels value (e.g. "yes") goes back into the
+    # main table/plot, even if the rest of its rows carry other values -- a
+    # language whose only signal is a handful of such rows is still just noise
+    # at that count, regardless of which label it is.
+    def _passes_trivial_threshold(dist: dict) -> bool:
+        return any(
+            dist.get(label, 0) > include_trivial_min_count
+            for label in include_trivial_labels
+        )
+
     include_trivial_langs = {
-        k: v for k, v in trivial_langs.items() if set(v) & include_trivial_labels
+        k: v for k, v in trivial_langs.items() if _passes_trivial_threshold(v)
     }
     omit_langs = {
-        k: v for k, v in trivial_langs.items() if not (set(v) & include_trivial_labels)
+        k: v for k, v in trivial_langs.items() if not _passes_trivial_threshold(v)
     }
 
     # Remove omitted langs from metrics; include_trivial_langs are re-added below
@@ -421,10 +429,23 @@ def generate_html_deprel_index(
                 trivial_rows.append(
                     {
                         "language": lang,
-                        "base_entropy": 0.0,
-                        "reduced_entropy": 0.0,
-                        "delta_entropy": 0.0,
-                        "accuracy": 1.0,
+                        # NaN (not 0.0/1.0): no tree was fit for this
+                        # language at all, so there's no real entropy/
+                        # accuracy to report -- a hardcoded 1.0 accuracy
+                        # here would misleadingly read as "a tree achieved
+                        # perfect accuracy" rather than "no tree exists".
+                        # A real float (not None) so both the classic
+                        # f-string table (":.4f" on None raises TypeError;
+                        # on NaN it just prints "nan") and the JS table
+                        # format it without crashing either way -- the JS
+                        # side is still updated separately to render NaN as
+                        # a blank cell rather than the literal text "NaN".
+                        # n_raw/n_keep/n_pairs below are real, non-synthetic
+                        # numbers either way (from the actual pairs run).
+                        "base_entropy": float("nan"),
+                        "reduced_entropy": float("nan"),
+                        "delta_entropy": float("nan"),
+                        "accuracy": float("nan"),
                         "n_raw": n_raw,
                         "n_keep": n_keep,
                         "n_pairs": n_pairs,
@@ -462,10 +483,6 @@ def generate_html_deprel_index(
     html_files = {
         f.stem: f for f in html_path.glob("*.html") if f.name.lower() != "index.html"
     }
-    deprel = html_path.name
-    url_path = url_path if url_path is not None else deprel
-
-
     # Generate table rows for both entropy types
     def generate_rows(metrics_df, lang_colors):
         rows = []
@@ -478,7 +495,7 @@ def generate_html_deprel_index(
             )
 
             if lang_file:
-                lang_link = f'<a href="/multiblimp/{url_path}/{quote(lang_file.stem)}"{name_style}>{lang_name}</a>'
+                lang_link = f'<a href="{quote(lang_file.name)}"{name_style}>{lang_name}</a>'
             else:
                 lang_link = f"<span{name_style}>{lang_name}</span>"
 
@@ -545,7 +562,7 @@ def generate_html_deprel_index(
 
             languages.append({
                 "name": lang_name,
-                "langUrl": f"/multiblimp/{url_path}/{quote(lang_file.stem)}" if lang_file else None,
+                "langUrl": f"{quote(lang_file.name)}" if lang_file else None,
                 "color": color if color != "#2563eb" else None,
                 "base": row["base_entropy"],
                 "reduced": row["reduced_entropy"],
@@ -573,7 +590,7 @@ def generate_html_deprel_index(
         for _, row in metrics_df.iterrows():
             lang_name = row["language"].replace("_", " ")
             lang_file = html_files.get(row["language"])  # ← stem matches directly
-            url = f"/multiblimp/{url_path}/{quote(lang_file.stem)}" if lang_file else None
+            url = f"{quote(lang_file.name)}" if lang_file else None
 
             data.append(
                 {
@@ -639,7 +656,7 @@ def generate_html_deprel_index(
             dist_str = _fmt_dist(dist)
             lang_file = html_files.get(lang)  # ← stem matches directly
             if lang_file:
-                url = f"/multiblimp/{url_path}/{quote(lang_file.stem)}"
+                url = f"{quote(lang_file.name)}"
                 skipped_links.append(
                     f'<a href="{url}" style="color:#b893de;font-weight:600;">{lang_display}</a> ({dist_str})'
                 )

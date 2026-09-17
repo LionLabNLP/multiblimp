@@ -1391,14 +1391,28 @@ def _create_diagnostics_html(
           ? `<button class="cell-examples-btn" type="button" data-lang="${{escapeAttr(lang.name)}}" data-bucket="correct_swaps">${{nPairsText}}</button>`
           : nPairsText;
 
+        // A trivial-but-shown language (see viz_deprel.generate_html_deprel_index's
+        // include_trivial_min_count) has no fitted tree, so base/reduced/delta/acc
+        // arrive as NaN rather than a real number -- render those as a blank dash
+        // instead of "NaN"/"NaN%", and skip the color-scale functions (which assume
+        // a real number) in favor of a plain muted tone.
+        const baseText = Number.isNaN(lang.base) ? "—" : lang.base.toFixed(3);
+        const reducedText = Number.isNaN(lang.reduced) ? "—" : lang.reduced.toFixed(3);
+        const deltaText = Number.isNaN(lang.delta) ? "—" : lang.delta.toFixed(3);
+        const accText = Number.isNaN(lang.acc) ? "—" : (lang.acc * 100).toFixed(1) + "%";
+        const baseColor = Number.isNaN(lang.base) ? "var(--text-muted)" : entropyColor(lang.base, maxBaseEntropy);
+        const reducedColor = Number.isNaN(lang.reduced) ? "var(--text-muted)" : entropyColor(lang.reduced, maxBaseEntropy);
+        const deltaColorVal = Number.isNaN(lang.delta) ? "var(--text-muted)" : (deltaColor(lang.base, lang.delta) || "var(--text-muted)");
+        const accColor = Number.isNaN(lang.acc) ? "var(--text-muted)" : pctColor(lang.acc * 100);
+
         langRow.innerHTML = `
           <div class="cell c-chev"><span class="chevron">${{chevronSvg()}}</span></div>
           <div class="cell c-lang lang-name">${{nameHtml}}</div>
           <div class="cell c-dist">${{renderDistBar(lang.diag && lang.diag.labelDistribution)}}</div>
-          <div class="cell c-base" style="color:${{entropyColor(lang.base, maxBaseEntropy)}}">${{lang.base.toFixed(3)}}</div>
-          <div class="cell c-reduced" style="color:${{entropyColor(lang.reduced, maxBaseEntropy)}}">${{lang.reduced.toFixed(3)}}</div>
-          <div class="cell c-delta" style="color:${{deltaColor(lang.base, lang.delta) || "var(--text-muted)"}}">${{lang.delta.toFixed(3)}}</div>
-          <div class="cell c-acc" style="color:${{pctColor(lang.acc * 100)}}">${{(lang.acc * 100).toFixed(1)}}%</div>
+          <div class="cell c-base" style="color:${{baseColor}}">${{baseText}}</div>
+          <div class="cell c-reduced" style="color:${{reducedColor}}">${{reducedText}}</div>
+          <div class="cell c-delta" style="color:${{deltaColorVal}}">${{deltaText}}</div>
+          <div class="cell c-acc" style="color:${{accColor}}">${{accText}}</div>
           <div class="cell c-raw">${{lang.nRaw.toLocaleString()}}</div>
           <div class="cell c-keep"${{dimColorStyle(investmentColor(lang.nKeep, lang.nRaw), lang.nRaw < MIN_N_FOR_COLOR, `N RAW is only ${{lang.nRaw}} — too small a sample for this ratio to be meaningful`)}}>${{lang.nKeep.toLocaleString()}}</div>
           <div class="cell c-bchev"><button class="bucket-chevron-btn" type="button" aria-label="Toggle bucket breakdown"><span class="chevron">${{chevronSvg()}}</span></button></div>

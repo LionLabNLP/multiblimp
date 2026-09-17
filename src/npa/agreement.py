@@ -629,6 +629,80 @@ def create_npa_pairs_for_target_col(
     return diagnostic_dfs, {**meta, "swap_role": swap_role, "fixed_role": fixed_role}
 
 
+def refresh_deprel_index(target_col: str,
+                          save_dir: str | None = None,
+                          html_dir: str | None = None,
+                          decision_trees_root: str = OUTPUT_DECISION_TREES_DIR,
+                          html_decision_trees_root: str = HTML_DECISION_TREES_DIR,
+                          pairs_dir: str | None = None,
+                          diagnostics_csv: str | None = None,
+                          leaf_threshold: float = 0.1) -> None:
+    """Rebuild one NPA target_col's diagnostics CSV + deprel index.html,
+    purely from on-disk output/decision_trees + output/minimal_pairs
+    artifacts -- the tail of run_agreement_pipeline (everything from
+    "Generating diagnostics table" on), extracted so a caller that only
+    wants to refresh an already-fully-built condition's index (see
+    scripts/generate_html_indexes.py) doesn't have to pay for
+    run_agreement_pipeline's per-language loop first.
+
+    That loop unconditionally reads each language's full np_instances/
+    {lang}.parquet (every role the language's NPs ever carry, not just this
+    target_col's two) before it even reaches a per-language skip-check --
+    tens of MB per language, repeated once per target_col swept, for zero
+    benefit when nothing about that language actually needs rebuilding.
+    Nothing in this function touches np_instances at all: diagnostics come
+    from pairs_dir, and generate_html_deprel_index's own data_dir scan reads
+    only the (much smaller) decision-tree-stage .joblib/.parquet cache.
+
+    save_dir/html_dir/pairs_dir/diagnostics_csv default the same way
+    run_agreement_pipeline's own do (npa_id(target_col)-derived paths under
+    decision_trees_root's/html_decision_trees_root's own "npa/" subtree).
+    """
+    npa_identifier = npa_id(target_col)
+    save_dir = save_dir or os.path.join(decision_trees_root, "npa", npa_identifier)
+    html_dir = html_dir or os.path.join(html_decision_trees_root, "npa", npa_identifier)
+    pairs_dir = pairs_dir or os.path.join(OUTPUT_MINIMAL_PAIRS_DIR, "npa", npa_identifier)
+    diagnostics_csv = diagnostics_csv or os.path.join(OUTPUT_DIAGNOSTICS_DIR, "npa", f"{npa_identifier}.csv")
+    role1, role2, feat = _split_target_col(target_col)
+    swap_roles = swap_roles_for_target_col(target_col)
+    swap_role = swap_roles[0]
+    fixed_role = role2 if swap_role == role1 else role1
+
+    print("Generating diagnostics table")
+    diagnostics_df = generate_diagnostics_table(pairs_dir)
+    write_diagnostics_csv(diagnostics_df, diagnostics_csv)
+    diagnostics_by_lang = {
+        row["Language"]: diagnostics_row_to_json(
+            row, lang_dir=os.path.join(pairs_dir, row["Language"])
+        )
+        for _, row in diagnostics_df.iterrows()
+    }
+
+    print("Generating deprel index")
+    generate_html_deprel_index(
+        data_dir=save_dir,
+        html_directory=html_dir,
+        target_col=target_col,
+        leaf_threshold=leaf_threshold,
+        pairs_dir=pairs_dir,
+        diagnostics_by_lang=diagnostics_by_lang,
+        # A language with no fitted tree (100% one label, or too little
+        # variance to fit at all) still gets real pairs/diagnostics
+        # computed -- see run_agreement_pipeline's unconditional
+        # create_npa_pairs_for_target_col call -- so it's worth showing
+        # rather than only naming in the omitted-languages note, as long as
+        # its "yes" count is more than noise. Entropy/accuracy render blank
+        # for these rows (see generate_html_deprel_index's own NaN
+        # handling) since there's no tree to report them from.
+        include_trivial_labels={"yes"},
+        include_trivial_min_count=10,
+        agreement_label=f"NP {role1}–{role2} ({feat})",
+        head_role_label=swap_role,
+        subject_label=fixed_role,
+        nsubj_label=fixed_role,
+    )
+
+
 def run_agreement_pipeline(target_col: str, langs: list[str], instances_dir: str,
                             save_dir: str | None = None,
                             html_dir: str | None = None,
@@ -695,11 +769,7 @@ def run_agreement_pipeline(target_col: str, langs: list[str], instances_dir: str
     shared parent keeps decision_trees/'s own top level from being
     dominated by NPA entries). generate_html_overview_index's index.html
     glob is recursive specifically to still find pages nested this way (see
-    that function) -- and since html_dir's own leaf name ("HEAD-DET_N") is
-    no longer, by itself, the right "/multiblimp/" URL segment (the "npa/"
-    prefix matters), this passes generate_html_deprel_index an explicit
-    url_path=f"npa/{npa_id(target_col)}" rather than relying on its old
-    default (html_directory's bare leaf name). pairs_dir/diagnostics_csv
+    that function). pairs_dir/diagnostics_csv
     default to the same "npa/{npa_id(target_col)}" convention under
     output/minimal_pairs/ and output/diagnostics/ respectively (flat there
     -- those two don't feed the overview index, so they don't need
@@ -843,35 +913,33 @@ def run_agreement_pipeline(target_col: str, langs: list[str], instances_dir: str
                 palette_map=palette_map or {"yes": "#31cb9f", "no": "#f16393", "unk": "#b893de"},
                 leaf_threshold=leaf_threshold,
                 head_label="NP head",
-                correct_swaps_df=correct_swaps_df,
+                # Same trim as full_df above, and for the same reason:
+                # correct_swaps_df still carries every role np_instances
+                # ever saw (ADJ/ADP/NUM/PRON/...), not just role1/role2.
+                # Left untrimmed, html_tree.py's _v2_raw_pair_role_prefixes
+                # (which only sees this dataframe's own columns, not
+                # target_col) picks up a bystander role instead of the real
+                # swap role -- its swap_{role} column is then always empty,
+                # so every row silently fails _v2_pair_swap_role and the
+                # pairs section renders 0 pairs despite a real, nonzero
+                # leaf count (which comes from a separate, already-correct
+                # tally).
+                correct_swaps_df=(
+                    _drop_irrelevant_roles(correct_swaps_df, (role1, role2))
+                    if correct_swaps_df is not None else None
+                ),
             )
 
     if not build_pairs:
         return
 
-    print("Generating diagnostics table")
-    diagnostics_df = generate_diagnostics_table(pairs_dir)
-    write_diagnostics_csv(diagnostics_df, diagnostics_csv)
-    diagnostics_by_lang = {
-        row["Language"]: diagnostics_row_to_json(
-            row, lang_dir=os.path.join(pairs_dir, row["Language"])
-        )
-        for _, row in diagnostics_df.iterrows()
-    }
-
-    print("Generating deprel index")
-    generate_html_deprel_index(
-        data_dir=save_dir,
-        html_directory=html_dir,
-        target_col=target_col,
-        leaf_threshold=leaf_threshold,
+    refresh_deprel_index(
+        target_col,
+        save_dir=save_dir,
+        html_dir=html_dir,
         pairs_dir=pairs_dir,
-        diagnostics_by_lang=diagnostics_by_lang,
-        agreement_label=f"NP {role1}–{role2} ({feat})",
-        head_role_label=swap_role,
-        subject_label=fixed_role,
-        nsubj_label=fixed_role,
-        url_path=f"npa/{npa_identifier}",
+        diagnostics_csv=diagnostics_csv,
+        leaf_threshold=leaf_threshold,
     )
 
     # Cross-pipeline overview index is no longer rebuilt here -- see

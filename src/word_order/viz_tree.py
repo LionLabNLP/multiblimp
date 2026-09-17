@@ -12,6 +12,7 @@ from matplotlib.colors import to_hex
 
 from .entropy import order_entropy, calculate_base_entropy, calculate_tree_entropy
 from .utils import get_all_orders, build_grew_link, split_pairwise_predictor
+from .process_treebank import resolve_layered_head_key
 from .html.html_tree import create_html, write_placeholder_html, write_html_v2
 
 
@@ -257,7 +258,16 @@ def _add_sen_str_column(full_df, highlight_prefixes=()):
     full_df["sen_str"] = sen_strs
 
 
-def _build_feat_columns(full_df, swap_feature=None, highlight_prefixes=()):
+# Verbal argument-indexing dimensions that use UD's bracket-suffix layered-
+# feature convention (Number[obj], Person[erg], Gender[abs], ...) instead of
+# a plain feature name -- see multiblimp.swap_features' swap_number_obj_any/
+# swap_person_obj_any/swap_gender_obj_any and their subj_any/iobj_any
+# siblings. Case isn't among these: it's the argument's own morphology, not
+# something a verb indexes, so it's never bracketed on the head/verb side.
+_LAYERED_DISPLAY_FEATS = ("Number", "Person", "Gender")
+
+
+def _build_feat_columns(full_df, swap_feature=None, highlight_prefixes=(), target_deprel=None):
     """Build {prefix}_features list columns (one "Feat=Val" string per node feature
     that's actually set, skipping None/NaN/"_" -- extract_node_features creates a
     "{prefix}_{feat}" column for every feat in the treebank's WHOLE feature
@@ -297,20 +307,54 @@ def _build_feat_columns(full_df, swap_feature=None, highlight_prefixes=()):
     feat_cols = list(feat_df.columns)
     prefixes = {label.split("_")[0] for label in feat_cols}
     feat_collect = {f"{p}_features": [] for p in prefixes}
+
+    # obj/iobj (and ergative-marked subj) agreement never folds a bracketed
+    # feature (Number[obj], Number[abs], Number[erg], ...) into the plain
+    # feature name the way merge_subj_layered_feats does for nsubj -- and
+    # per-row, a populated plain head_{feat} here is actually the SUBJECT's
+    # folded value, not this argument's own agreement marker (mirrors
+    # process_treebank.extract_instances' own head_val resolution: it never
+    # falls back to the plain feature for any deprel other than "nsubj"
+    # either, precisely to avoid silently comparing the wrong argument's
+    # value -- see e.g. the Georgian ovNa case this was caught on, where a
+    # sample's plain head_Number is simply the verb's subject agreeing in
+    # Number, coincidentally often equal to the object's but not the same
+    # signal). So for these targets the plain entry is suppressed below and
+    # only ever populated by resolving the real per-row bracketed key.
+    resolve_bracket_feats = bool(target_deprel) and target_deprel != "nsubj" and "head" in highlight_prefixes
+
     # itertuples(), not iterrows(): avoids rebuilding a full-width Series per row.
     for row_tuple in feat_df.itertuples(index=False, name=None):
         mf = {f"{p}_features": [] for p in prefixes}
+        row_vals = {}
         for label, val in zip(feat_cols, row_tuple):
             if pd.isna(val) or val == "_":
                 continue
             prefix, feature = label.split("_")
-            key = f"{prefix}_features"
             val_str = str(val)[:-2] if str(val).endswith(".0") else str(val)
+            row_vals[label] = val_str
+            if resolve_bracket_feats and prefix == "head" and feature in _LAYERED_DISPLAY_FEATS:
+                continue  # resolved below instead, from the real bracketed key
+            key = f"{prefix}_features"
             display_feature = "upos" if feature == "pos" else feature
             entry = f"{display_feature}={val_str}"
             if swap_feature and feature == swap_feature and prefix in highlight_prefixes:
                 entry = f"<strong>{entry}</strong>"
             mf[key].append(entry)
+
+        if resolve_bracket_feats:
+            for feat in _LAYERED_DISPLAY_FEATS:
+                layered_key = resolve_layered_head_key(row_vals, row_vals, feat, target_deprel)
+                if layered_key is None:
+                    continue
+                value = row_vals.get(f"head_{layered_key}")
+                if value is None:
+                    continue
+                entry = f"{feat}={value}"
+                if swap_feature and feat == swap_feature:
+                    entry = f"<strong>{entry}</strong>"
+                mf["head_features"].append(entry)
+
         for k, v in mf.items():
             feat_collect[k].append(v)
     return feat_collect
@@ -340,8 +384,10 @@ def get_samples(
     full_df["treebank_link"] = build_treebank_links(full_df)
 
     if show_features:
+        target_deprel = target.child_deprels[0] if target and target.child_deprels else None
         feat_collect = _build_feat_columns(full_df, swap_feature=swap_feature,
-                                            highlight_prefixes=highlight_prefixes)
+                                            highlight_prefixes=highlight_prefixes,
+                                            target_deprel=target_deprel)
 
         for k, v in feat_collect.items():
             full_df[k] = v
@@ -504,8 +550,10 @@ def build_placeholder_args(
 
     keep_columns = ["sen_str"]
     if show_features:
+        target_deprel = target.child_deprels[0] if target and target.child_deprels else None
         feat_collect = _build_feat_columns(full_df, swap_feature=swap_feature,
-                                            highlight_prefixes=highlight_prefixes)
+                                            highlight_prefixes=highlight_prefixes,
+                                            target_deprel=target_deprel)
 
         for k, v in feat_collect.items():
             full_df[k] = v
