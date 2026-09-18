@@ -174,7 +174,7 @@ def _coverage_ladder_html(cov: dict, chart_id: str) -> str:
         "ge10": cov["ge10"], "ge30": cov["ge30"], "ge50": cov["ge50"],
         "ge100": cov["ge100"], "ge500": cov["ge500"],
     })
-    chart = f"<div class=\"ladder-chart\" id=\"{chart_id}\" data-cov='{payload}' style=\"height: 200px;\"></div>"
+    chart = f"<div class=\"ladder-chart\" id=\"{chart_id}\" data-cov='{payload}' style=\"height: 220px;\"></div>"
     return chart + _zero_languages_html(cov.get("zero_languages", []))
 
 
@@ -206,6 +206,7 @@ def _category_tab_html(data: dict, group: str, lang_idx: dict, npa_lang_idx: dic
                 <h2>{group}</h2>
                 <p class="section-desc">{n} condition{"s" if n != 1 else ""} tracked in this category, {totals["languages"]} languages combined.
                     Pick one below for its own breakdown &mdash; the chart shows its top 25 languages by pairs; the table has all of them.</p>
+                <h3 class="mini-stats-title">Total</h3>
                 <div class="mini-stats">
                     {_mini_stat_html(str(totals["languages"]), "Languages")}
                     {_mini_stat_html(f'{totals["samples"]:,}', "Samples")}
@@ -224,8 +225,11 @@ def _category_tab_html(data: dict, group: str, lang_idx: dict, npa_lang_idx: dic
                     <div id="cat-{slug}-dropped-chart" style="height: 160px;"></div>
                 </details>
 
-                <div class="picker-bar" id="cat-{slug}-picker" role="radiogroup" aria-label="Condition within {group}">
-                    {picker_html}
+                <div class="picker-panel">
+                    <div class="picker-bar" id="cat-{slug}-picker" role="radiogroup" aria-label="Condition within {group}">
+                        {picker_html}
+                    </div>
+                    <div id="cat-{slug}-detail-link"></div>
                 </div>
 
                 <div id="cat-{slug}-ministats"></div>
@@ -307,7 +311,7 @@ def render(data: dict) -> str:
             if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
         }} catch (e) {{}}
     </script>
-    <title>sva-dt &mdash; Dataset Overview</title>
+    <title>MultiBLiMP 2.0 - Morphological Agreement</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
@@ -394,12 +398,21 @@ def render(data: dict) -> str:
             border: 1px solid var(--border);
             margin-bottom: 1.5rem;
         }}
+        /* Anchors .theme-toggle's absolute positioning -- specific to the
+           header card, not every .card on the page. */
+        header.card {{ position: relative; }}
         .header {{
             display: flex;
             justify-content: space-between;
             align-items: flex-start;
             flex-wrap: wrap;
             gap: 1rem 2rem;
+            /* Reserves room for .theme-toggle, which is positioned
+               absolutely (see its own rule) so it stays pinned to the
+               card's own upper-right corner regardless of whether this row
+               wraps -- without this, the header-right button would render
+               underneath it in the unwrapped (desktop) layout. */
+            padding-right: 3rem;
         }}
 
         .modal-overlay {{
@@ -483,6 +496,12 @@ def render(data: dict) -> str:
             margin-top: 0.75rem;
         }}
         .nav-link {{
+            /* Without this, a plain <a> defaults to display:inline, whose
+               padding/border box doesn't reserve real space in the flow --
+               it just paints over whatever's next to it. Usually invisible
+               against a plain card background; visibly overflows a tightly
+               bordered container like .picker-panel below. */
+            display: inline-block;
             font-size: 0.85rem;
             color: var(--accent);
             text-decoration: none;
@@ -493,8 +512,40 @@ def render(data: dict) -> str:
             border-radius: 6px;
         }}
         .nav-link:hover {{ border-color: var(--accent); background: var(--accent-soft); }}
+        /* Upscaled variant for the header's own CTA -- .nav-link itself stays
+           at its original size since it's also reused for the small
+           per-condition "decision tree & entropy detail" links inside each
+           category tab, which shouldn't grow along with this one. */
+        .nav-link-lg {{
+            font-size: 1.05rem;
+            font-weight: 600;
+            padding: 0.85rem 1.5rem;
+            border-radius: 8px;
+        }}
+        /* Filled instead of outlined -- for the picked-condition's own
+           "decision tree & entropy detail" link, so it reads as the
+           panel's one actionable next step rather than blending in with
+           plain text next to it. */
+        .nav-link-accent {{
+            background: var(--accent);
+            border-color: var(--accent);
+            color: #fff;
+            /* Top only -- .picker-panel's own bottom padding already
+               separates it from the panel's lower edge; a bottom margin
+               here too would double up that gap. */
+            margin: 0.75rem 0 0;
+        }}
+        .nav-link-accent:hover {{ background: var(--accent); filter: brightness(1.1); color: #fff; }}
         .header-right {{ display: flex; align-items: center; gap: 0.75rem; }}
         .theme-toggle {{
+            /* Pinned to the header card's own upper-right corner, out of
+               the title/button row's flex flow entirely -- so it never
+               moves, even when that row wraps onto multiple lines on a
+               narrow viewport (which is exactly when it used to drift out
+               of the corner, following the wrapped content down). */
+            position: absolute;
+            top: 2rem;
+            right: 2.5rem;
             width: 2.1rem; height: 2.1rem;
             border: 1px solid var(--border); border-radius: 6px;
             background: var(--card); color: var(--text-muted);
@@ -557,6 +608,19 @@ def render(data: dict) -> str:
         .tab-btn:hover {{ color: var(--text); border-color: var(--border-hover); }}
         .tab-btn.active {{ border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }}
 
+        /* Groups the condition picker with its own "decision tree & entropy
+           detail" button (moved here from below the chart, right after this
+           panel) in one visually distinct region -- makes it read as "one
+           active control that switches what's shown below" instead of a
+           row of buttons floating on the same card background as everything
+           else. */
+        .picker-panel {{
+            background: var(--panel-bg);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            padding: 1rem 1rem 1.25rem;
+            margin: 1.25rem 0;
+        }}
         .picker-bar {{
             display: flex;
             gap: 0.5rem;
@@ -601,6 +665,14 @@ def render(data: dict) -> str:
 
         .ratio-high {{ color: var(--accent); font-weight: 700; }}
 
+        .mini-stats-title {{
+            font-size: 0.72rem;
+            font-weight: 700;
+            letter-spacing: 0.06em;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            margin: 0;
+        }}
         .mini-stats {{
             display: flex;
             gap: 0.75rem;
@@ -753,7 +825,7 @@ def render(data: dict) -> str:
             background: var(--panel-bg);
             border: 1px solid var(--border);
             border-radius: 8px;
-            padding: 0.5rem 0.5rem 0;
+            padding: 0.5rem 0.5rem 0.5rem;
             margin: 0.75rem 0 1.25rem;
         }}
 
@@ -873,6 +945,10 @@ def render(data: dict) -> str:
             .card {{ padding: 1.25rem; }}
             h1 {{ font-size: 1.4rem; }}
             .nav-link {{ white-space: normal; }}
+            /* Matches the header card's own smaller padding at this width,
+               so the toggle stays flush in the corner instead of the
+               desktop inset now overshooting a narrower card. */
+            .theme-toggle {{ top: 1.25rem; right: 1.25rem; }}
         }}
     </style>
 </head>
@@ -882,7 +958,7 @@ def render(data: dict) -> str:
         <header class="card">
             <div class="header">
                 <div>
-                    <h1>sva-dt &mdash; Dataset Overview</h1>
+                    <h1>MultiBLiMP 2.0 - Morphological Agreement</h1>
                     <p class="description">
                         How many candidate samples were considered and how many minimal pairs were actually
                         generated from them &mdash; broken down per language, per grammatical condition (subject
@@ -896,10 +972,10 @@ def render(data: dict) -> str:
                     <p class="meta-line">Generated {data["generated_at"]} &middot; from this repo's own local pipeline output</p>
                 </div>
                 <div class="header-right">
-                    <a class="nav-link" href="decision_trees/index.html">Decision tree diagnostics &rarr;</a>
-                    <button type="button" class="theme-toggle" id="themeToggleBtn" title="Toggle light/dark theme">☾</button>
+                    <a class="nav-link nav-link-lg" href="decision_trees/index.html">Decision Trees Overview &rarr;</a>
                 </div>
             </div>
+            <button type="button" class="theme-toggle" id="themeToggleBtn" title="Toggle light/dark theme">☾</button>
         </header>
 
         <div class="tab-bar" role="tablist" aria-label="View">
@@ -1459,10 +1535,15 @@ def render(data: dict) -> str:
             Plotly.newPlot('language-chart', [traceSamples, tracePairs], {{
                 ...BASE_LAYOUT,
                 barmode: 'group',
-                margin: {{ t: 10, r: 70, b: 40, l: 140 }},
+                // yref: 'container' anchors the legend to the whole div's
+                // pixel box instead of the plot area's fractional height --
+                // a plain y (paper-relative, i.e. plot-area-relative)
+                // position drifts as the plot area's own size changes and
+                // stopped clearing the bars reliably.
+                margin: {{ t: 38, r: 70, b: 40, l: 140 }},
                 xaxis: {{ title: {{ text: 'Count' }}, gridcolor: THEME.grid, range: [0, maxX * 1.18] }},
                 yaxis: {{ automargin: true }},
-                legend: {{ orientation: 'h', y: 1.05, x: 0 }},
+                legend: {{ orientation: 'h', x: 0, y: 1, yanchor: 'top', yref: 'container' }},
                 annotations: [endLabelAnnotation(topEntry.pairs, topEntry.name, topEntry.pairs.toLocaleString())],
             }}, CONFIG);
             wireClickThrough('language-chart', pt => {{
@@ -2036,7 +2117,11 @@ def render(data: dict) -> str:
                 hovertemplate: '<b>%{{y}}</b>: %{{x:,}} languages<extra></extra>',
             }}], {{
                 ...BASE_LAYOUT,
-                margin: {{ t: 10, r: 50, b: 10, l: 90 }},
+                // b was 10 -- too tight for the x-axis's own tick-label row,
+                // which then rendered flush against (or clipped by) this
+                // div's own bottom edge, crowding whatever comes right after
+                // it on the page.
+                margin: {{ t: 10, r: 50, b: 35, l: 90 }},
                 xaxis: {{ range: [0, maxVal * 1.18] }},
                 // No autorange override -- Plotly's default category order
                 // for a horizontal bar puts the first array entry ("tried",
@@ -2091,7 +2176,18 @@ def render(data: dict) -> str:
             const info = CONDITION_LOOKUP[state.condId];
             state.rows = getLangRows(state.condId, state.isNpaSub, state.includeZero);
 
+            // The button lives in its own placeholder just below the picker
+            // (see .picker-panel), not inline here -- keeps "which condition
+            // is this / where do I go for more" right next to the control
+            // that picked it, instead of buried under a whole mini-stats +
+            // funnel block.
+            document.getElementById(`cat-${{slug}}-detail-link`).innerHTML = `
+                <a class="nav-link nav-link-accent" href="${{decisionTreeUrl(state.condId, state.isNpaSub)}}" target="_blank" rel="noopener">
+                    ${{info.label}} decision tree &amp; entropy detail &rarr;
+                </a>
+            `;
             document.getElementById(`cat-${{slug}}-ministats`).innerHTML = `
+                <h3 class="mini-stats-title">${{info.label}}</h3>
                 <div class="mini-stats">
                     <div class="mini-stat"><div class="mini-stat-value">${{info.languages}}</div><div class="mini-stat-label">Languages</div></div>
                     <div class="mini-stat"><div class="mini-stat-value">${{info.samples.toLocaleString()}}</div><div class="mini-stat-label">Samples</div></div>
@@ -2100,8 +2196,6 @@ def render(data: dict) -> str:
                     <div class="mini-stat"><div class="mini-stat-value">${{fmtAcc(info.acc)}}</div><div class="mini-stat-label">Decision-tree accuracy</div></div>
                 </div>
                 ${{coverageLadderHtml(info, `cat-${{slug}}-cond-ladder-chart`)}}
-                <a class="nav-link" href="${{decisionTreeUrl(state.condId, state.isNpaSub)}}" target="_blank" rel="noopener"
-                   style="display:inline-block;margin-bottom:1.25rem;">${{info.label}} decision tree &amp; entropy detail &rarr;</a>
             `;
             renderCoverageFunnel(`cat-${{slug}}-cond-ladder-chart`, info);
 
@@ -2134,24 +2228,27 @@ def render(data: dict) -> str:
                     hovertemplate: `<b>%{{y}}</b><br>${{UNK_SERIES[key].label}}: %{{x:,}}<br><i>click to open &#8599;</i><extra></extra>`,
                 }})),
             ];
-            // The legend was sized for its original 2 fixed series (Samples,
-            // Minimal pairs), which fit on one line at y:1.05 with a 10px
-            // top margin. Each checked extra series adds another legend
-            // entry, which wraps onto additional lines once they no longer
-            // fit the chart's width -- without more headroom, those wrapped
-            // lines render on top of the first data row instead of above
-            // the plot. Not knowing the exact wrap point (it depends on the
-            // container's actual pixel width), this errs generous once 2+
-            // extras are on, rather than trying to predict the exact line
-            // count.
+            // This div's height is dynamic (chartHeight above, set per
+            // condition's language count), which rules out a plain legend y
+            // -- that's a fraction of the plot area's own height, so the
+            // same y drifts to a different pixel clearance on every
+            // condition. yref: 'container' anchors it to the div's actual
+            // pixel box instead, so it clears the bars regardless of how
+            // tall this particular chart ends up. Each checked extra series
+            // adds another legend entry, which wraps onto additional lines
+            // once they no longer fit the chart's width -- margin.t grows
+            // with legendLines to keep pace. Not knowing the exact wrap
+            // point (it depends on the container's actual pixel width),
+            // this errs generous once 2+ extras are on, rather than trying
+            // to predict the exact line count.
             const legendLines = traces.length > 3 ? 2 : 1;
             Plotly.newPlot(`cat-${{slug}}-chart`, traces, {{
                 ...BASE_LAYOUT,
                 barmode: 'group',
-                margin: {{ t: 10 + (legendLines - 1) * 34, r: 70, b: 40, l: 140 }},
+                margin: {{ t: 38 * legendLines, r: 70, b: 40, l: 140 }},
                 xaxis: {{ title: {{ text: 'Count' }}, gridcolor: THEME.grid, range: [0, maxX * 1.18] }},
                 yaxis: {{ automargin: true }},
-                legend: {{ orientation: 'h', y: 1.05 + (legendLines - 1) * 0.09, x: 0 }},
+                legend: {{ orientation: 'h', x: 0, y: 1, yanchor: 'top', yref: 'container' }},
                 annotations,
             }}, CONFIG);
             wireClickThrough(`cat-${{slug}}-chart`, pt => {{

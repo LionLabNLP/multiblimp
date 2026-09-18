@@ -9,7 +9,7 @@ def create_html(sections_html, all_data_json):
             if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
         }} catch (e) {{}}
     </script>
-    <title>MultiBLiMP v2 - Agreement Overview</title>
+    <title>MultiBLiMP 2.0 - Agreement Overview</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
@@ -257,7 +257,7 @@ def create_html(sections_html, all_data_json):
     <div class="container">
         <div class="header">
             <div class="title-section">
-                <h1>MultiBLiMP v2 &mdash; Agreement Overview</h1>
+                <h1>MultiBLiMP 2.0 &mdash; Agreement Overview</h1>
                 <p class="description">
                     This page gives an overview of agreement predictability across dependency relations and languages,
                     grouped by what the subject agrees with (verb, participle, auxiliary, ...). Each panel shows the

@@ -849,6 +849,12 @@
   .feat-mini-table .role-form.role-b { color: var(--role-b); }
   .feat-mini-table td b { color: var(--sample-color, var(--keep)); font-weight: 700; }
   .feat-mini-table td .na { color: var(--text-tertiary); opacity: 0.5; }
+  /* Marks a value read from a bracketed source column (e.g. "Number[abs]"
+     shown under the plain "NUMBER" table column) as distinct from a
+     genuinely plain feature reading -- never render the two the same way,
+     down to this smallest visual unit. */
+  .feat-mini-table td .feat-bracket { color: var(--text-secondary); font-size: 0.75em; font-weight: 500; margin-left: 2px; }
+  .feat-mini-table td .feat-sep { color: var(--text-tertiary); margin: 0 3px; }
   .feat-mini-table th.decisive, .feat-mini-table td.decisive { background: var(--sample-color-light, var(--accent-light)); }
   /* "linked" rows: a role and its reinflected swapped_ counterpart, tied
      together with a matching colored rail down the row-label cell. */
@@ -1360,31 +1366,70 @@ __V2_TREE_DATA_JS__
   // (deprel/upos) used by the Hindi tree's rule checks.
   const ORDERED_FEATS = ['Number', 'Person', 'Gender', 'Case', 'Mood', 'Tense', 'Aspect', 'Voice', 'VerbForm', 'Definite', 'PronType', 'Poss', 'Reflex', 'deprel', 'upos'];
 
+  function featEntries(feats, key) {
+    // A plain "Number=..." entry and a bracketed "Number[abs]=..." one both
+    // live under the same "NUMBER" table column (one dimension, several
+    // possible sources -- see _v2_pair_feat_list's own resolve_bracket_feats
+    // for why obj/iobj/ergative-marked-subj agreement only ever has the
+    // bracketed form), but they are never the same reading: a bracket
+    // means this value came from a specific argument slot, not the token's
+    // unqualified feature. And a single token can carry *more than one*
+    // bracket of the same dimension at once (a transitive Basque verb's
+    // Number[abs] -- the object's number -- and Number[erg] -- the
+    // subject's -- both at once) -- every one of them is returned here
+    // (not just the first) so the caller can show all of them, each with
+    // its own bracket marker, rather than one arbitrarily winning the
+    // shared column.
+    const hits = feats.filter(f => {
+      const clean = f.replace(/<\/?b>/g, '');
+      return clean.startsWith(key + '=') || clean.startsWith(key + '[');
+    });
+    return hits.map(hit => {
+      const clean = hit.replace(/<\/?b>/g, '');
+      const eqIdx = clean.indexOf('=');
+      const fullKey = clean.slice(0, eqIdx);
+      const value = clean.slice(eqIdx + 1);
+      // "nan" is the pipeline's own missing-value sentinel (see viz_tree.py's
+      // "_missing" -> "nan" rewrite) -- treated the same as a feature that
+      // doesn't apply to this token at all, rather than leaking the raw
+      // Python string into the table.
+      if (value === 'nan') return null;
+      const bracket = fullKey.length > key.length ? fullKey.slice(key.length) : null;
+      return { value, bold: hit.startsWith('<b>'), bracket };
+    }).filter(e => e !== null);
+  }
+
+  // Single-entry convenience for callers that only need "is this column
+  // populated at all" (column-set computation) -- picks the first match,
+  // same as the old featEntry did before it could return several.
   function featEntry(feats, key) {
-    const hit = feats.find(f => f.replace(/<\/?b>/g, '').startsWith(key + '='));
-    if (!hit) return null;
-    const value = hit.replace(/<\/?b>/g, '').split('=')[1];
-    // "nan" is the pipeline's own missing-value sentinel (see viz_tree.py's
-    // "_missing" -> "nan" rewrite) -- treated the same as a feature that
-    // doesn't apply to this token at all (null -> the "–" placeholder below),
-    // rather than leaking the raw Python string into the table.
-    if (value === 'nan') return null;
-    return { value, bold: hit.startsWith('<b>') };
+    return featEntries(feats, key)[0] || null;
   }
 
   // Sets a minimal pair's decisive feature to its real post-swap value --
-  // create_pairs' own after_{role}_{Feat} column, emitted per pair as
-  // p.afterValue -- so the "swapped" row's other features are identical to
-  // the original by construction (the same feature list, only this one
-  // entry replaced), and the decisive value itself is real data, not a
-  // guessed opposite.
-  function applyAfterFeat(feats, decisiveFeat, afterValue) {
+  // create_pairs' own after_{role}_{Feat}[...] column, emitted per pair as
+  // p.afterValue with the exact key it was found under (plain or
+  // bracketed) as p.afterFeatKey -- so the "swapped" row's other features
+  // are identical to the original by construction (the same feature list,
+  // only this one entry replaced), the decisive value itself is real data,
+  // not a guessed opposite, and a bracketed source (e.g. "Number[abs]")
+  // renders as one -- never silently relabeled as the plain "Number" the
+  // original row's own entry might (or might not) also carry.
+  //
+  // Matches afterFeatKey EXACTLY, not just a "starts with decisiveFeat["
+  // prefix: a token can carry more than one bracket of the same base
+  // feature at once (Number[abs] AND Number[erg] on one Basque verb), and
+  // only the one actually reinflected should change -- a prefix match
+  // would also overwrite the untouched sibling (e.g. relabeling the
+  // subject's unchanged Number[erg] with the object's new value).
+  function applyAfterFeat(feats, decisiveFeat, afterValue, afterFeatKey) {
     if (afterValue == null) return feats;
+    const targetKey = afterFeatKey || decisiveFeat;
     return feats.map(f => {
       const clean = f.replace(/<\/?b>/g, '');
       const [key] = clean.split('=');
-      if (key !== decisiveFeat) return f;
-      return `<b>${key}=${afterValue}</b>`;
+      if (key !== targetKey) return f;
+      return `<b>${targetKey}=${afterValue}</b>`;
     });
   }
 
@@ -1404,11 +1449,22 @@ __V2_TREE_DATA_JS__
     const headHtml = cols.map(k => `<th${k === decisiveFeat ? ' class="decisive"' : ''}>${k}</th>`).join('');
     const rowHtml = (r) => {
       const cells = cols.map(k => {
-        const e = featEntry(r.feats, k);
+        // Every entry for this column, not just one -- a token can carry
+        // more than one bracket of the same dimension at once (see
+        // featEntries), and all of them are shown, separated, so e.g. a
+        // verb's object-agreement AND subject-agreement Number are both
+        // visible and each stays comparable to the swapped role's own
+        // entry for that exact bracket.
+        const entries = featEntries(r.feats, k);
         const isDecisive = k === decisiveFeat;
         const cls = isDecisive ? ` class="decisive${r.variant === 'swapped' ? ' swapped' : ''}"` : '';
-        if (!e) return `<td${cls}><span class="na">–</span></td>`;
-        return `<td${cls}>${e.bold ? `<b>${e.value}</b>` : e.value}</td>`;
+        if (!entries.length) return `<td${cls}><span class="na">–</span></td>`;
+        const parts = entries.map(e => {
+          const valueHtml = e.bold ? `<b>${e.value}</b>` : e.value;
+          const bracketHtml = e.bracket ? `<span class="feat-bracket">${e.bracket}</span>` : '';
+          return `${valueHtml}${bracketHtml}`;
+        });
+        return `<td${cls}>${parts.join('<span class="feat-sep"> / </span>')}</td>`;
       }).join('');
       const rowCls = r.linked ? ' class="linked-row"' : '';
       const roleCls = r.role ? ` role-${r.role}` : '';
@@ -2155,7 +2211,7 @@ __V2_TREE_DATA_JS__
         const swappedRow = {
           label: `swapped_${origRole.label}`,
           form: p.ungrammatical,
-          feats: applyAfterFeat(origRole.feats, T.decisiveFeat, p.afterValue),
+          feats: applyAfterFeat(origRole.feats, T.decisiveFeat, p.afterValue, p.afterFeatKey),
           variant: 'swapped',
           linked: true,
           role: origRole.role,

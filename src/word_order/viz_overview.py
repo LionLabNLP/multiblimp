@@ -130,7 +130,7 @@ def _panel_html(deprel: str, panel_label: str, prefix: str = "") -> str:
     # NPA's "npa/HEAD-DET_N"), so "{deprel}/index.html" is only a valid
     # href when this panel is embedded in a page that itself lives at
     # html_directory's own root. _write_npa_subpages embeds the same
-    # markup two levels deeper (html_directory/npa/_by_pair|_by_feature/),
+    # markup two levels deeper (html_directory/npa/by_pair|by_feature/),
     # so it passes prefix="../../" to walk back up to that root first --
     # see its own call site.
     url = f"{prefix}{deprel}/index.html"
@@ -206,14 +206,14 @@ def _npa_page_filename(axis: int, key: str, label: str) -> str:
 
 
 def _write_npa_subpages(npa_deprels: dict[str, dict], html_directory: Path) -> None:
-    """One page per role pair (npa/_by_pair/{ROLE1}-{ROLE2}.html) and one per
-    feature (npa/_by_feature/{Feature}.html), each a plain single grid of the
+    """One page per role pair (npa/by_pair/{ROLE1}-{ROLE2}.html) and one per
+    feature (npa/by_feature/{Feature}.html), each a plain single grid of the
     same live scatter-plot panels the main overview used to inline under a
     subheader -- reuses create_html unchanged (it only ever needed a body +
     a data blob, never assumed it was building the top-level page), scoped
     to just that page's own deprels so the embedded JSON stays small.
     """
-    for axis, subdir in ((0, "_by_pair"), (1, "_by_feature")):
+    for axis, subdir in ((0, "by_pair"), (1, "by_feature")):
         out_dir = html_directory / "npa" / subdir
         out_dir.mkdir(parents=True, exist_ok=True)
         for key, group in _npa_group_by(npa_deprels, axis).items():
@@ -242,14 +242,14 @@ def _npa_toggle_group_html(npa_deprels: dict[str, dict]) -> str:
 
     pair_cards = "\n".join(
         _npa_card_html(
-            group, f"npa/_by_pair/{_npa_page_filename(0, key, group['label'])}.html",
+            group, f"npa/by_pair/{_npa_page_filename(0, key, group['label'])}.html",
             _npa_languages_covered(npa_deprels, group["entries"]), "feature",
         )
         for key, group in sorted(by_pair.items(), key=lambda kv: kv[1]["order"])
     )
     feature_cards = "\n".join(
         _npa_card_html(
-            group, f"npa/_by_feature/{_npa_page_filename(1, key, group['label'])}.html",
+            group, f"npa/by_feature/{_npa_page_filename(1, key, group['label'])}.html",
             _npa_languages_covered(npa_deprels, group["entries"]), "role pair",
         )
         for key, group in sorted(by_feature.items(), key=lambda kv: kv[1]["order"])
@@ -276,7 +276,7 @@ def generate_html_overview_index(html_directory: str) -> None:
     group its own 3-column grid -- except Noun Phrase, which instead gets a
     role-pair/feature toggle over two card grids (see
     _npa_toggle_group_html); each card links to its own page under
-    npa/_by_pair/ or npa/_by_feature/ (see _write_npa_subpages) holding the
+    npa/by_pair/ or npa/by_feature/ (see _write_npa_subpages) holding the
     3-column scatter-plot grid that used to be inlined here.
 
     The glob is recursive ("**/index.html", excluding html_directory's own

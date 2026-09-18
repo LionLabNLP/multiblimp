@@ -3,7 +3,8 @@ def create_html(
     header_cells="", diagnostics_enabled=False,
     languages_six_json="[]", languages_binary_json="[]",
     leaf_threshold=None, agreement_label="Subject-Verb", head_role_label="head",
-    subject_label="subject", nsubj_label="nsubj",
+    subject_label="subject", nsubj_label="nsubj", overview_href="../",
+    stats_overview_href="../../index.html",
 ):
     """Dispatches to one of two full, independent page templates.
 
@@ -38,28 +39,41 @@ def create_html(
     "{nsubj_label} unk" stat's label/tooltip (the fixed/comparison role's own
     missing-feature count -- same underlying role as subject_label, just a
     separate historical wording). "nsubj" (default) is a no-op.
+
+    overview_href: relative path from this page back to decision_trees/index.html
+    for the "Overview" back-button. "../" (default) is only correct for a page
+    one directory below decision_trees/ (e.g. "svNa/index.html") -- a caller
+    nested deeper (e.g. NPA's "npa/HEAD-DET_N/index.html") must pass "../../".
+
+    stats_overview_href: relative path from this page back to the site-root
+    sva-dt stats overview (scripts/overview/render_html.py's index.html, one
+    tier further up than decision_trees/index.html) for the "Dataset
+    Overview" back-button. Same depth caveat as overview_href, one level
+    deeper -- "../../index.html" (default) for "svNa/index.html",
+    "../../../index.html" for NPA's nested pages.
     """
     if diagnostics_enabled:
         return _create_diagnostics_html(
             plot_data_six_json, plot_data_binary_json, trivial_note,
             languages_six_json, languages_binary_json, leaf_threshold,
             agreement_label, head_role_label, subject_label, nsubj_label,
+            overview_href, stats_overview_href,
         )
     return _create_classic_html(
         rows_six, rows_binary, plot_data_six_json, plot_data_binary_json,
-        trivial_note, header_cells,
+        trivial_note, header_cells, overview_href, stats_overview_href,
     )
 
 
 def _create_classic_html(
     rows_six, rows_binary, plot_data_six_json, plot_data_binary_json, trivial_note="",
-    header_cells="",
+    header_cells="", overview_href="../", stats_overview_href="../../index.html",
 ):
     return f"""<!DOCTYPE html>
     <html lang="en">
     <head>
         <meta charset="UTF-8">
-        <title>MultiBLiMP v2 - Language Overview</title>
+        <title>MultiBLiMP 2.0 - Language Overview</title>
         <link rel="preconnect" href="https://fonts.googleapis.com">
         <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
         <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
@@ -253,11 +267,17 @@ def _create_classic_html(
         <div class="container">
             <div class="header">
                 <div class="title-section">
-                    <h1>MultiBLiMP v2 - Language Overview</h1>
+                    <h1>MultiBLiMP 2.0 - Language Overview</h1>
                     <div class="subtitle">Subject-Verb agreement prediction through decision trees</div>
                 </div>
                 <div class="controls">
-                    <a href="../" class="back-btn">
+                    <a href="{stats_overview_href}" class="back-btn" title="Back to the sva-dt dataset stats overview">
+                        <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M10 12L6 8L10 4" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                        Stats Overview
+                    </a>
+                    <a href="{overview_href}" class="back-btn">
                         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
                             <path d="M10 12L6 8L10 4" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
                         </svg>
@@ -444,7 +464,8 @@ def _create_diagnostics_html(
     plot_data_six_json, plot_data_binary_json, trivial_note,
     languages_six_json, languages_binary_json, leaf_threshold=None,
     agreement_label="Subject-Verb", head_role_label="head",
-    subject_label="subject", nsubj_label="nsubj",
+    subject_label="subject", nsubj_label="nsubj", overview_href="../",
+    stats_overview_href="../../index.html",
 ):
     """Language-overview page for the SVA/agreement pipeline: same scatter
     plot, six/binary toggle and sortable columns as the classic page, plus an
@@ -473,7 +494,7 @@ def _create_diagnostics_html(
             if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
         }} catch (e) {{}}
     </script>
-    <title>MultiBLiMP v2 - {agreement_label} Agreement Overview</title>
+    <title>MultiBLiMP 2.0 - {agreement_label} Agreement Overview</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
@@ -880,7 +901,7 @@ def _create_diagnostics_html(
     <div class="container">
         <div class="header">
             <div class="title-section">
-                <h1>MultiBLiMP v2 - {agreement_label} Agreement Overview</h1>
+                <h1>MultiBLiMP 2.0 - {agreement_label} Agreement Overview</h1>
                 <div class="subtitle">
                     {agreement_label} agreement prediction through decision trees. Click a language row
                     (or the <strong>Results</strong> button) to open its create_pairs results below.
@@ -890,7 +911,13 @@ def _create_diagnostics_html(
                 </div>
             </div>
             <div class="top-controls">
-                <a href="../" class="back-btn">
+                <a href="{stats_overview_href}" class="back-btn" title="Back to the sva-dt dataset stats overview">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M10 12L6 8L10 4" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    Stats Overview
+                </a>
+                <a href="{overview_href}" class="back-btn">
                     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
                         <path d="M10 12L6 8L10 4" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
                     </svg>

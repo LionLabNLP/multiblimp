@@ -22,6 +22,7 @@ from word_order.viz_tree import tree2html
 from word_order.viz_deprel import generate_html_deprel_index
 from multiblimp.languages import lang2langcode, gblang2udlang
 from multiblimp.unimorph import load_inflector
+from multiblimp.condition_taxonomy import FEATURE_SUFFIXES
 from multiblimp.config import (
     HTML_DECISION_TREES_DIR, OUTPUT_DECISION_TREES_DIR, OUTPUT_MINIMAL_PAIRS_DIR,
     OUTPUT_DIAGNOSTICS_DIR,
@@ -35,17 +36,31 @@ from sva_trees.diagnostics import generate_diagnostics_table, write_diagnostics_
 
 random.seed(42)
 
-# Prose labels for generate_html_deprel_index's "subject"/"nsubj"/agreement-
-# pair wording, keyed by the target's own child deprel -- without this, a
-# report for obj_agr_target/iobj_agr_target (e.g. ovNa, iovNa) would say
-# "Subject-Verb agreement"/"subject"/"nsubj" throughout despite actually
-# being object or indirect-object agreement. Falls back to the "nsubj"
-# entry (both html_deprel.py params' own no-op defaults) for any deprel not
-# listed here.
-_DEPREL_REPORT_LABELS = {
-    "nsubj": ("subject", "nsubj", "Subject-Verb"),
-    "obj": ("object", "obj", "Object-Verb"),
-    "iobj": ("indirect object", "iobj", "Indirect-Object-Verb"),
+# Prose labels for generate_html_deprel_index's "subject"/"nsubj" wording,
+# keyed by the target's own child deprel -- without this, a report for
+# obj_agr_target/iobj_agr_target (e.g. ovNa, iovNa) would say "subject"/
+# "nsubj" throughout despite actually being object or indirect-object
+# agreement. Falls back to the "nsubj" entry (both html_deprel.py params'
+# own no-op defaults) for any deprel not listed here.
+_DEPREL_ROLE_LABELS = {
+    "nsubj": ("subject", "nsubj"),
+    "obj": ("object", "obj"),
+    "iobj": ("indirect object", "iobj"),
+}
+# Group label per target_id *prefix*, not deprel -- nsubj is the same
+# dependency relation regardless of whether the subject agrees with a
+# finite verb (sv) or a participle (sp), so the previous deprel-keyed
+# lookup (both under "nsubj") collapsed sp's own pages into "Subject-Verb"
+# too. Suffix (the feature -- Number/Gender/Person) comes from
+# multiblimp.condition_taxonomy's shared FEATURE_SUFFIXES, appended
+# separately (see the agreement_label assembly below) so a report actually
+# says e.g. "Subject-Participle Number" instead of leaving every condition
+# under one category indistinguishable from its siblings.
+_TARGET_PREFIX_GROUP_LABELS = {
+    "sv": "Subject-Verb",
+    "sp": "Subject-Participle",
+    "ov": "Object-Verb",
+    "iov": "Indirect-Object-Verb",
 }
 
 
@@ -241,9 +256,14 @@ class Pipeline:
                 for _, row in diagnostics_df.iterrows()
             }
 
-            subject_label, nsubj_label, agreement_label = _DEPREL_REPORT_LABELS.get(
-                deprel, ("subject", deprel, "Subject-Verb")
-            )
+            subject_label, nsubj_label = _DEPREL_ROLE_LABELS.get(deprel, ("subject", deprel))
+            # self.target_id is e.g. "svNa"/"spGa"/"ovPa" -- prefix (all but
+            # the last 2 chars) selects the group, suffix (the last 2) the
+            # feature, so this naturally covers every prefix length ("sv"/
+            # "sp"/"ov" at 2 chars, "iov" at 3) without hardcoding either.
+            group_label = _TARGET_PREFIX_GROUP_LABELS.get(self.target_id[:-2], "Subject-Verb")
+            feature_label = FEATURE_SUFFIXES.get(self.target_id[-2:], "")
+            agreement_label = f"{group_label} {feature_label}".strip()
             print("Generating deprel index for", deprel)
             generate_html_deprel_index(data_dir=decision_trees_dir,
                             html_directory=os.path.join(HTML_DECISION_TREES_DIR, self.target_id),

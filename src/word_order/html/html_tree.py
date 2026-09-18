@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 
 from ..utils import build_grew_link
-from ..process_treebank import resolve_layered_head_key
+from ..process_treebank import resolve_layered_head_key, _DEPREL_BRACKET_ALIASES
 
 
 class _NumpyEncoder(json.JSONEncoder):
@@ -1332,31 +1332,39 @@ def _v2_pair_feat_list(row, prefix, decisive_feat, deprel=None):
     # per-row bracketed key -- for every one of these dimensions, not just
     # the tree's own decisive feature.
     resolve_bracket_feats = bool(deprel) and deprel != "nsubj" and prefix.lower() == "head"
+    # Which bracketed key (if any) the decisive feature itself resolves to
+    # -- e.g. "Number[abs]" -- so it (and only it) gets bolded below, even
+    # when a sibling bracket of the same base feature (e.g. "Number[erg]",
+    # the SUBJECT's number on the same verb) is also shown alongside it.
+    decisive_layered_key = None
+    if resolve_bracket_feats and decisive_feat in _LAYERED_DISPLAY_FEATS:
+        decisive_layered_key = resolve_layered_head_key(row, row, decisive_feat, deprel)
+
     morph = []
     for col, val in row.items():
         m = pat.match(col)
         if not m or pd.isna(val) or val in (None, "None", "", "_missing", "nan"):
             continue
         feat = m.group(1)
-        if resolve_bracket_feats and feat in _LAYERED_DISPLAY_FEATS:
-            continue  # resolved below instead, from the real bracketed key
+        # feat can itself be bracketed here (pat's own group allows
+        # "[a-z]+", e.g. a raw "head_Number[erg]" column). Only the PLAIN
+        # fold-in is suppressed for these dimensions when
+        # resolve_bracket_feats -- every real bracketed column is shown
+        # (e.g. a transitive Basque verb's Number[abs] AND Number[erg]
+        # both at once, one row per argument slot it indexes), since a
+        # reader comparing this role against the swapped one needs to see
+        # every dimension that could plausibly be the decisive one, not
+        # just whichever this function alone would have picked.
+        base_feat = feat.partition("[")[0]
+        if resolve_bracket_feats and base_feat in _LAYERED_DISPLAY_FEATS and "[" not in feat:
+            continue
         entry = f"{feat}={val}"
-        if decisive_feat and feat == decisive_feat:
+        is_decisive = (decisive_feat and feat == decisive_feat) or (
+            decisive_layered_key and feat == decisive_layered_key
+        )
+        if is_decisive:
             entry = f"<b>{entry}</b>"
-        morph.append((feat, entry))
-
-    if resolve_bracket_feats:
-        for feat in _LAYERED_DISPLAY_FEATS:
-            layered_key = resolve_layered_head_key(row, row, feat, deprel)
-            if layered_key is None:
-                continue
-            value = row.get(f"head_{layered_key}")
-            if pd.isna(value):
-                continue
-            entry = f"{feat}={value}"
-            if decisive_feat and feat == decisive_feat:
-                entry = f"<b>{entry}</b>"
-            morph.append((feat, entry))
+        morph.append((base_feat, entry))
 
     morph.sort(key=lambda p: p[0])
 
@@ -1413,7 +1421,46 @@ def _v2_pair_from_row(row, raw_role_a, raw_role_b, decisive_feat):
     swapped_sen[int(idx) - 1] = swap_form
 
     href, name = _v2_pair_treebank_link(row)
+    # create_pairs.py's swap_bundle often has no plain
+    # "after_{swap_prefix}_{decisive_feat}" column at all -- only the real
+    # bracketed one(s) (e.g. "after_head_Number[abs]" for obj/iobj
+    # agreement, or "after_head_Person[subj]" for nsubj). Looking up only
+    # the plain name found NaN/missing for those rows, so the template's
+    # applyAfterFeat(..., afterValue=null) silently fell back to
+    # redisplaying the original role's features unchanged -- e.g. Basque
+    # "dizkiete" (a genuinely correct plural-object swap, confirmed by
+    # after_head_Number[abs]="PL" in the same row) showed "Number=Sing" in
+    # the swapped-form table, identical to the original "dute".
+    #
+    # Can't reuse resolve_layered_head_key as-is here: it decides the
+    # bracket from the row's *current-state* head_{feat}[...] columns, but
+    # those are frequently absent from this trimmed pairs parquet (dropped
+    # as all-NaN within this row subset) even when the swap that produced
+    # after_head_{feat}[...] succeeded via that exact bracket -- e.g. a
+    # Georgian svPa row with a real after_head_Person[subj] value but no
+    # head_Person[subj] column at all in this file. So scan the after_
+    # columns directly instead, same alias/priority order (deprel-named
+    # bracket, then the child's own Case) resolve_layered_head_key uses.
+    # after_feat_key tracks the exact key (bracketed or plain) after_value
+    # was actually found under, so the template can render "Number[abs]="
+    # rather than silently relabeling a bracketed reading as plain "Number="
+    # -- the same distinction _v2_pair_feat_list's own entries carry.
+    after_feat_key = decisive_feat
     after_value = row.get(f"after_{swap_prefix}_{decisive_feat}") if decisive_feat else None
+    if decisive_feat and pd.isna(after_value) and swap_prefix.lower() == "head":
+        for suffix in _DEPREL_BRACKET_ALIASES.get(raw_role_a, [raw_role_a]):
+            candidate_key = f"{decisive_feat}[{suffix}]"
+            candidate = row.get(f"after_{swap_prefix}_{candidate_key}")
+            if pd.notna(candidate):
+                after_value, after_feat_key = candidate, candidate_key
+                break
+        else:
+            child_case = row.get(f"{raw_role_a}_Case")
+            if pd.notna(child_case):
+                candidate_key = f"{decisive_feat}[{str(child_case).lower()}]"
+                candidate = row.get(f"after_{swap_prefix}_{candidate_key}")
+                if pd.notna(candidate):
+                    after_value, after_feat_key = candidate, candidate_key
 
     return {
         "origSentence": _v2_sentence_html(sen, highlight_idx),
@@ -1425,6 +1472,7 @@ def _v2_pair_from_row(row, raw_role_a, raw_role_b, decisive_feat):
         "ungrammatical": swap_form,
         "swapRole": swap_role,
         "afterValue": None if pd.isna(after_value) else str(after_value),
+        "afterFeatKey": None if pd.isna(after_value) else after_feat_key,
         "treebankLink": href,
         "treebankName": name,
     }

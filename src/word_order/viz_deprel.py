@@ -327,6 +327,19 @@ def generate_html_deprel_index(
     include_trivial_labels = include_trivial_labels or set()
     is_agreement = is_agreement_predictor(target_col)
 
+    # "../" only reaches decision_trees/index.html for a page one directory
+    # below decision_trees/ (e.g. "svNa/") -- NPA nests an extra "npa/"
+    # level (e.g. "npa/HEAD-DET_N/"), so its back-button needs "../../".
+    if "decision_trees" in html_path.parts:
+        depth = len(html_path.parts) - html_path.parts.index("decision_trees") - 1
+    else:
+        depth = 1
+    overview_href = "../" * depth
+    # One tier further up than overview_href: decision_trees/ itself sits
+    # directly under the site root (html/), where the sva-dt stats overview
+    # (build_stats.py/render_html.py's index.html) lives.
+    stats_overview_href = "../" * (depth + 1) + "index.html"
+
     # Detect trivial/too-small langs from placeholder HTML files;
     # placeholder page also covers "too few samples to fit a tree" for a
     # mixed label set, not just a genuine single label).
@@ -710,6 +723,8 @@ def generate_html_deprel_index(
         head_role_label=head_role_label,
         subject_label=subject_label,
         nsubj_label=nsubj_label,
+        overview_href=overview_href,
+        stats_overview_href=stats_overview_href,
     )
 
     output_path = html_path / "index.html"

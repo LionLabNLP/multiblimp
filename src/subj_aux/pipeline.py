@@ -454,7 +454,12 @@ class SubjAuxPipeline:
             leaf_threshold=self.threshold,
             pairs_dir=pairs_dir,
             diagnostics_by_lang=diagnostics_by_lang,
-            agreement_label="Subject-Auxiliary",
+            # self.feature is already the full word ("Number"/"Gender"/
+            # "Person") -- appended so every condition's own report/title
+            # says which one it is, not just "Subject-Auxiliary" for all
+            # three indistinguishably (same fix as sva_trees.pipeline's
+            # agreement_label, see its own comment for the fuller story).
+            agreement_label=f"Subject-Auxiliary {self.feature}",
             head_role_label="Aux",
         )
 

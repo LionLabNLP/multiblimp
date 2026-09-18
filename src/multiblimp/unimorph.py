@@ -116,9 +116,21 @@ def um_val_to_ud(feat: str, val: str) -> str:
     feature (a single UM tag can carry several UD features at once, e.g.
     "V.PTCP" -> {"upos": "VERB", "VerbForm": "Part"}; only look up the one
     `feat` names).
+
+    `feat` may be a bracketed column name (e.g. "Number[abs]", as
+    _rows_to_bundle passes straight from a wide-format lexicon dataframe's
+    own columns) -- UM2UD/SHORTENED_UM_VALS entries are always keyed by the
+    plain feature name only (a tag never sets "Number[abs]" specifically,
+    just "Number"), so the bracket is stripped before the lookup. Without
+    this, a bracketed column's value silently never converted at all --
+    "PL" stayed "PL" instead of becoming "Plur" -- while the exact same
+    value under a plain column converted correctly, a display
+    inconsistency between the two that's exactly backwards from the point
+    of this function.
     """
+    base_feat = feat.partition("[")[0]
     source = SHORTENED_UM_VALS if val in SHORTENED_UM_VALS else UM2UD
-    return source.get(val, {}).get(feat, val)
+    return source.get(val, {}).get(base_feat, val)
 
 
 def load_inflector(lang: str, langcode: str, unimorph_args, inflection_map: dict, 
@@ -922,7 +934,20 @@ class UnimorphInflector:
             elif ufeat in strategy:
                 um_features[ufeat] = strategy[ufeat]
             else:
-                um_features[ufeat] = UD2UM.get((ufeat, val), None)#self.val2ud_um(ufeat, val)
+                # UD2UM is keyed by plain feature names only (a UM tag never
+                # sets "Number[abs]" specifically, just "Number" -- see
+                # UD2UM_mapper.ud_feats_to_um_tags' own docstring), so a
+                # bracketed ufeat (e.g. "Number[obj]") always missed here
+                # and fell back to None -- silently excluding it from
+                # candidate matching below (partial_df_match skips any
+                # None-valued constraint entirely), for every bracketed
+                # feature indiscriminately, not just the one actually being
+                # swapped. Keyed under the original (possibly bracketed)
+                # `ufeat` still, so partial_df_match still matches it
+                # against the right column -- only the value lookup itself
+                # needs the base name.
+                base_feat = ufeat.partition("[")[0]
+                um_features[ufeat] = UD2UM.get((base_feat, val), None)#self.val2ud_um(ufeat, val)
 
         if set_defaults:
             for ufeat, val in DEFAULTS.items():
