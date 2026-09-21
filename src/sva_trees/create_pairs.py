@@ -719,26 +719,55 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
                 # languages whose UniMorph lexicon and UD treebank disagree
                 # on which bracket convention to use for the same argument
                 # (Georgian: UM's [acc]/[nom] vs the treebank's [obj]/
-                # [subj]). Only retried as a FALLBACK, when the ordinary
-                # call above found nothing at all -- forcing the override
-                # unconditionally regressed real languages (Georgian object-
-                # Person: 721 -> 30 correct_swaps) by disabling the primary
-                # lexicon's own opportunistic matching: inflect() finds
-                # candidates by matching shared context features (Tense,
-                # Aspect, ...) against lexicon rows and reading THEIR OWN
-                # value at inflection_map[0], regardless of what this row's
-                # own og_feats says under that key -- forcing a column the
+                # [subj]).
+                #
+                # Retried whenever this row's own per-row-correct key
+                # (resolve_layered_head_key, using THIS row's own child_case/
+                # deprel -- the same resolution extract_instances used to
+                # compute the agreement LABEL in the first place) differs
+                # from the language-wide default, not just when the default
+                # found nothing at all: a wrong-but-populated default is just
+                # as broken as an empty one, and silently worse, since it
+                # still produces a real word -- just for the wrong argument.
+                # Confirmed on Basque svNa: ufeat resolves to "Number[abs]"
+                # language-wide (most Basque clauses are intransitive, so
+                # the subject itself is absolutive-marked, which dominates
+                # numerically) -- but a transitive clause's ergative subject
+                # (nsubj_Case=Erg) needs "Number[erg]" instead. The [abs]
+                # attempt still succeeds (it finds the OBJECT's own real
+                # plural form, e.g. Basque "zuen" -> "zizkizuen"), so the old
+                # "only retry if swap_forms is empty" check never fired --
+                # the pair silently tested object-number, mislabeled as a
+                # subject-agreement violation, since head_Number[erg] (the
+                # subject's own real agreement marker) never actually
+                # changed.
+                #
+                # Still gated on the retry itself succeeding (`if
+                # retry_forms:` below), not on merely differing from ufeat
+                # -- this is why forcing the override unconditionally
+                # (trying it even when it CAN'T possibly help) regressed
+                # real languages before (Georgian object-Person:
+                # 721 -> 30 correct_swaps): inflect() finds candidates by
+                # matching shared context features (Tense, Aspect, ...)
+                # against lexicon rows and reading THEIR OWN value at
+                # inflection_map[0], regardless of what this row's own
+                # og_feats says under that key -- forcing a column the
                 # primary lexicon's schema doesn't even have at all (e.g.
                 # Georgian's real-UM lexicon has no "Person[obj]" column,
                 # only "Person[acc]") makes every one of its rows fail the
-                # swap_ufeat-not-in-row.keys() check, so only retry with the
-                # narrower per-row key once the unconstrained default has
-                # already had its chance and failed outright.
-                if kind == "head" and not swap_forms and target_feature:
+                # swap_ufeat-not-in-row.keys() check. Gating on divergence
+                # rather than always-override keeps that opportunistic
+                # match as the accepted result whenever the two keys happen
+                # to agree, and now ALSO whenever they diverge but the
+                # per-row retry itself comes up empty (e.g. exactly the
+                # Georgian case above) -- the original result is kept as-is
+                # in both of those cases, only ever replaced by a strictly
+                # better (per-row-correct) one.
+                if kind == "head" and target_feature:
                     layered_key = resolve_layered_head_key(
                         base_item, base_item, target_feature, child_deprel
                     )
-                    if layered_key is not None:
+                    if layered_key is not None and (not swap_forms or layered_key != ufeat):
                         retry_forms, retry_vals, retry_swap_feats = inflector.inflect(
                             form, og_feats, return_swap_feats=True,
                             swap_ufeat_override=layered_key,
