@@ -42,6 +42,15 @@
     --keep-light: #f1eafe;
     --role-a: #d97706;
     --role-b: #4f46e5;
+    /* Dedicated to "bonus" feature entries (see buildFeatTable's own
+       .bonus-feat) only -- every other color already means something else
+       on this page (trace-a..e rotate through PALETTE for up to 5 clicked
+       samples, trace-c/danger mark the actual violation, keep/trace-a is
+       plain decisive-bold, role-a is already a close amber). A genuine
+       gold, not borrowed from any of those, so a bonus entry reads as its
+       own distinct thing rather than borrowing another element's meaning. */
+    --bonus: #ca8a04;
+    --bonus-light: #fef3c7;
     --font-ui: 'DM Sans', sans-serif;
     --font-mono: 'JetBrains Mono', monospace;
     --radius: 10px;
@@ -73,6 +82,7 @@
       --ok: #4ade80; --danger: #f0605a;
       --keep: #b18cf5; --keep-light: #2a2140;
       --role-a: #f0a743; --role-b: #8b93f8;
+      --bonus: #fbbf24; --bonus-light: #3a2e0a;
       --scroll-shadow: rgba(0, 0, 0, 0.25);
     }
   }
@@ -93,6 +103,7 @@
     --ok: #4ade80; --danger: #f0605a;
     --keep: #b18cf5; --keep-light: #2a2140;
     --role-a: #f0a743; --role-b: #8b93f8;
+    --bonus: #fbbf24; --bonus-light: #3a2e0a;
     --scroll-shadow: rgba(0, 0, 0, 0.25);
   }
 
@@ -848,19 +859,41 @@
   .feat-mini-table .role-form.role-a { color: var(--role-a); }
   .feat-mini-table .role-form.role-b { color: var(--role-b); }
   .feat-mini-table td b { color: var(--sample-color, var(--keep)); font-weight: 700; }
+  /* Its own dedicated color (--bonus, defined in :root alongside the rest
+     of the palette) -- not the plain bold color above, not the decisive
+     "changed" red below: a bonus entry (see applyAfterFeat) is real new
+     information with no original value to compare against, genuinely
+     distinct from both of those, so it gets a hue nothing else on this
+     page already means. General rule here covers a bonus entry that lands
+     in a non-decisive column; the decisive.swapped-scoped one further down
+     covers the (more common) case where it shares a cell with the actual
+     decisive value. */
+  .feat-mini-table td b.bonus-feat { color: var(--bonus); }
   .feat-mini-table td .na { color: var(--text-tertiary); opacity: 0.5; }
   /* Marks a value read from a bracketed source column (e.g. "Number[abs]"
      shown under the plain "NUMBER" table column) as distinct from a
      genuinely plain feature reading -- never render the two the same way,
      down to this smallest visual unit. */
   .feat-mini-table td .feat-bracket { color: var(--text-secondary); font-size: 0.75em; font-weight: 500; margin-left: 2px; }
-  .feat-mini-table td .feat-sep { color: var(--text-tertiary); margin: 0 3px; }
+  /* One line per bracket variant of a dimension (Number[abs]/Number[erg]/...),
+     stacked instead of joined inline with a separator -- keeps every table
+     the same width regardless of how many brackets a given row carries,
+     rather than forcing horizontal scrolling on the ones that carry more. */
+  .feat-mini-table td .feat-entry-line { line-height: 1.5; }
+  .feat-mini-table td .feat-entry-line + .feat-entry-line { margin-top: 1px; }
   .feat-mini-table th.decisive, .feat-mini-table td.decisive { background: var(--sample-color-light, var(--accent-light)); }
   /* "linked" rows: a role and its reinflected swapped_ counterpart, tied
      together with a matching colored rail down the row-label cell. */
   .feat-mini-table tr.linked-row th { box-shadow: inset 3px 0 0 var(--keep); }
   .feat-mini-table td.decisive.swapped { background: var(--trace-c-light); }
   .feat-mini-table td.decisive.swapped b { color: var(--trace-c); }
+  /* Overrides the rule above for a bonus entry (see the general
+     b.bonus-feat rule near the top of this block for the full rationale)
+     sharing the decisive column's cell: real new information, not the
+     violation itself, so it must not read as "this also changed for the
+     worse" just by sitting in the same <td>. Extra class beats the plain
+     "b" selector on specificity regardless of declaration order. */
+  .feat-mini-table td.decisive.swapped b.bonus-feat { color: var(--bonus); }
 
 
   /* ── Node samples (native <details>, open by default -- unlike pairs
@@ -1363,8 +1396,12 @@ __V2_TREE_DATA_JS__
 
   // Shared, comparable features first (this is exactly what agreement is
   // about), then role-specific morphology, then dependency-structure extras
-  // (deprel/upos) used by the Hindi tree's rule checks.
-  const ORDERED_FEATS = ['Number', 'Person', 'Gender', 'Case', 'Mood', 'Tense', 'Aspect', 'Voice', 'VerbForm', 'Definite', 'PronType', 'Poss', 'Reflex', 'deprel', 'upos'];
+  // (deprel/upos) used by the Hindi tree's rule checks. lemma trails those:
+  // identifying context like deprel/upos, not agreement-relevant morphology,
+  // but the Python side (_build_feat_columns/_v2_pair_feat_list) already
+  // emits a "lemma=..." entry for every row -- it just never had a matching
+  // ORDERED_FEATS column to render into.
+  const ORDERED_FEATS = ['Number', 'Person', 'Gender', 'Case', 'Mood', 'Tense', 'Aspect', 'Voice', 'VerbForm', 'Definite', 'PronType', 'Poss', 'Reflex', 'deprel', 'upos', 'lemma'];
 
   function featEntries(feats, key) {
     // A plain "Number=..." entry and a bracketed "Number[abs]=..." one both
@@ -1381,11 +1418,11 @@ __V2_TREE_DATA_JS__
     // its own bracket marker, rather than one arbitrarily winning the
     // shared column.
     const hits = feats.filter(f => {
-      const clean = f.replace(/<\/?b>/g, '');
+      const clean = f.replace(/<\/?[bi]>/g, '');
       return clean.startsWith(key + '=') || clean.startsWith(key + '[');
     });
     return hits.map(hit => {
-      const clean = hit.replace(/<\/?b>/g, '');
+      const clean = hit.replace(/<\/?[bi]>/g, '');
       const eqIdx = clean.indexOf('=');
       const fullKey = clean.slice(0, eqIdx);
       const value = clean.slice(eqIdx + 1);
@@ -1395,7 +1432,14 @@ __V2_TREE_DATA_JS__
       // Python string into the table.
       if (value === 'nan') return null;
       const bracket = fullKey.length > key.length ? fullKey.slice(key.length) : null;
-      return { value, bold: hit.startsWith('<b>'), bracket };
+      // bold: the decisive swap value (real violation, gets the red
+      // decisive.swapped styling below). bonus: a dimension with no
+      // original value at all, only a real one on the reinflected
+      // candidate (see applyAfterFeat's own docstring) -- genuinely new
+      // information, not a violation, so it must NOT inherit that same red
+      // "this changed for the worse" color just for sharing the cell with
+      // the entry that did.
+      return { value, bold: hit.startsWith('<b>'), bonus: hit.startsWith('<i>'), bracket };
     }).filter(e => e !== null);
   }
 
@@ -1422,15 +1466,29 @@ __V2_TREE_DATA_JS__
   // only the one actually reinflected should change -- a prefix match
   // would also overwrite the untouched sibling (e.g. relabeling the
   // subject's unchanged Number[erg] with the object's new value).
-  function applyAfterFeat(feats, decisiveFeat, afterValue, afterFeatKey) {
-    if (afterValue == null) return feats;
+  //
+  // bonusAfterFeats (p.bonusAfterFeats, see html_tree.py's own
+  // _v2_pair_from_row) are APPENDED rather than patched into an existing
+  // entry: a dimension like Basque's indirect-object Number/Person slot can
+  // be entirely absent from the original word (a plain transitive form like
+  // "zuen" never marks one at all) while genuinely present on the
+  // reinflected candidate (a ditransitive form like "zioten" does) -- real
+  // data with no original entry to replace, so it has to be added as a new
+  // column instead of overwriting one.
+  function applyAfterFeat(feats, decisiveFeat, afterValue, afterFeatKey, bonusAfterFeats) {
     const targetKey = afterFeatKey || decisiveFeat;
-    return feats.map(f => {
+    const patched = afterValue == null ? feats : feats.map(f => {
       const clean = f.replace(/<\/?b>/g, '');
       const [key] = clean.split('=');
       if (key !== targetKey) return f;
       return `<b>${targetKey}=${afterValue}</b>`;
     });
+    if (!bonusAfterFeats || !bonusAfterFeats.length) return patched;
+    // <i>, not <b>: featEntries reads the wrapper tag to tell "the decisive
+    // value actually changed" (bold, gets the red decisive.swapped color)
+    // apart from "a dimension with no original value, genuinely new here"
+    // (bonus) -- see its own comment for why conflating the two was wrong.
+    return [...patched, ...bonusAfterFeats.map(f => `<i>${f}</i>`)];
   }
 
   // One row per {label, form, feats} entry x one column per feature, columns
@@ -1459,12 +1517,28 @@ __V2_TREE_DATA_JS__
         const isDecisive = k === decisiveFeat;
         const cls = isDecisive ? ` class="decisive${r.variant === 'swapped' ? ' swapped' : ''}"` : '';
         if (!entries.length) return `<td${cls}><span class="na">–</span></td>`;
+        // One line per entry, stacked vertically (feat-entry-line is
+        // block-level), not joined inline with a "/" separator -- 2-3
+        // bracket variants of the same dimension (e.g. a transitive verb's
+        // Number[abs]/Number[erg], plus a bonus Number[io] on some rows)
+        // used to force the whole table wide enough to need horizontal
+        // scrolling just to read one cell; stacking keeps every table the
+        // same width regardless of how many brackets a given row happens
+        // to carry.
         const parts = entries.map(e => {
-          const valueHtml = e.bold ? `<b>${e.value}</b>` : e.value;
+          // bonus first: a bonus entry is never also .bold (applyAfterFeat
+          // wraps each entry with exactly one of <i>/<b>), but checking it
+          // first keeps that explicit rather than relying on the ordering
+          // not mattering. class="bonus-feat" is what lets the CSS below
+          // override the red decisive.swapped color for just this entry,
+          // without touching the real decisive value sharing its cell.
+          const valueHtml = e.bonus ? `<b class="bonus-feat">${e.value}</b>`
+            : e.bold ? `<b>${e.value}</b>`
+            : e.value;
           const bracketHtml = e.bracket ? `<span class="feat-bracket">${e.bracket}</span>` : '';
-          return `${valueHtml}${bracketHtml}`;
+          return `<div class="feat-entry-line">${valueHtml}${bracketHtml}</div>`;
         });
-        return `<td${cls}>${parts.join('<span class="feat-sep"> / </span>')}</td>`;
+        return `<td${cls}>${parts.join('')}</td>`;
       }).join('');
       const rowCls = r.linked ? ' class="linked-row"' : '';
       const roleCls = r.role ? ` role-${r.role}` : '';
@@ -2211,7 +2285,7 @@ __V2_TREE_DATA_JS__
         const swappedRow = {
           label: `swapped_${origRole.label}`,
           form: p.ungrammatical,
-          feats: applyAfterFeat(origRole.feats, T.decisiveFeat, p.afterValue, p.afterFeatKey),
+          feats: applyAfterFeat(origRole.feats, T.decisiveFeat, p.afterValue, p.afterFeatKey, p.bonusAfterFeats),
           variant: 'swapped',
           linked: true,
           role: origRole.role,

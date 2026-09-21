@@ -1390,7 +1390,16 @@ def _create_diagnostics_html(
       // actually left over -- so at a glance you can see which languages
       // landed on a meaningfully low entropy in absolute terms, not just
       // which ones improved a lot relatively.
-      const maxBaseEntropy = Math.max(1, ...list.map(l => l.base));
+      //
+      // .filter(Number.isFinite): a trivial-included row (no fitted tree --
+      // see the include_trivial_labels/include_trivial_min_count handling
+      // below) has base = NaN by design (there's no real entropy to report
+      // for it). Math.max with even one NaN argument returns NaN, no matter
+      // how many real numbers are also present -- left unfiltered, a single
+      // such row poisoned this table-wide ceiling and broke Base/Reduced
+      // Entropy's colour for every OTHER language's row too, not just the
+      // trivial one's own (already-handled-separately) blank cell.
+      const maxBaseEntropy = Math.max(1, ...list.map(l => l.base).filter(Number.isFinite));
       const acc = SORT_ACCESSORS[currentSort.column];
       const sorted = [...list].sort((a, b) => {{
         const av = acc(a), bv = acc(b);

@@ -1462,6 +1462,39 @@ def _v2_pair_from_row(row, raw_role_a, raw_role_b, decisive_feat):
                 if pd.notna(candidate):
                     after_value, after_feat_key = candidate, candidate_key
 
+    # Bonus after-only features: a dimension (Number/Person/Gender, always
+    # bracketed here) with a real after_{swap_prefix}_{feat}[...] value but
+    # NO original value on this token at all -- e.g. Basque's ditransitive
+    # auxiliary paradigm fuses in a real indirect-object Person/Number slot
+    # ("zioten" has one) that a plain transitive candidate like "zuen" never
+    # carries at all. applyAfterFeat only ever patches an EXISTING entry in
+    # the original role's own feature list (matching afterFeatKey, the one
+    # decisive dimension) -- a dimension with no original entry to patch
+    # would otherwise be silently dropped instead of shown as a new,
+    # genuinely-real addition. Scoped to swap_prefix=="head" (mirrors every
+    # other bracket-aware branch above: obj/iobj/ergative-marked-nsubj
+    # agreement is what actually produces these) and to _LAYERED_DISPLAY_FEATS
+    # (Number/Person/Gender -- the only dimensions that use this bracket
+    # convention at all, see that constant's own docstring).
+    bonus_after_feats = []
+    if swap_prefix.lower() == "head":
+        seen_bonus_keys = {after_feat_key}
+        for col in row.keys():
+            m = re.match(rf"^after_{re.escape(swap_prefix)}_([A-Z][a-zA-Z]*\[[a-z]+\])$", col)
+            if not m:
+                continue
+            key = m.group(1)
+            if key in seen_bonus_keys or key.split("[")[0] not in _LAYERED_DISPLAY_FEATS:
+                continue
+            seen_bonus_keys.add(key)
+            after_val = row.get(col)
+            if pd.isna(after_val) or after_val in ("None", "", "_missing", "nan"):
+                continue  # no real swap value
+            orig_val = row.get(f"{swap_prefix}_{key}")
+            if pd.notna(orig_val) and orig_val not in ("None", "", "_missing", "nan"):
+                continue  # this token already had a real value here pre-swap
+            bonus_after_feats.append(f"{key}={after_val}")
+
     return {
         "origSentence": _v2_sentence_html(sen, highlight_idx),
         "swapSentence": _v2_sentence_html(swapped_sen, highlight_idx),
@@ -1473,6 +1506,7 @@ def _v2_pair_from_row(row, raw_role_a, raw_role_b, decisive_feat):
         "swapRole": swap_role,
         "afterValue": None if pd.isna(after_value) else str(after_value),
         "afterFeatKey": None if pd.isna(after_value) else after_feat_key,
+        "bonusAfterFeats": bonus_after_feats,
         "treebankLink": href,
         "treebankName": name,
     }
