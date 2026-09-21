@@ -13,11 +13,28 @@ def filter_head_feats(value, exclude=None, require=None):
     Use via functools.partial, e.g.:
         target.head_feats = {"VerbForm": partial(filter_head_feats, exclude="Part")}
         target.head_feats = {"VerbForm": partial(filter_head_feats, require="Part")}
+
+    Prefix match (startswith), not equality: several treebanks use a
+    finer-grained VerbForm value for a participle SUBTYPE instead of plain
+    UD "Part" — e.g. Hungarian's PartFut/PartPast/PartPres (future/past/
+    present participle) and Old Church Slavonic/Old East Slavic's PartRes
+    (resultative/l-participle), found by scanning the actual VerbForm value
+    inventory across all cached treebank data. Under a plain equality
+    check, every one of those was silently miscategorized in TWO directions
+    at once: excluded from sp*'s require="Part" filter (so these
+    genuinely-participle rows never reached the participle-agreement
+    pipeline at all), while simultaneously passing sv*/ov*/iov*'s
+    exclude="Part" filter (so the exact same rows were counted as *finite*
+    verb data there instead — the opposite of what they are). Safe to
+    prefix-match: real UD's own canonical VerbForm inventory (Conv, Fin,
+    Gdv, Ger, Inf, Part, Sup, Vnoun) has no other value sharing the "Part"
+    prefix, so this can't accidentally catch something unrelated.
     """
+    matches = isinstance(value, str) and value.startswith(exclude if exclude is not None else (require or ""))
     if exclude is not None:
-        return value != exclude
+        return not matches
     if require is not None:
-        return value == require
+        return matches
     return True
 
 
