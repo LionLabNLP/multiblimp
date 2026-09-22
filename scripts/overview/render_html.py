@@ -8,7 +8,6 @@ Run from the repo root: python scripts/overview/render_html.py
 import json
 import os
 import sys
-from collections import defaultdict
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.append(os.path.join(REPO_ROOT, "src"))
@@ -287,19 +286,6 @@ def render(data: dict) -> str:
         for g in groups_present
     )
     category_tabs_html = "".join(_category_tab_html(data, g, lang_idx, npa_lang_idx) for g in groups_present)
-
-    # Coverage shape of the local per-treebank preview (see
-    # local_treebank_samples()'s docstring) changes as local runs progress --
-    # this repo's own local decision-tree cache moved location during the
-    # html/output split, and started over near-empty there, so a hardcoded
-    # "comprehensive for X, thin elsewhere" claim goes stale the moment
-    # coverage shifts groups. Computed fresh each build instead.
-    local_group_counts = defaultdict(int)
-    for entry in data["local_treebank_pairs"]:
-        local_group_counts[entry["group"]] += 1
-    local_coverage_by_group = ", ".join(
-        f"{group}: {n}" for group, n in sorted(local_group_counts.items(), key=lambda kv: -kv[1])
-    ) or "none yet"
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -647,6 +633,26 @@ def render(data: dict) -> str:
         }}
         .picker-btn:hover {{ color: var(--text); border-color: var(--border-hover); }}
         .picker-btn.active {{ border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }}
+        /* Every per-condition picker button except "Total" itself sits
+           collapsed behind this <details>, alongside "Total" in the same
+           .picker-bar row -- closed by default so a 17-button wall isn't
+           the first thing shown, one click away when actually wanted. */
+        .cond-picker-details summary {{
+            cursor: pointer;
+            list-style: none;
+            display: inline-flex;
+            align-items: center;
+            align-self: center;
+            font-size: 0.82rem;
+            font-weight: 600;
+            color: var(--accent);
+            user-select: none;
+        }}
+        .cond-picker-details summary::-webkit-details-marker {{ display: none; }}
+        .cond-picker-details summary:hover {{ text-decoration: underline; }}
+        .cond-picker-details[open] summary .chevron::before {{ content: "▾ hide conditions"; }}
+        .cond-picker-details:not([open]) summary .chevron::before {{ content: "▸ see conditions"; }}
+        .picker-bar-inner {{ display: flex; gap: 0.5rem; flex-wrap: wrap; margin-top: 0.6rem; }}
         .picker-spark {{
             display: block;
             height: 4px;
@@ -919,19 +925,6 @@ def render(data: dict) -> str:
             color: var(--text-muted);
             margin-top: 0.6rem;
         }}
-        .preview-badge {{
-            display: inline-block;
-            vertical-align: middle;
-            font-size: 0.62rem;
-            font-weight: 700;
-            letter-spacing: 0.04em;
-            text-transform: uppercase;
-            color: var(--danger);
-            border: 1px solid var(--danger);
-            border-radius: 4px;
-            padding: 0.12rem 0.4rem;
-            margin-left: 0.5rem;
-        }}
         code {{
             background: var(--panel-bg);
             border: 1px solid var(--border);
@@ -969,7 +962,7 @@ def render(data: dict) -> str:
                         inflected forms are valid contrasts, so pairs isn't a subset of samples and the ratio
                         between them can exceed 1&times;.
                     </p>
-                    <p class="meta-line">Generated {data["generated_at"]} &middot; from this repo's own local pipeline output</p>
+                    <p class="meta-line">Generated {data["generated_at"]}</p>
                 </div>
                 <div class="header-right">
                     <a class="nav-link nav-link-lg" href="decision_trees/index.html">Decision Trees Overview &rarr;</a>
@@ -986,12 +979,12 @@ def render(data: dict) -> str:
         <div id="tab-overall" role="tabpanel" aria-labelledby="tabbtn-overall" tabindex="0">
             <nav class="jump-nav" aria-label="Jump to section">
                 <a href="#sec-kpi">Overview</a>
-                <a href="#sec-languages">Languages</a>
-                <a href="#sec-treebanks">Treebanks</a>
-                <a href="#sec-treebank-pairs">Samples by treebank</a>
-                <a href="#sec-scatter">Samples vs. pairs</a>
                 <a href="#sec-heatmap">Heatmap</a>
-                <a href="#sec-funnel">Outcomes</a>
+                <a href="#sec-scatter">Samples vs. pairs</a>
+                <a href="#sec-languages">Languages</a>
+                <a href="#sec-funnel">Diagnostics</a>
+                <a href="#sec-treebank-pairs">Samples by treebank</a>
+                <a href="#sec-treebanks">Treebanks</a>
             </nav>
 
             <div class="card" id="sec-kpi">
@@ -1018,118 +1011,6 @@ def render(data: dict) -> str:
                     </div>
                 </div>
                 {_coverage_ladder_html(totals["coverage"], "ladder-overall-chart")}
-            </div>
-
-            <div class="card" id="sec-languages">
-                <h2>Samples &amp; pairs per language</h2>
-                <p class="section-desc">
-                    Totals summed across every condition a language appears in. The chart shows the top 25 languages
-                    by minimal pairs generated; the table below covers all {totals["languages"]}.
-                </p>
-                <div id="language-chart" style="height: 560px;"></div>
-
-                <div class="toolbar" style="margin-top: 1.5rem;">
-                    <label for="lang-search" class="sr-only">Filter languages by name</label>
-                    <input class="search" id="lang-search" type="text" placeholder="Filter languages&hellip;">
-                    <span class="count-note" id="lang-count" aria-live="polite"></span>
-                </div>
-                <div class="table-scroll">
-                    <table id="language-table">
-                        <thead>
-                            <tr>
-                                {_sortable_th("name", "Language")}
-                                {_sortable_th("samples", "Samples", num=True)}
-                                {_sortable_th("pairs", "Pairs", num=True)}
-                                {_sortable_th("ratio", "Pairs/sample", num=True)}
-                                {_sortable_th("acc", "Accuracy", num=True)}
-                                {_sortable_th("n_lemma", "Lemmas", num=True)}
-                                {_sortable_th("n_conditions", "# Conditions", num=True)}
-                            </tr>
-                        </thead>
-                        <tbody id="language-tbody"></tbody>
-                    </table>
-                </div>
-            </div>
-
-            <div class="card" id="sec-treebanks">
-                <h2>Treebanks per language</h2>
-                <p class="section-desc">
-                    Every UD treebank this pipeline is eligible to draw samples from for each attempted language
-                    (some languages restrict to a specific subset; most use every treebank the UD release has for
-                    them) &mdash; an inventory of possible sources, not a per-sample or per-pair count by treebank.
-                    Includes the {len(data["totals"]["coverage"]["zero_languages"])} zero-yield languages above,
-                    since which treebank(s) a language drew from can be part of why it came back empty. For the
-                    finer, per-sample breakdown, see the preview below.
-                </p>
-                <div class="toolbar">
-                    <label for="treebank-search" class="sr-only">Filter languages by name</label>
-                    <input class="search" id="treebank-search" type="text" placeholder="Filter languages&hellip;">
-                    <span class="count-note" id="treebank-count" aria-live="polite"></span>
-                </div>
-                <div class="table-scroll">
-                    <table id="treebank-table">
-                        <thead>
-                            <tr>
-                                {_sortable_th("name", "Language")}
-                                {_sortable_th("n_treebanks", "# Treebanks", num=True)}
-                                <th scope="col">Treebanks</th>
-                            </tr>
-                        </thead>
-                        <tbody id="treebank-tbody"></tbody>
-                    </table>
-                </div>
-            </div>
-
-            <div class="card" id="sec-treebank-pairs">
-                <h2>Samples by treebank <span class="preview-badge">preview</span></h2>
-                <p class="section-desc">
-                    Which treebank each language's raw candidate samples actually came from, for every minimal pair
-                    those samples could produce &mdash; not an estimate, real per-row counts from this repo's own
-                    local pipeline runs. This is genuinely partial and evolving, not a scoped-down version of the
-                    rest of this page: coverage right now, by category &mdash; {local_coverage_by_group} &mdash;
-                    shifts as local runs progress (currently {len(data["local_treebank_pairs"])} language
-                    &times; condition combinations across {len(set(e["language"] for e in data["local_treebank_pairs"]))}
-                    languages, out of this page's full {data["totals"]["languages"]}). It also isn't the same pipeline
-                    run as the rest of this page (a separate, newer local pass) &mdash; its own sample counts can
-                    differ from the "published" samples/pairs shown everywhere else, which is exactly why both are
-                    shown side by side below rather than only one. Samples, not pairs, by treebank: nothing here
-                    flags which individual rows became accepted pairs, so a treebank's share of samples is used as
-                    the closest honest proxy for its share of that combination's pairs.
-                </p>
-                <div class="toolbar">
-                    <label for="treebank-pairs-search" class="sr-only">Filter languages by name</label>
-                    <input class="search" id="treebank-pairs-search" type="text" placeholder="Filter languages&hellip;">
-                    <span class="count-note" id="treebank-pairs-count" aria-live="polite"></span>
-                </div>
-                <div class="table-scroll">
-                    <table id="treebank-pairs-table">
-                        <thead>
-                            <tr>
-                                {_sortable_th("name", "Language")}
-                                {_sortable_th("condition", "Condition")}
-                                {_sortable_th("treebank", "Treebank")}
-                                {_sortable_th("samples", "Local samples", num=True)}
-                                {_sortable_th("share", "Share", num=True)}
-                                {_sortable_th("published_pairs", "Published pairs", num=True)}
-                                {_sortable_th("published_samples", "Published samples", num=True)}
-                            </tr>
-                        </thead>
-                        <tbody id="treebank-pairs-tbody"></tbody>
-                    </table>
-                </div>
-            </div>
-
-            <div class="card" id="sec-scatter">
-                <h2>Samples vs. minimal pairs, per language</h2>
-                <p class="section-desc">
-                    Each dot is one language, totals across every condition it appears in. The dashed line marks
-                    where pairs equal samples (1&times;) &mdash; languages well above it produced unusually many
-                    contrastive pairs per candidate; languages near the bottom found samples but little usable
-                    contrast. Both axes are log-scaled given the range from a handful of samples to hundreds of
-                    thousands; languages with zero pairs are nudged just above zero so they stay visible rather
-                    than dropping off a log axis.
-                </p>
-                <div id="scatter-chart" style="height: 460px;"></div>
             </div>
 
             <div class="card" id="sec-heatmap">
@@ -1166,6 +1047,54 @@ def render(data: dict) -> str:
                 </details>
             </div>
 
+            <div class="card" id="sec-scatter">
+                <h2>Samples vs. minimal pairs, per language</h2>
+                <p class="section-desc">
+                    Each dot is one language. The dashed line marks where pairs equal samples (1&times;) &mdash;
+                    languages well above it produced unusually many contrastive pairs per candidate; languages near
+                    the bottom found samples but little usable contrast. Both axes are log-scaled given the range
+                    from a handful of samples to hundreds of thousands; languages with zero pairs are nudged just
+                    above zero so they stay visible rather than dropping off a log axis. <b>Total</b> sums each
+                    language across every condition it appears in (dots aren't clickable here -- a language's
+                    condition breakdown lives behind its own name in the table below); open <b>see conditions</b>
+                    and pick a single one instead to see that condition alone, with dots linking to each language's
+                    own diagnostics page.
+                </p>
+                <div class="picker-bar" id="scatter-cond-picker" role="radiogroup" aria-label="Condition"></div>
+                <div id="scatter-chart" style="height: 460px;"></div>
+            </div>
+
+            <div class="card" id="sec-languages">
+                <h2>Samples &amp; pairs per language</h2>
+                <p class="section-desc">
+                    Totals summed across every condition a language appears in. The chart shows the top 25 languages
+                    by minimal pairs generated; the table below covers all {totals["languages"]}.
+                </p>
+                <div id="language-chart" style="height: 560px;"></div>
+
+                <div class="toolbar" style="margin-top: 1.5rem;">
+                    <label for="lang-search" class="sr-only">Filter languages by name</label>
+                    <input class="search" id="lang-search" type="text" placeholder="Filter languages&hellip;">
+                    <span class="count-note" id="lang-count" aria-live="polite"></span>
+                </div>
+                <div class="table-scroll">
+                    <table id="language-table">
+                        <thead>
+                            <tr>
+                                {_sortable_th("name", "Language")}
+                                {_sortable_th("samples", "Samples", num=True)}
+                                {_sortable_th("pairs", "Pairs", num=True)}
+                                {_sortable_th("ratio", "Pairs/sample", num=True)}
+                                {_sortable_th("acc", "Accuracy", num=True)}
+                                {_sortable_th("n_lemma", "Lemmas", num=True)}
+                                {_sortable_th("n_conditions", "# Conditions", num=True)}
+                            </tr>
+                        </thead>
+                        <tbody id="language-tbody"></tbody>
+                    </table>
+                </div>
+            </div>
+
             <div class="card" id="sec-funnel">
                 <h2>Where samples don't become pairs</h2>
                 <p class="section-desc">
@@ -1184,16 +1113,71 @@ def render(data: dict) -> str:
                         <tbody id="funnel-table-body"></tbody>
                     </table>
                 </details>
+            </div>
 
-                <h2 style="margin-top: 2rem;">Dropped before fitting</h2>
+            <div class="card" id="sec-treebank-pairs">
+                <h2>Samples by treebank</h2>
                 <p class="section-desc">
-                    A different, earlier population than the outcome buckets above: rows where the agreement label
-                    itself was missing (not "Yes"/"No" but undefined), so they never entered the swap-candidate
-                    pipeline at all &mdash; split by whether the head (verb/participle/auxiliary), the subject, or
-                    both were missing their feature annotation. From each condition's decision-tree fit (see the
-                    "Dropped before fitting" stats on each language's own diagnostics page).
+                    Which treebank each language's raw candidate samples actually came from, for every minimal pair
+                    those samples could produce &mdash; not an estimate, real per-row counts straight from this
+                    repo's own decision-tree cache. Coverage depends on how far each condition's own fitting run has
+                    gotten (currently {len(data["treebank_pairs"])} language &times; condition combinations across
+                    {len(set(e["language"] for e in data["treebank_pairs"]))} languages, out of this page's full
+                    {data["totals"]["languages"]}), so it can be a subset of the rest of this page rather than a
+                    full match. Samples, not pairs, by treebank: nothing here flags which individual rows became
+                    accepted pairs, so a treebank's share of samples is used as the closest honest proxy for its
+                    share of that combination's pairs.
                 </p>
-                <div id="dropped-chart" style="height: 220px;"></div>
+                <div class="toolbar">
+                    <label for="treebank-pairs-search" class="sr-only">Filter languages by name</label>
+                    <input class="search" id="treebank-pairs-search" type="text" placeholder="Filter languages&hellip;">
+                    <span class="count-note" id="treebank-pairs-count" aria-live="polite"></span>
+                </div>
+                <div class="table-scroll">
+                    <table id="treebank-pairs-table">
+                        <thead>
+                            <tr>
+                                {_sortable_th("name", "Language")}
+                                {_sortable_th("condition", "Condition")}
+                                {_sortable_th("treebank", "Treebank")}
+                                {_sortable_th("samples", "Samples", num=True)}
+                                {_sortable_th("share", "Share", num=True)}
+                                {_sortable_th("published_pairs", "Total pairs", num=True)}
+                                {_sortable_th("published_samples", "Total samples", num=True)}
+                            </tr>
+                        </thead>
+                        <tbody id="treebank-pairs-tbody"></tbody>
+                    </table>
+                </div>
+            </div>
+
+            <div class="card" id="sec-treebanks">
+                <h2>Treebanks per language</h2>
+                <p class="section-desc">
+                    Every UD treebank this pipeline is eligible to draw samples from for each attempted language
+                    (some languages restrict to a specific subset; most use every treebank the UD release has for
+                    them) &mdash; an inventory of possible sources, not a per-sample or per-pair count by treebank.
+                    Includes the {len(data["totals"]["coverage"]["zero_languages"])} zero-yield languages above,
+                    since which treebank(s) a language drew from can be part of why it came back empty. For the
+                    finer, per-sample breakdown, see above.
+                </p>
+                <div class="toolbar">
+                    <label for="treebank-search" class="sr-only">Filter languages by name</label>
+                    <input class="search" id="treebank-search" type="text" placeholder="Filter languages&hellip;">
+                    <span class="count-note" id="treebank-count" aria-live="polite"></span>
+                </div>
+                <div class="table-scroll">
+                    <table id="treebank-table">
+                        <thead>
+                            <tr>
+                                {_sortable_th("name", "Language")}
+                                {_sortable_th("n_treebanks", "# Treebanks", num=True)}
+                                <th scope="col">Treebanks</th>
+                            </tr>
+                        </thead>
+                        <tbody id="treebank-tbody"></tbody>
+                    </table>
+                </div>
             </div>
         </div>
         {category_tabs_html}
@@ -1348,6 +1332,32 @@ def render(data: dict) -> str:
             return `${{(a * 100).toFixed(1)}}%`;
         }}
 
+        // Condition-first, abbreviated axis/tab labels (e.g. "Subj–Verb
+        // Gender", not "Gender (Subject–Verb)") -- shared by the heatmap's
+        // x-axis and the scatter chart's condition tabs, so the same
+        // condition always reads the same way in both places. Only the four
+        // words the user actually asked to abbreviate are touched; Verb,
+        // Participle, and Noun Phrase stay spelled out.
+        const GROUP_ABBREV = {{
+            'Subject–Verb': 'Subj–Verb',
+            'Subject–Participle': 'Subj–Participle',
+            'Subject–Auxiliary': 'Subj–Aux',
+            'Object–Verb': 'Obj–Verb',
+            'Indirect Object–Verb': 'Iobj–Verb',
+        }};
+        // {{id: {{abbrev, full}}}} for every condition the Overall tab's own
+        // matrix already covers (the flat conditions plus the single "npa"
+        // aggregate row -- not each individual NPA subgroup, which this tab
+        // never breaks out on its own).
+        const COND_LABELS = {{}};
+        DATA.conditions.forEach(c => {{
+            const abbrevGroup = GROUP_ABBREV[c.group] || c.group;
+            COND_LABELS[c.id] = {{ abbrev: `${{abbrevGroup}} ${{c.label}}`, full: `${{c.group}} ${{c.label}}` }};
+        }});
+        function condLabel(id) {{
+            return COND_LABELS[id] || {{ abbrev: id, full: id }};
+        }}
+
         // Language name as a trigger for the cross-condition language modal
         // (openLangModal) -- always clickable, even for a row whose own
         // url is null (e.g. a zero-sample-*for-this-condition* row added by
@@ -1370,8 +1380,8 @@ def render(data: dict) -> str:
         // single link was always just "the highest-pairs condition", never
         // the full picture). Pulled together entirely from DATA already
         // embedded in the page -- matrix (per condition), language_treebanks,
-        // and local_treebank_pairs (the local-run preview, when it covers
-        // this language) -- no extra network request.
+        // and treebank_pairs (the per-sample breakdown, when it covers this
+        // language) -- no extra network request.
         function openLangModal(lang) {{
             document.getElementById('lang-modal-title').textContent = lang;
             const body = document.getElementById('lang-modal-body');
@@ -1381,17 +1391,13 @@ def render(data: dict) -> str:
             const treebankNote = treebanks.length
                 ? `<p class="section-desc">Eligible treebanks: ${{treebanks.join(', ')}}</p>` : '';
 
-            // Same local-run preview as the "Samples by treebank" section --
-            // covers a language here whenever that section covers it (see
-            // that section's own caveat copy for current coverage shape,
-            // which shifts as local runs progress).
-            const localEntries = DATA.local_treebank_pairs.filter(e => e.language === lang);
-            const localNote = localEntries.length ? `
-                <p class="section-desc" style="margin-top:1rem;">
-                    <span class="preview-badge">preview</span> Local per-treebank sample counts:
-                </p>
+            // Same per-sample breakdown as the "Samples by treebank" section
+            // -- covers a language here whenever that section covers it.
+            const sampleEntries = DATA.treebank_pairs.filter(e => e.language === lang);
+            const sampleNote = sampleEntries.length ? `
+                <p class="section-desc" style="margin-top:1rem;">Samples by treebank:</p>
                 <ul class="zero-lang-list" style="margin:0.5rem 0 0; padding-left: 1.1rem;">
-                    ${{localEntries.map(e => `<li>${{e.condition_label}}: ${{
+                    ${{sampleEntries.map(e => `<li>${{e.condition_label}}: ${{
                         Object.entries(e.samples_by_treebank).filter(([, n]) => n)
                             .map(([tb, n]) => `${{tb}} (${{n.toLocaleString()}})`).join(', ')
                     }}</li>`).join('')}}
@@ -1403,7 +1409,7 @@ def render(data: dict) -> str:
                     <p class="section-desc">No samples were found for <b>${{lang}}</b> in any of this page's
                         ${{DATA.totals.conditions}} tracked conditions.</p>
                     ${{treebankNote}}
-                    ${{localNote}}
+                    ${{sampleNote}}
                 `;
             }} else {{
                 const condRows = DATA.matrix.conditions.map((condId, j) => {{
@@ -1454,7 +1460,7 @@ def render(data: dict) -> str:
                         </table>
                     </div>
                     ${{treebankNote}}
-                    ${{localNote}}
+                    ${{sampleNote}}
                 `;
             }}
 
@@ -1635,7 +1641,7 @@ def render(data: dict) -> str:
             draw();
         }})();
 
-        // ---------- Samples by treebank, preview (sortable + searchable, overall) ----------
+        // ---------- Samples by treebank (sortable + searchable, overall) ----------
         (function renderTreebankPairsTable() {{
             let sortKey = 'samples', sortDir = -1;
             let filterText = '';
@@ -1644,7 +1650,7 @@ def render(data: dict) -> str:
             // treebank->count map; flattened here since the table itself is
             // the finest-grained view this page has anywhere.
             const rows = [];
-            DATA.local_treebank_pairs.forEach(entry => {{
+            DATA.treebank_pairs.forEach(entry => {{
                 Object.entries(entry.samples_by_treebank).forEach(([treebank, samples]) => {{
                     if (!samples) return;
                     rows.push({{
@@ -1695,10 +1701,13 @@ def render(data: dict) -> str:
         // ---------- Language x condition heatmap (overall) ----------
         (function renderHeatmap() {{
             const langs = DATA.matrix.languages;
-            const conds = DATA.matrix.conditions.map(id => {{
-                const c = DATA.conditions.find(c => c.id === id);
-                return c ? `${{c.label}} (${{c.group}})` : id;
-            }});
+            // Abbreviated axis labels (condLabel().abbrev), with the full
+            // unabbreviated name attached as a native tooltip on hover (see
+            // annotateAxisTicks below) -- built once here since x-axis tick
+            // <text> elements get re-annotated after every redraw.
+            const condMeta = DATA.matrix.conditions.map(condLabel);
+            const conds = condMeta.map(m => m.abbrev);
+            const condFullByAbbrev = Object.fromEntries(condMeta.map(m => [m.abbrev, m.full]));
             const pairsZ = DATA.matrix.pairs;
             const samplesZ = DATA.matrix.samples;
             const accZ = DATA.matrix.acc;
@@ -1755,6 +1764,22 @@ def render(data: dict) -> str:
                 const z = pairsZ.map((row, i) => row.map((v, j) => (samplesZ[i][j] === 0 && v === 0) ? null : Math.log1p(v)));
                 const maxPairs = Math.max(0, ...pairsZ.flat());
                 const tickVals = [0, 10, 100, 1000, 10000, 100000].filter(v => v < maxPairs);
+                // The real max (always appended below) lands right next to
+                // whichever "nice" power-of-ten tick precedes it whenever
+                // it's only just past that power of ten (e.g. max=100,250
+                // sits a fraction of a log1p-unit above the 100,000 tick) --
+                // close enough on this log1p-compressed colorbar that both
+                // labels render on top of each other. Drop trailing "nice"
+                // ticks that don't clear a minimum pixel gap from the real
+                // max, scaled by this colorbar's own height (len: 0.6 of
+                // the plot) rather than a fixed threshold, so it stays
+                // correct as the language count (and so plot height) varies.
+                const colorbarPxHeight = height * 0.6;
+                const totalSpan = Math.log1p(maxPairs) || 1;
+                const minTickGap = (14 / colorbarPxHeight) * totalSpan;
+                while (tickVals.length && (totalSpan - Math.log1p(tickVals[tickVals.length - 1])) < minTickGap) {{
+                    tickVals.pop();
+                }}
                 tickVals.push(maxPairs);
                 return {{
                     z, zmin: undefined, zmax: undefined,
@@ -1768,6 +1793,24 @@ def render(data: dict) -> str:
                     colorbarTitle: 'Pairs',
                     tickvals: tickVals.map(v => Math.log1p(v)), ticktext: tickVals.map(v => v.toLocaleString()),
                 }};
+            }}
+
+            // Plotly's x-axis tick labels are abbreviated (see condMeta
+            // above); this gives each one a native SVG tooltip with the
+            // full, unabbreviated condition name so it's still one hover
+            // away. Re-run after every redraw (Plotly.react can recreate
+            // the tick <text> elements) rather than once at load.
+            function annotateAxisTicks(gd) {{
+                gd.querySelectorAll('.xaxislayer-above text').forEach(textEl => {{
+                    const full = condFullByAbbrev[textEl.textContent];
+                    if (!full) return;
+                    let titleEl = textEl.querySelector('title');
+                    if (!titleEl) {{
+                        titleEl = document.createElementNS('http://www.w3.org/2000/svg', 'title');
+                        textEl.appendChild(titleEl);
+                    }}
+                    titleEl.textContent = full;
+                }});
             }}
 
             function draw(metric, sortMode) {{
@@ -1809,7 +1852,7 @@ def render(data: dict) -> str:
                     height,
                     xaxis: {{ side: 'top', tickangle: -45, automargin: true }},
                     yaxis: {{ autorange: 'reversed', automargin: true, tickfont: {{ size: 9 }} }},
-                }}, CONFIG);
+                }}, CONFIG).then(annotateAxisTicks);
             }}
 
             let currentMetric = 'pairs', currentSort = 'pairs';
@@ -1854,7 +1897,8 @@ def render(data: dict) -> str:
                 if (!details.open || populated) return;
                 populated = true;
                 document.getElementById('heatmap-table-head').innerHTML =
-                    '<th scope="col">Language</th>' + conds.map(c => `<th scope="col" class="num">${{c}}</th>`).join('');
+                    '<th scope="col">Language</th>' + condMeta.map(m =>
+                        `<th scope="col" class="num" title="${{m.full}}">${{m.abbrev}}</th>`).join('');
                 document.getElementById('heatmap-table-body').innerHTML = langs.map((lang, i) => {{
                     const cells = pairsZ[i].map((v, j) => (samplesZ[i][j] === 0 && v === 0)
                         ? '<td class="num">&mdash;</td>'
@@ -1907,95 +1951,146 @@ def render(data: dict) -> str:
                 .join('');
         }})();
 
-        // ---------- Dropped-before-fitting chart (overall) ----------
-        (function renderDropped() {{
-            const entries = Object.entries(DATA.dropped_before_fitting).sort((a, b) => a[1] - b[1]);
-            const maxVal = Math.max(...entries.map(e => e[1]), 1);
-            Plotly.newPlot('dropped-chart', [{{
-                y: entries.map(e => e[0]), x: entries.map(e => e[1]),
-                type: 'bar', orientation: 'h',
-                marker: {{ color: SERIES_COLORS.samples, cornerradius: 3 }},
-                text: entries.map(e => e[1].toLocaleString()),
-                textposition: 'outside',
-                cliponaxis: false,
-                textfont: {{ size: 10, color: THEME.text }},
-                hovertemplate: '<b>%{{y}}</b>: %{{x:,}}<extra></extra>',
-            }}], {{
-                ...BASE_LAYOUT,
-                margin: {{ t: 10, r: 70, b: 40, l: 100 }},
-                xaxis: {{ title: {{ text: 'Instances' }}, gridcolor: THEME.grid, range: [0, maxVal * 1.18] }},
-            }}, CONFIG);
-        }})();
-
         // ---------- Samples vs. pairs scatter (overall) ----------
         (function renderScatterChart() {{
-            const rows = DATA.languages.filter(l => l.samples > 0);
-            // A log axis can't plot 0, but a zero-pair language is exactly
-            // the case worth seeing (samples found, nothing usable came of
-            // them) -- nudge it to a small positive floor so it still shows,
-            // near the bottom, distinct from the nonzero cluster above it.
-            const xs = rows.map(l => l.samples);
-            const ysPlot = rows.map(l => Math.max(l.pairs, 0.5));
-            const lo = Math.min(...xs, ...ysPlot);
-            const hi = Math.max(...xs, ...ysPlot);
+            // "Total" (the default) sums each language across
+            // every condition it appears in -- l.url there is just
+            // whichever single condition happened to contribute the most
+            // pairs (see build_stats.py's matrix_url comment), which reads
+            // as an arbitrary destination for a dot representing a summed
+            // total, not that one condition -- so dots stay unclickable
+            // (hover info only) in this view. Picking one condition instead
+            // scopes every row to that exact language x condition cell,
+            // whose own url is unambiguous, so dots become real links there.
+            function rowsFor(condId) {{
+                if (!condId) {{
+                    return {{
+                        rows: DATA.languages.filter(l => l.samples > 0),
+                        withLink: false,
+                    }};
+                }}
+                const j = DATA.matrix.conditions.indexOf(condId);
+                const rows = [];
+                DATA.matrix.languages.forEach((lang, i) => {{
+                    const samples = DATA.matrix.samples[i][j];
+                    if (!samples) return;
+                    const pairs = DATA.matrix.pairs[i][j];
+                    rows.push({{
+                        name: lang, samples, pairs, ratio: pairs / samples,
+                        acc: DATA.matrix.acc[i][j], url: DATA.matrix.urls[i][j],
+                    }});
+                }});
+                return {{ rows, withLink: true }};
+            }}
 
-            const refLine = {{
-                x: [lo, hi], y: [lo, hi], mode: 'lines', type: 'scatter',
-                line: {{ color: THEME.muted, width: 1.5, dash: 'dash' }},
-                hoverinfo: 'skip', showlegend: false,
-            }};
+            function draw(condId) {{
+                const {{ rows, withLink }} = rowsFor(condId);
+                // A log axis can't plot 0, but a zero-pair language is exactly
+                // the case worth seeing (samples found, nothing usable came of
+                // them) -- nudge it to a small positive floor so it still shows,
+                // near the bottom, distinct from the nonzero cluster above it.
+                const xs = rows.map(l => l.samples);
+                const ysPlot = rows.map(l => Math.max(l.pairs, 0.5));
+                const lo = Math.min(...xs, ...ysPlot, 1);
+                const hi = Math.max(...xs, ...ysPlot, 1);
 
-            const hovertemplate = '<b>%{{text}}</b><br>Samples: %{{x:,}}<br>Pairs: %{{customdata[0]:,}}<br>Pairs/sample: %{{customdata[1]}}' +
-                '%{{customdata[2]}}<br><i>click to open &#8599;</i><extra></extra>';
-            const customdataFor = (l) => [
-                l.pairs, l.ratio === null ? '&mdash;' : l.ratio.toFixed(2) + '&times;',
-                l.acc === null ? '' : `<br>Accuracy: ${{(l.acc * 100).toFixed(1)}}%`, l.url,
-            ];
+                const refLine = {{
+                    x: [lo, hi], y: [lo, hi], mode: 'lines', type: 'scatter',
+                    line: {{ color: THEME.muted, width: 1.5, dash: 'dash' }},
+                    hoverinfo: 'skip', showlegend: false,
+                }};
 
-            // Split by whether a language has an accuracy figure at all --
-            // a continuous Plotly colorscale can't represent "no data" for
-            // some points inside one array, so those get their own flat-gray
-            // trace instead of silently defaulting to some color on the scale.
-            const withAcc = rows.filter(l => l.acc !== null);
-            const noAcc = rows.filter(l => l.acc === null);
-            const accVals = withAcc.map(l => l.acc);
-            const minAcc = accVals.length ? Math.min(...accVals) : 0;
-            const maxAcc = accVals.length ? Math.max(...accVals) : 1;
+                const hovertemplate = '<b>%{{text}}</b><br>Samples: %{{x:,}}<br>Pairs: %{{customdata[0]:,}}<br>Pairs/sample: %{{customdata[1]}}' +
+                    '%{{customdata[2]}}' + (withLink ? '<br><i>click to open &#8599;</i>' : '') + '<extra></extra>';
+                const customdataFor = (l) => [
+                    l.pairs, l.ratio === null ? '&mdash;' : l.ratio.toFixed(2) + '&times;',
+                    l.acc === null ? '' : `<br>Accuracy: ${{(l.acc * 100).toFixed(1)}}%`, l.url,
+                ];
 
-            const pointsWithAcc = {{
-                x: withAcc.map(l => l.samples), y: withAcc.map(l => Math.max(l.pairs, 0.5)),
-                mode: 'markers', type: 'scatter', text: withAcc.map(l => l.name),
-                customdata: withAcc.map(customdataFor),
-                marker: {{
-                    size: 9, opacity: 0.8, color: withAcc.map(l => l.acc),
-                    colorscale: DIVERGING_SCALE,
-                    cmin: minAcc, cmax: maxAcc,
-                    line: {{ width: 1, color: THEME.card }},
-                    colorbar: {{
-                        title: {{ text: 'Accuracy', side: 'right', font: {{ size: 10, color: THEME.muted }} }},
-                        tickmode: 'array',
-                        tickvals: [minAcc, (minAcc + maxAcc) / 2, maxAcc],
-                        ticktext: [minAcc, (minAcc + maxAcc) / 2, maxAcc].map(v => (v * 100).toFixed(0) + '%'),
-                        outlinewidth: 0, thickness: 12, len: 0.6, tickfont: {{ size: 9, color: THEME.muted }},
+                // Split by whether a language has an accuracy figure at all --
+                // a continuous Plotly colorscale can't represent "no data" for
+                // some points inside one array, so those get their own flat-gray
+                // trace instead of silently defaulting to some color on the scale.
+                const withAcc = rows.filter(l => l.acc !== null);
+                const noAcc = rows.filter(l => l.acc === null);
+                const accVals = withAcc.map(l => l.acc);
+                const minAcc = accVals.length ? Math.min(...accVals) : 0;
+                const maxAcc = accVals.length ? Math.max(...accVals) : 1;
+
+                const pointsWithAcc = {{
+                    x: withAcc.map(l => l.samples), y: withAcc.map(l => Math.max(l.pairs, 0.5)),
+                    mode: 'markers', type: 'scatter', text: withAcc.map(l => l.name),
+                    customdata: withAcc.map(customdataFor),
+                    marker: {{
+                        size: 9, opacity: 0.8, color: withAcc.map(l => l.acc),
+                        colorscale: DIVERGING_SCALE,
+                        cmin: minAcc, cmax: maxAcc,
+                        line: {{ width: 1, color: THEME.card }},
+                        colorbar: {{
+                            title: {{ text: 'Accuracy', side: 'right', font: {{ size: 10, color: THEME.muted }} }},
+                            tickmode: 'array',
+                            tickvals: [minAcc, (minAcc + maxAcc) / 2, maxAcc],
+                            ticktext: [minAcc, (minAcc + maxAcc) / 2, maxAcc].map(v => (v * 100).toFixed(0) + '%'),
+                            outlinewidth: 0, thickness: 12, len: 0.6, tickfont: {{ size: 9, color: THEME.muted }},
+                        }},
                     }},
-                }},
-                hovertemplate, showlegend: false,
-            }};
-            const pointsNoAcc = {{
-                x: noAcc.map(l => l.samples), y: noAcc.map(l => Math.max(l.pairs, 0.5)),
-                mode: 'markers', type: 'scatter', text: noAcc.map(l => l.name),
-                customdata: noAcc.map(customdataFor),
-                marker: {{ size: 9, opacity: 0.5, color: THEME.muted, line: {{ width: 1, color: THEME.card }} }},
-                hovertemplate, showlegend: false,
-            }};
+                    hovertemplate, showlegend: false,
+                }};
+                const pointsNoAcc = {{
+                    x: noAcc.map(l => l.samples), y: noAcc.map(l => Math.max(l.pairs, 0.5)),
+                    mode: 'markers', type: 'scatter', text: noAcc.map(l => l.name),
+                    customdata: noAcc.map(customdataFor),
+                    marker: {{ size: 9, opacity: 0.5, color: THEME.muted, line: {{ width: 1, color: THEME.card }} }},
+                    hovertemplate, showlegend: false,
+                }};
 
-            Plotly.newPlot('scatter-chart', [refLine, pointsWithAcc, pointsNoAcc], {{
-                ...BASE_LAYOUT,
-                margin: {{ t: 10, r: 20, b: 45, l: 55 }},
-                xaxis: {{ type: 'log', title: {{ text: 'Samples' }}, gridcolor: THEME.grid }},
-                yaxis: {{ type: 'log', title: {{ text: 'Minimal pairs' }}, gridcolor: THEME.grid }},
-            }}, CONFIG);
-            wireClickThrough('scatter-chart', pt => pt.customdata && pt.customdata[3]);
+                Plotly.react('scatter-chart', [refLine, pointsWithAcc, pointsNoAcc], {{
+                    ...BASE_LAYOUT,
+                    margin: {{ t: 10, r: 20, b: 45, l: 55 }},
+                    xaxis: {{ type: 'log', title: {{ text: 'Samples' }}, gridcolor: THEME.grid }},
+                    yaxis: {{ type: 'log', title: {{ text: 'Minimal pairs' }}, gridcolor: THEME.grid }},
+                }}, CONFIG);
+                // wireClickThrough always clears any previous listener first
+                // (see its own definition) -- passing a resolver that's
+                // always falsy for the unlinked "Total" view still
+                // correctly detaches whatever a prior condition tab wired.
+                wireClickThrough('scatter-chart', pt => withLink && pt.customdata && pt.customdata[3]);
+            }}
+
+            // Condition tabs: "Total" (the view above, always visible)
+            // plus one per condition this page's own matrix already tracks
+            // (same set as the heatmap's columns, sorted by pairs
+            // descending like every other condition picker on this page) --
+            // collapsed behind a "see conditions" disclosure by default so
+            // 17 buttons aren't the first thing shown.
+            const picker = document.getElementById('scatter-cond-picker');
+            const condButtons = [...DATA.conditions].sort((a, b) => b.pairs - a.pairs).map(c => {{
+                const {{ abbrev, full }} = condLabel(c.id);
+                return {{ id: c.id, label: abbrev, full }};
+            }});
+            picker.innerHTML = `
+                <button type="button" class="picker-btn active" role="radio" aria-checked="true" data-cond="">Total</button>
+                <details class="cond-picker-details">
+                    <summary><span class="chevron"></span></summary>
+                    <div class="picker-bar-inner">
+                        ${{condButtons.map(b => `
+                            <button type="button" class="picker-btn" role="radio" aria-checked="false"
+                                data-cond="${{b.id}}" ${{b.full ? `title="${{b.full}}"` : ''}}>${{b.label}}</button>
+                        `).join('')}}
+                    </div>
+                </details>
+            `;
+            picker.querySelectorAll('.picker-btn').forEach(btn => {{
+                btn.addEventListener('click', () => {{
+                    picker.querySelectorAll('.picker-btn').forEach(b => {{
+                        b.classList.toggle('active', b === btn);
+                        b.setAttribute('aria-checked', b === btn ? 'true' : 'false');
+                    }});
+                    draw(btn.dataset.cond);
+                }});
+            }});
+
+            draw('');
         }})();
 
         // ---------- Category tabs: condition lookup + per-condition drill-down ----------

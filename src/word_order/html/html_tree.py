@@ -1447,6 +1447,17 @@ def _v2_pair_from_row(row, raw_role_a, raw_role_b, decisive_feat):
     # -- the same distinction _v2_pair_feat_list's own entries carry.
     after_feat_key = decisive_feat
     after_value = row.get(f"after_{swap_prefix}_{decisive_feat}") if decisive_feat else None
+    # Every bracketed key this resolution considers for the SAME slot as
+    # decisive_feat (not just the one that ended up populated) -- e.g. for
+    # Basque's iobj target, both "Number[io]" (relation-named) and
+    # "Number[dat]" (the child's own Case) name the same indirect-object
+    # argument; resolve_layered_head_key tries them in that order for
+    # exactly this reason. Used below to tell the template which OTHER
+    # entries in the original role's feature list are siblings of
+    # after_feat_key -- as opposed to a genuinely different argument's own
+    # bracket (e.g. "Number[erg]", the subject) that the swap never touched
+    # and stays valid to show unchanged.
+    sibling_keys = {f"{decisive_feat}[{s}]" for s in _DEPREL_BRACKET_ALIASES.get(raw_role_a, [raw_role_a])} if decisive_feat else set()
     if decisive_feat and pd.isna(after_value) and swap_prefix.lower() == "head":
         for suffix in _DEPREL_BRACKET_ALIASES.get(raw_role_a, [raw_role_a]):
             candidate_key = f"{decisive_feat}[{suffix}]"
@@ -1458,9 +1469,15 @@ def _v2_pair_from_row(row, raw_role_a, raw_role_b, decisive_feat):
             child_case = row.get(f"{raw_role_a}_Case")
             if pd.notna(child_case):
                 candidate_key = f"{decisive_feat}[{str(child_case).lower()}]"
+                sibling_keys.add(candidate_key)
                 candidate = row.get(f"after_{swap_prefix}_{candidate_key}")
                 if pd.notna(candidate):
                     after_value, after_feat_key = candidate, candidate_key
+    if decisive_feat:
+        child_case = row.get(f"{raw_role_a}_Case")
+        if pd.notna(child_case):
+            sibling_keys.add(f"{decisive_feat}[{str(child_case).lower()}]")
+    sibling_keys.discard(after_feat_key)
 
     # Bonus after-only features: a dimension (Number/Person/Gender, always
     # bracketed here) with a real after_{swap_prefix}_{feat}[...] value but
@@ -1506,6 +1523,7 @@ def _v2_pair_from_row(row, raw_role_a, raw_role_b, decisive_feat):
         "swapRole": swap_role,
         "afterValue": None if pd.isna(after_value) else str(after_value),
         "afterFeatKey": None if pd.isna(after_value) else after_feat_key,
+        "siblingKeys": sorted(sibling_keys),
         "bonusAfterFeats": bonus_after_feats,
         "treebankLink": href,
         "treebankName": name,

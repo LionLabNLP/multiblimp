@@ -1463,9 +1463,27 @@ __V2_TREE_DATA_JS__
   // Matches afterFeatKey EXACTLY, not just a "starts with decisiveFeat["
   // prefix: a token can carry more than one bracket of the same base
   // feature at once (Number[abs] AND Number[erg] on one Basque verb), and
-  // only the one actually reinflected should change -- a prefix match
-  // would also overwrite the untouched sibling (e.g. relabeling the
-  // subject's unchanged Number[erg] with the object's new value).
+  // only the one actually reinflected -- plus any TRUE alias of that same
+  // argument slot -- should change. A blanket prefix match would also drop
+  // genuinely different, untouched arguments that just happen to share the
+  // base feature name (e.g. relabeling-away the subject's unrelated
+  // Number[erg] when only the indirect object's Number[io] was swapped).
+  //
+  // siblingKeys (p.siblingKeys, from html_tree.py's own _v2_pair_from_row)
+  // is the precise list of alias brackets create_pairs' own
+  // resolve_layered_head_key would have tried for the SAME slot as
+  // afterFeatKey (relation-named bracket first, e.g. "[io]", then the
+  // child's own Case, e.g. "[dat]") -- both naming conventions for one
+  // reading, not two (Basque iobj: [io] and [dat] both key off the same
+  // indirect object). The original role's value for a sibling was real
+  // (both conventions' sources happened to agree pre-swap), but the
+  // swap_bundle that produced afterValue only ever reports the ONE key it
+  // was actually generated under -- html_tree.py's own after_feat_key
+  // resolution stops at the first populated candidate, so a sibling with no
+  // after_ value has no verified post-swap reading at all. Carrying its
+  // pre-swap value over here would silently claim it was checked and found
+  // unchanged, when it simply was never checked -- so drop only those true
+  // aliases, not every bracket of the base feature.
   //
   // bonusAfterFeats (p.bonusAfterFeats, see html_tree.py's own
   // _v2_pair_from_row) are APPENDED rather than patched into an existing
@@ -1475,14 +1493,16 @@ __V2_TREE_DATA_JS__
   // reinflected candidate (a ditransitive form like "zioten" does) -- real
   // data with no original entry to replace, so it has to be added as a new
   // column instead of overwriting one.
-  function applyAfterFeat(feats, decisiveFeat, afterValue, afterFeatKey, bonusAfterFeats) {
+  function applyAfterFeat(feats, decisiveFeat, afterValue, afterFeatKey, bonusAfterFeats, siblingKeys) {
     const targetKey = afterFeatKey || decisiveFeat;
+    const dropKeys = new Set(siblingKeys || []);
     const patched = afterValue == null ? feats : feats.map(f => {
-      const clean = f.replace(/<\/?b>/g, '');
+      const clean = f.replace(/<\/?[bi]>/g, '');
       const [key] = clean.split('=');
-      if (key !== targetKey) return f;
-      return `<b>${targetKey}=${afterValue}</b>`;
-    });
+      if (key === targetKey) return `<b>${targetKey}=${afterValue}</b>`;
+      if (key === decisiveFeat || dropKeys.has(key)) return null;
+      return f;
+    }).filter(f => f !== null);
     if (!bonusAfterFeats || !bonusAfterFeats.length) return patched;
     // <i>, not <b>: featEntries reads the wrapper tag to tell "the decisive
     // value actually changed" (bold, gets the red decisive.swapped color)
@@ -2285,7 +2305,7 @@ __V2_TREE_DATA_JS__
         const swappedRow = {
           label: `swapped_${origRole.label}`,
           form: p.ungrammatical,
-          feats: applyAfterFeat(origRole.feats, T.decisiveFeat, p.afterValue, p.afterFeatKey, p.bonusAfterFeats),
+          feats: applyAfterFeat(origRole.feats, T.decisiveFeat, p.afterValue, p.afterFeatKey, p.bonusAfterFeats, p.siblingKeys),
           variant: 'swapped',
           linked: true,
           role: origRole.role,

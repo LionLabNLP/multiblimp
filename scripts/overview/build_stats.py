@@ -1,19 +1,22 @@
 """Aggregate samples/minimal-pair counts across every condition into a
 single JSON blob, consumed by overview.html.
 
-Source: this repo's own local html/decision_trees/ output, read straight
-from each condition's rendered index.html LANGUAGES.six blob (the same
+Source: this repo's own html/decision_trees/ output, read straight from
+each condition's rendered index.html LANGUAGES.six blob (the same
 per-language diagnostics dict sva_trees.diagnostics.diagnostics_row_to_json
 produces -- nRaw/nPairs/diag.buckets map directly onto this script's
 samples/pairs/bucket fields). Conditions/subgroups are discovered from
 whatever's actually on disk under HTML_DECISION_TREES_DIR (see
-_discover_local_conditions), not a hardcoded list, so a newly (re)built
-condition shows up automatically. See scripts/generate_html_indexes.py to
-(re)build those pages from cached model/pairs data without refitting.
+_discover_conditions), not a hardcoded list, so a newly (re)built condition
+shows up automatically -- the same tree whether that's this checkout or the
+one the site deploys from, since both are built by the same pipeline. See
+scripts/generate_html_indexes.py to (re)build those pages from cached
+model/pairs data without refitting.
 
 Run from the repo root: python scripts/overview/build_stats.py
 """
 import json
+import math
 import os
 import re
 import sys
@@ -35,7 +38,7 @@ from multiblimp.condition_taxonomy import (  # noqa: E402
 )
 from multiblimp.languages import get_lang_treebanks  # noqa: E402
 from multiblimp.config import (  # noqa: E402
-    OUTPUT_DECISION_TREES_DIR, OUTPUT_OVERVIEW_DIR, HTML_DECISION_TREES_DIR,
+    OUTPUT_OVERVIEW_DIR, HTML_DECISION_TREES_DIR, OUTPUT_DECISION_TREES_DIR,
 )
 
 OUT_PATH = os.path.join(OUTPUT_OVERVIEW_DIR, "stats.json")
@@ -45,15 +48,12 @@ RESOURCE_DIR = os.path.join(REPO_ROOT, "resources")
 # Where the real per-language pages/index.html this script reads live --
 # tree2html/generate_html_deprel_index's own output, same tree the site
 # deploys from.
-LOCAL_HTML_ROOT = HTML_DECISION_TREES_DIR
+HTML_ROOT = HTML_DECISION_TREES_DIR
 
-# This repo's own local pipeline output (model/pairs caches, not the
-# rendered HTML above). Used for exactly one thing: the raw per-sample
-# "treebank" column LANGUAGES.six never carries (see
-# local_treebank_samples() below). Coverage here is real but partial and
-# shifts as local runs progress -- so anything built from
-# it must say so, not imply the same completeness as the rest of this page.
-LOCAL_ROOT = OUTPUT_DECISION_TREES_DIR
+# Model/pairs-cache output (not the rendered HTML above) -- used for exactly
+# one thing: the raw per-sample "treebank" column LANGUAGES.six never
+# carries (see treebank_samples() below).
+PARQUET_ROOT = OUTPUT_DECISION_TREES_DIR
 
 # The rendered pages themselves are inconsistent about this one language's
 # name across condition dumps (ASCII "aa" digraph vs. the real "å"), which
@@ -110,6 +110,22 @@ def _load_languages_six(index_html_path: str) -> list[dict] | None:
     return json.loads(match.group(1))
 
 
+def _nan_to_none(x):
+    # viz_deprel.py deliberately emits a real float("nan") (not None) for a
+    # language's accuracy when no tree was fit for it at all -- a sentinel
+    # its own per-language JS table already special-cases into a blank cell
+    # (see that file's own comment on why: None would crash a ":.4f"
+    # f-string, but NaN prints harmlessly either way). This script's
+    # aggregation only ever checked "is not None" to skip a missing
+    # accuracy, which NaN sails straight past -- poisoning any weighted
+    # average it's summed into (nan * n is nan, and nan propagates through
+    # everything downstream, including json.dumps emitting the literal
+    # non-standard `NaN` token that then renders as the text "NaN%" in the
+    # page). Normalized to real None right at ingestion, once, rather than
+    # teaching every downstream sum/format call to also check isnan().
+    return None if isinstance(x, float) and math.isnan(x) else x
+
+
 def _record(entry: dict, cond: str, subgroup: str, dir_rel: str) -> dict:
     diag = entry.get("diag") or {}
     buckets = {
@@ -127,11 +143,11 @@ def _record(entry: dict, cond: str, subgroup: str, dir_rel: str) -> dict:
         # None (not 0) when the site never reports one, so weighted averages
         # below can skip it rather than silently treating "no accuracy" as
         # "zero accuracy".
-        acc=entry.get("acc"),
+        acc=_nan_to_none(entry.get("acc")),
         # langUrl is just the language page's bare filename (e.g.
         # "German.html"), relative to its own condition's index.html.
         # dir_rel is that condition's directory relative to
-        # LOCAL_HTML_ROOT (html/decision_trees), e.g. "svNa" or NPA's
+        # HTML_ROOT (html/decision_trees), e.g. "svNa" or NPA's
         # "npa/HEAD-DET_N" -- joined here into an actual path from
         # html/index.html (this page's own location) to the real .html
         # file on disk, so links work when browsing html/ directly.
@@ -173,21 +189,21 @@ def _tried_languages(dir_path: str) -> set[str]:
     }
 
 
-def _discover_local_conditions() -> tuple[list[str], list[str]]:
+def _discover_conditions() -> tuple[list[str], list[str]]:
     """(flat_condition_ids, npa_subgroup_ids) -- every condition/subgroup
-    that currently has a real index.html under LOCAL_HTML_ROOT, discovered
+    that currently has a real index.html under HTML_ROOT, discovered
     fresh each build rather than a hardcoded list, so a newly (re)built
     condition (see scripts/generate_html_indexes.py) shows up here without
     editing this file."""
-    if not os.path.isdir(LOCAL_HTML_ROOT):
+    if not os.path.isdir(HTML_ROOT):
         return [], []
 
     flat = sorted(
-        entry for entry in os.listdir(LOCAL_HTML_ROOT)
+        entry for entry in os.listdir(HTML_ROOT)
         if entry != "npa"
-        and os.path.exists(os.path.join(LOCAL_HTML_ROOT, entry, "index.html"))
+        and os.path.exists(os.path.join(HTML_ROOT, entry, "index.html"))
     )
-    npa_root = os.path.join(LOCAL_HTML_ROOT, "npa")
+    npa_root = os.path.join(HTML_ROOT, "npa")
     npa_subs = sorted(
         entry for entry in os.listdir(npa_root)
         if os.path.exists(os.path.join(npa_root, entry, "index.html"))
@@ -196,10 +212,10 @@ def _discover_local_conditions() -> tuple[list[str], list[str]]:
 
 
 def collect_records() -> tuple[list[dict], dict[str, set[str]]]:
-    flat_conditions, npa_subgroups = _discover_local_conditions()
+    flat_conditions, npa_subgroups = _discover_conditions()
     if not flat_conditions and not npa_subgroups:
         raise FileNotFoundError(
-            f"No condition index.html pages found under {LOCAL_HTML_ROOT} -- "
+            f"No condition index.html pages found under {HTML_ROOT} -- "
             "run scripts/generate_html_indexes.py (or a pipeline's own "
             "fit script) first."
         )
@@ -207,14 +223,14 @@ def collect_records() -> tuple[list[dict], dict[str, set[str]]]:
     records = []
     tried = {}
     for cond in flat_conditions:
-        cond_dir = os.path.join(LOCAL_HTML_ROOT, cond)
+        cond_dir = os.path.join(HTML_ROOT, cond)
         tried[cond] = _tried_languages(cond_dir)
         six = _load_languages_six(os.path.join(cond_dir, "index.html"))
         if six:
             records += [_record(e, cond, cond, cond) for e in six]
 
     for sub in npa_subgroups:
-        sub_dir = os.path.join(LOCAL_HTML_ROOT, "npa", sub)
+        sub_dir = os.path.join(HTML_ROOT, "npa", sub)
         tried[sub] = _tried_languages(sub_dir)
         six = _load_languages_six(os.path.join(sub_dir, "index.html"))
         if six:
@@ -223,20 +239,20 @@ def collect_records() -> tuple[list[dict], dict[str, set[str]]]:
     return records, tried
 
 
-def _local_parquet_paths(cond: str, is_npa_sub: bool) -> list[str]:
+def _parquet_paths(cond: str, is_npa_sub: bool) -> list[str]:
     # Flat conditions nest one level deeper than npa's own convention --
     # decision_trees/{cond}/{cond}_{deprel}/*.parquet vs.
     # decision_trees/npa/{subgroup}/*.parquet -- both observed directly on
-    # disk (see LOCAL_ROOT's comment). The nested deprel varies by condition
-    # family (svNa -> nsubj, ovNa -> obj, iovNa -> iobj, ...), so it's read
-    # off disk rather than assumed; a condition dir with more than one
-    # subdirectory (shouldn't happen -- one deprel per target_id by
+    # disk (see PARQUET_ROOT's comment). The nested deprel varies by
+    # condition family (svNa -> nsubj, ovNa -> obj, iovNa -> iobj, ...), so
+    # it's read off disk rather than assumed; a condition dir with more than
+    # one subdirectory (shouldn't happen -- one deprel per target_id by
     # convention) uses whichever sorts first rather than guessing further.
     if is_npa_sub:
-        pattern = os.path.join(LOCAL_ROOT, "npa", cond, "*.parquet")
+        pattern = os.path.join(PARQUET_ROOT, "npa", cond, "*.parquet")
         return sorted(glob(pattern))
 
-    cond_dir = os.path.join(LOCAL_ROOT, cond)
+    cond_dir = os.path.join(PARQUET_ROOT, cond)
     subdirs = sorted(
         d for d in glob(os.path.join(cond_dir, "*")) if os.path.isdir(d)
     )
@@ -245,11 +261,16 @@ def _local_parquet_paths(cond: str, is_npa_sub: bool) -> list[str]:
     return sorted(glob(os.path.join(subdirs[0], "*.parquet")))
 
 
-def local_treebank_samples() -> list[dict]:
-    """Per-sample treebank attribution from this repo's own local pipeline
-    output (LOCAL_ROOT) -- the one thing LANGUAGES.six never carries. Real
+def treebank_samples() -> list[dict]:
+    """Per-sample treebank attribution from this repo's own decision-tree
+    cache (PARQUET_ROOT) -- the one thing LANGUAGES.six never carries. Real
     counts, not estimates: each row in one of these parquet files is one raw
     candidate sample, tagged with the exact UD treebank it came from.
+
+    Only covers whichever language x condition combinations already have a
+    cached parquet on disk -- not necessarily every combination this page's
+    other sections report on, since that depends on how far the pipeline's
+    own fitting run has gotten for each condition.
 
     Deliberately reports *samples* by treebank, not *pairs* by treebank --
     there's no per-row flag distinguishing "became an accepted minimal pair"
@@ -261,11 +282,11 @@ def local_treebank_samples() -> list[dict]:
     a treebank's share of samples is a treebank's share of where the pairs
     *could* have come from.
     """
-    flat_conditions, npa_subgroups = _discover_local_conditions()
+    flat_conditions, npa_subgroups = _discover_conditions()
     out = []
     for cond in flat_conditions:
         group, label = FLAT_CONDITION_META.get(cond, ("Other", cond))
-        for path in _local_parquet_paths(cond, is_npa_sub=False):
+        for path in _parquet_paths(cond, is_npa_sub=False):
             lang = NAME_ALIASES.get(
                 os.path.splitext(os.path.basename(path))[0].replace("_", " "),
                 os.path.splitext(os.path.basename(path))[0].replace("_", " "),
@@ -276,7 +297,7 @@ def local_treebank_samples() -> list[dict]:
                 "group": group, "samples_by_treebank": counts.to_dict(), "total_samples": int(counts.sum()),
             })
     for sub in npa_subgroups:
-        for path in _local_parquet_paths(sub, is_npa_sub=True):
+        for path in _parquet_paths(sub, is_npa_sub=True):
             lang = NAME_ALIASES.get(
                 os.path.splitext(os.path.basename(path))[0].replace("_", " "),
                 os.path.splitext(os.path.basename(path))[0].replace("_", " "),
@@ -367,11 +388,6 @@ def build():
     npa_matrix_top_pairs = defaultdict(lambda: -1)
     # global funnel across every bucket-labeled record
     funnel = defaultdict(int)
-    # Rows dropped before the decision tree was even fit (missing feature
-    # annotation on the head, the subject, or both) -- a different, earlier
-    # population than `funnel` above, which is scoped to attempted swaps
-    # only. See _record()'s head_unk/nsubj_unk/both_unk comment.
-    dropped_before_fitting = defaultdict(int)
     # NPA subgroup-level detail (its own table, since it's several role
     # pairs x ~50-90 languages each)
     npa_sub_agg = defaultdict(lambda: {
@@ -412,9 +428,6 @@ def build():
         for bucket, n in r["buckets"].items():
             funnel[BUCKET_LABELS.get(bucket, bucket)] += n
 
-        dropped_before_fitting["head_unk"] += r["head_unk"]
-        dropped_before_fitting["nsubj_unk"] += r["nsubj_unk"]
-        dropped_before_fitting["both_unk"] += r["both_unk"]
         c["head_unk"] += r["head_unk"]; c["nsubj_unk"] += r["nsubj_unk"]; c["both_unk"] += r["both_unk"]
 
         if cond == "npa":
@@ -517,19 +530,17 @@ def build():
     # -- an inventory (which treebanks the pipeline is *eligible* to draw
     # from for this language), not a per-sample/per-pair count. LANGUAGES.six
     # never carries a per-sample treebank field (it only shows up in a
-    # handful of illustrative example rows, not a full accounting);
-    # local_treebank_samples() below fills that gap straight from the
-    # per-language parquet caches instead.
+    # handful of illustrative example rows, not a full accounting).
     all_tried_langs = set().union(*tried_by_key.values()) if tried_by_key else set()
     lang_treebanks_raw = get_lang_treebanks(RESOURCE_DIR)
 
-    # Cross-referenced against this same run's own published pairs/samples
-    # for that exact language x condition, so the UI can show "these N
-    # locally-sampled rows are part of the M samples/P pairs already
-    # published for this combo" instead of the local figure floating
-    # unanchored from the rest of the page's numbers.
-    local_treebank_pairs = local_treebank_samples()
-    for entry in local_treebank_pairs:
+    # Cross-referenced against this same page's own totals for that exact
+    # language x condition, so the UI can show "these N sampled rows are
+    # part of the M samples/P pairs already shown for this combo" instead of
+    # this breakdown's own figures floating unanchored from the rest of the
+    # page's numbers.
+    treebank_pairs = treebank_samples()
+    for entry in treebank_pairs:
         is_sub = entry["condition_id"].startswith("npa/")
         key = entry["condition_id"].split("/", 1)[1] if is_sub else entry["condition_id"]
         pairs_lookup = npa_matrix_pairs if is_sub else matrix_pairs
@@ -538,10 +549,12 @@ def build():
         entry["published_samples"] = samples_lookup.get((entry["language"], key), 0)
 
     def dropped_dict(agg: dict) -> dict:
-        # Same shape/labels as the top-level "dropped_before_fitting" below,
-        # scoped to one condition/subgroup's own agg dict instead of the
-        # whole corpus -- lets a category tab show its own breakdown rather
-        # than only ever the all-10-conditions-combined global one.
+        # Rows dropped before the decision tree was even fit (missing
+        # feature annotation on the head, the subject, or both) -- a
+        # different, earlier population than `funnel`, which is scoped to
+        # attempted swaps only. See _record()'s head_unk/nsubj_unk/both_unk
+        # comment. Scoped to one condition/subgroup's own agg dict, for that
+        # category tab's own breakdown.
         return {
             "Head unknown": agg["head_unk"],
             "Subject unknown": agg["nsubj_unk"],
@@ -601,10 +614,11 @@ def build():
             }
             for lang in sorted(all_tried_langs)
         ],
-        # Preview, not a full breakdown -- see local_treebank_samples()'s
-        # docstring. Only the language x condition combinations this repo's
-        # own local pipeline has already processed appear here at all.
-        "local_treebank_pairs": local_treebank_pairs,
+        # Only the language x condition combinations that already have a
+        # cached parquet on disk appear here at all -- see
+        # treebank_samples()'s own docstring for why that can be a subset of
+        # this page's full coverage.
+        "treebank_pairs": treebank_pairs,
         "matrix": {
             "languages": languages_sorted,
             "conditions": conditions,
@@ -664,14 +678,6 @@ def build():
             ],
         },
         "funnel": dict(sorted(funnel.items(), key=lambda kv: -kv[1])),
-        # Separate from `funnel` -- see _record()'s comment. All-10-
-        # conditions-combined; each condition/subgroup below also carries
-        # its own "dropped_before_fitting" at that narrower scope.
-        "dropped_before_fitting": {
-            "Head unknown": dropped_before_fitting["head_unk"],
-            "Subject unknown": dropped_before_fitting["nsubj_unk"],
-            "Both unknown": dropped_before_fitting["both_unk"],
-        },
         "npa_subgroups": [
             {
                 "id": sub,
