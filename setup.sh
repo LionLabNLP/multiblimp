@@ -12,8 +12,7 @@ git clone https://github.com/LionLabNLP/um2ud_annotation.git resources/um2ud_ann
   bash download_afrisud.sh
   cd ud-treebanks-v2.18/UD_Polish-LFG
   for f in train dev test; do
-    python3 ../../fix_polish_subgender_animacy.py pl_lfg-ud-$f.conllu pl_lfg-ud-$f.fixed.conllu \
-      && mv pl_lfg-ud-$f.fixed.conllu pl_lfg-ud-$f.conllu
+    python3 ../../fix_polish_subgender_animacy.py pl_lfg-ud-$f.conllu
   done
 )
 

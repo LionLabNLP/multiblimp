@@ -46,13 +46,13 @@ Animacy on tokens 1, 2 (Masc3 -> Inan); SubGender removed. XPOS unchanged.
 
 Usage:
   python3 fix_polish_subgender_animacy.py --check infile.conllu   # report only
+  python3 fix_polish_subgender_animacy.py infile.conllu             # apply changes in place
   python3 fix_polish_subgender_animacy.py infile.conllu outfile.conllu  # apply changes and write to outfile.conllu
-  
+
 
 Apply to all three LFG splits:
   for f in train dev test; do
-      python3 fix_polish_subgender_animacy.py \
-          pl_lfg-ud-$f.conllu pl_lfg-ud-$f.fixed.conllu
+      python3 fix_polish_subgender_animacy.py pl_lfg-ud-$f.conllu
   done
 """
 import argparse
@@ -111,14 +111,12 @@ if __name__ == "__main__":
     )
     parser.add_argument("in_path")
     parser.add_argument("out_path", nargs="?", default=None,
-                         help="Output path. Omit with --check to only report counts.")
+                         help="Output path. Omit to overwrite in_path (or, with --check, to only report counts).")
     parser.add_argument("--check", action="store_true",
                          help="Report how many tokens would change; write nothing.")
     args = parser.parse_args()
 
-    if not args.check and not args.out_path:
-        sys.exit("out_path is required unless --check is given")
-
-    stats = process_file(args.in_path, None if args.check else args.out_path)
+    out_path = None if args.check else (args.out_path or args.in_path)
+    stats = process_file(args.in_path, out_path)
     print(f"{args.in_path}: {stats['changed']}/{stats['tokens']} tokens gained Animacy"
-          + (" (--check: nothing written)" if args.check else f" -> {args.out_path}"))
+          + (" (--check: nothing written)" if args.check else f" -> {out_path}"))

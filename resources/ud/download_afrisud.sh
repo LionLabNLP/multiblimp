@@ -12,6 +12,7 @@ urls=(
 for url in "${urls[@]}"; do
   curl -O "$url"
 done
+shopt -s nullglob
 for f in *.tgz *.tar; do
   dir="${f%.tgz}"
   dir="${dir%.tar}"
