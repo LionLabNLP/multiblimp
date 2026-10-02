@@ -7,6 +7,7 @@ from typing import *
 import pandas as pd
 from tqdm import tqdm
 
+from .agreement_pipeline_utils import match_casing
 from .filters import UDFilter
 from .filters.utils import set_minimal_pairs
 from .inflection_maps import InflectionMap
@@ -247,7 +248,11 @@ class Pipeline:
         inflector,
         context_inflector,
     ) -> Tuple[str, Dict[str, str]]:
-        item[f"swap_{self.take_features_from}"] = swap_form
+        # match_casing, not swap_form itself -- swap_form stays the raw
+        # lexicon-cased string used for every lookup below (get_form_features
+        # is a case-sensitive lexicon lookup); only what lands in item/
+        # wrong_item is recased for display.
+        item[f"swap_{self.take_features_from}"] = match_casing(form, swap_form)
 
         if swap_form == form:
             return "same_forms", item
@@ -302,13 +307,13 @@ class Pipeline:
                     return "undefined_features", item
             elif len(feature_vals & swap_feature_vals) > 0:
                 wrong_item = dict(item)
-                wrong_item[f"swap_{self.take_features_from}"] = swap_form
+                wrong_item[f"swap_{self.take_features_from}"] = match_casing(form, swap_form)
                 wrong_item["feature_vals"] = feature_key
 
                 return "same_features", wrong_item
             else:
                 wrong_item = dict(item)
-                wrong_item[f"swap_{self.take_features_from}"] = swap_form
+                wrong_item[f"swap_{self.take_features_from}"] = match_casing(form, swap_form)
                 wrong_item["feature_vals"] = feature_key
 
                 return "undefined_features", wrong_item

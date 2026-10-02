@@ -146,7 +146,11 @@ def create_unimorph_from_ud(
             upos = token["upos"]
             lemma = token["lemma"]
 
-            if skip_no_lemma and lemma == "_":
+            # "_" is UD's missing value; some treebanks (German HDT) put a
+            # placeholder lemma ("unknown", "-") on tokens they couldn't lemmatize
+            if skip_no_lemma and (
+                lemma == "_" or (lemma in ("unknown", "-") and form.lower() != lemma)
+            ):
                 continue
 
             if skip_prep_lemma and "_" in lemma:

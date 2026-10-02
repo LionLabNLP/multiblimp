@@ -1,7 +1,7 @@
 """Naming convention shared by every agreement condition this project runs:
 sv/sp/sa + Na/Ga/Pa for subject-verb/participle/auxiliary agreement,
-ov + Na/Ga/Pa for verb-object agreement, iov + Na/Ga/Pa for indirect-object-
-verb agreement (e.g. "svNa" = Subject-Verb, Number), and
+ov/op/oa for object-verb/participle/auxiliary, iov/iop/ioa for indirect-
+object-verb/participle/auxiliary agreement (e.g. "svNa" = Subject-Verb, Number), and
 npa/{ROLE1}-{ROLE2}_{FeatAbbrev} for noun-phrase agreement role pairs
 (e.g. "npa/HEAD-DET_N" = Head-Determiner Number). Both
 scripts/overview/build_stats.py (the stats-overview aggregator) and
@@ -16,7 +16,11 @@ GROUP_PREFIXES = {
     "sp": "Subject–Participle",
     "sa": "Subject–Auxiliary",
     "ov": "Object–Verb",
+    "op": "Object–Participle",
+    "oa": "Object–Auxiliary",
     "iov": "Indirect Object–Verb",
+    "iop": "Indirect Object–Participle",
+    "ioa": "Indirect Object–Auxiliary",
 }
 FEATURE_SUFFIXES = {
     "Na": "Number",
@@ -50,11 +54,11 @@ FLAT_CONDITION_META = {
 
 
 def npa_subgroup_label(subgroup: str) -> str:
-    # e.g. "HEAD-DET_N" -> "Head–Determiner Number"
+    # e.g. "HEAD-DET_N" -> "Head–Determiner (Number)"
     try:
         roles, feat = subgroup.split("_", 1)
         role1, role2 = roles.split("-")
         role_label = f"{NPA_ROLE_PROSE.get(role1, role1)}–{NPA_ROLE_PROSE.get(role2, role2)}"
-        return f"{role_label} {NPA_FEATURE_NAMES.get(feat, feat)}"
+        return f"{role_label} ({NPA_FEATURE_NAMES.get(feat, feat)})"
     except ValueError:
         return subgroup

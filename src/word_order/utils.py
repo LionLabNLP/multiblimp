@@ -15,7 +15,7 @@ MAX_TREEBANK_LEN = 30_000
 # A predictor_var can name an agreement relation two ways: SVA's own
 # "head_{child_deprel}_{Feature}_agreement" (e.g.
 # "head_nsubj_Number_agreement"), or the pairwise "{Role1}-{Role2}_{Feature}"
-# convention (e.g. NPA's "HEAD-DET_Number" -- "Yes" there means "HEAD-DET
+# convention (e.g. NPA's "HEAD-DET_Number" -- "yes" there means "HEAD-DET
 # Number agreement holds", the same underlying concept, just named
 # differently). SVA's own convention never contains "-", so checking for the
 # pairwise pattern first is unambiguous. Shared between word_order.viz_tree
@@ -82,6 +82,11 @@ def build_grew_link(treebank, sent_id, form_values, link_text=None) -> str | Non
     sva_trees/create_pairs.py's example tables, which both need this exact
     query construction.
 
+    form_values are expected to be the untouched CoNLL-U spelling (e.g. the
+    "*_form_orig" columns process_treebank.extract_node_features produces),
+    so a single exact form= match is enough -- no need to guess at casing
+    (capitalize() alone would still miss camelCase/ALLCAPS tokens anyway).
+
     Percent-encodes the query values (not just interpolating them raw) since
     sent_id can itself contain characters like "+" (e.g. Abkhaz) that a naive
     f-string would leave unescaped in the URL; standard query-string decoding
@@ -95,7 +100,7 @@ def build_grew_link(treebank, sent_id, form_values, link_text=None) -> str | Non
 
     letters = [chr(ord("A") + i) for i in range(len(form_values))]
     slot = ";".join(
-        f' {letter} [form="{form}"|"{str(form).capitalize()}"] '
+        f' {letter} [form="{form}"] '
         for letter, form in zip(letters, form_values)
     )
     request_value = f'pattern {{ meta.sent_id = "{sent_id}" ;{slot} }}'

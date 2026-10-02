@@ -1,7 +1,6 @@
 import argparse
 import glob
 import json
-import math
 import os
 import re
 import sys
@@ -14,6 +13,8 @@ sys.path.append("../../src/")
 
 from npa.np_types import ROLE_PRIORITY
 from multiblimp.config import TREEBANK_FEATURES_DIR
+from word_order.per_treebank import split_excluded
+from multiblimp.agreement_pipeline_utils import wilson_lower_bound, passes_agreement_bar
 
 INSTANCES_DIR = os.path.join(TREEBANK_FEATURES_DIR, "npa", "np_instances")
 OUT_CSV = "../../npa_exploration/agreement_candidates.csv"
@@ -53,31 +54,6 @@ def _role_priority(role: str) -> int:
     return ROLE_PRIORITY.get(role.split(":", 1)[0], 99)
 
 
-def wilson_lower_bound(both: int, total: int, z: float = 1.96) -> float:
-    """Lower bound of the Wilson score confidence interval (default z=1.96,
-    i.e. ~95%) for the true rate of `both`/`total` -- used by
-    build_lang_config in place of a flat min-count or min-percentage cutoff
-    to decide whether a (target_col, lang)'s joint attestation is real
-    signal or plausible annotation noise (see conversation: a raw `both`
-    count alone can't tell "8/50, a real minority pattern" apart from
-    "8/50000, probably a few stray tags", and a raw percentage alone is
-    unstable at small `total` -- 2/20 and 2000/20000 are both "10%" but
-    very different strength of evidence). The Wilson lower bound adapts
-    to both at once: a small `total` needs a much higher observed rate to
-    clear a given floor than a large `total` does, roughly matching how
-    much a human would trust each case.
-
-    0.0 for total==0 (no co-occurrences at all -- shouldn't reach here in
-    practice, since build_lang_config only calls this for target_cols that
-    already have a nonzero `total`, but kept safe for direct callers).
-    """
-    if total == 0:
-        return 0.0
-    p = both / total
-    denom = 1 + z**2 / total
-    center = (p + z**2 / (2 * total)) / denom
-    margin = (z / denom) * math.sqrt(p * (1 - p) / total + z**2 / (4 * total**2))
-    return max(0.0, center - margin)
 
 
 def _pair_counts(df: pd.DataFrame, col: str, role1: str, role2: str,
@@ -111,8 +87,21 @@ def _pair_counts(df: pd.DataFrame, col: str, role1: str, role2: str,
     return yes, no, role1_only, role2_only, neither, cooccur_total
 
 
+def _read_included(path: str, schema_names, columns) -> pd.DataFrame:
+    """The projected `columns` of one np_instances parquet, minus rows of
+    excluded treebanks (the parquet holds every treebank of the language,
+    see npa.np_types.build_np_data) -- so the agreement scans only ever see
+    the selected ones."""
+    wanted = list(columns)
+    if "treebank" in schema_names and "treebank" not in wanted:
+        wanted.append("treebank")
+    df, _ = split_excluded(pd.read_parquet(path, columns=wanted))
+    return df.drop(columns="treebank", errors="ignore")
+
+
 def scan_qualifying_langs(target_col: str, instances_dir: str = INSTANCES_DIR,
-                           wilson_floor: float = 0.01, min_both: int = 10) -> list[str]:
+                           wilson_floor: float = 0.01, min_both: int = 10,
+                           min_yes: int = 10, yes_rate_floor: float = 0.15) -> list[str]:
     """Live, single-target_col equivalent of one build_lang_config entry --
     which languages of npa_config.json's languages worth attempting for
     `target_col`, computed on the fly straight from the np_instances
@@ -126,7 +115,7 @@ def scan_qualifying_langs(target_col: str, instances_dir: str = INSTANCES_DIR,
     perfectly fittable, it's just never been through the pooled scan.
     Before this, getting its qualifying-language list meant hand-writing a
     one-off script reimplementing this exact loop each time (see
-    conversation) -- fit_trees.py now calls this automatically instead
+    conversation) -- fit_candidate.py now calls this automatically instead
     (see its own langs-resolution logic) whenever a requested target_col
     isn't already a key in the loaded config, so this only runs for
     target_cols actually missing from it, not as a blanket replacement for
@@ -156,11 +145,12 @@ def scan_qualifying_langs(target_col: str, instances_dir: str = INSTANCES_DIR,
             c for c in (target_col, f"{role1}_{feat}", f"{role1}_form", f"{role2}_form")
             if c in schema_names
         ]
-        df = pd.read_parquet(path, columns=wanted)
+        df = _read_included(path, schema_names, wanted)
         yes, no, *_rest = _pair_counts(df, target_col, role1, role2, feat)
         _role1_only, _role2_only, _neither, total = _rest
         both = yes + no
-        if both >= min_both and wilson_lower_bound(both, total) >= wilson_floor:
+        if passes_agreement_bar(yes, no, total, wilson_floor, min_both,
+                                min_yes, yes_rate_floor):
             qualifying.append(lang)
     return qualifying
 
@@ -228,7 +218,7 @@ def scan_language(parquet_path: str, stats: dict, split_head_upos: bool = False)
     wanted = {"HEAD_pos"} if split_head_upos else set()
     for role1, role2, feat, col in matches:
         wanted.update((col, f"{role1}_{feat}", f"{role1}_form", f"{role2}_form"))
-    df = pd.read_parquet(parquet_path, columns=[c for c in wanted if c in schema_set])
+    df = _read_included(parquet_path, schema_set, [c for c in wanted if c in schema_set])
 
     for role1, role2, feat, col in matches:
         if split_head_upos and role1 == "HEAD" and "HEAD_pos" in df.columns:
@@ -286,13 +276,14 @@ def build_summary(stats: dict) -> pd.DataFrame:
 
 
 def build_lang_config(stats: dict, wilson_floor: float = 0.01,
-                       min_both: int = 10) -> dict[str, dict[str, dict]]:
+                       min_both: int = 10, min_yes: int = 10,
+                       yes_rate_floor: float = 0.15) -> dict[str, dict[str, dict]]:
     """target_col -> {lang: {"neither": {abs,rel}, "{role1}_only": {abs,rel},
     "{role2}_only": {abs,rel}, "both": {abs,rel}, "total": int}} for every
     language where the feature's joint attestation ("both", i.e. "yes" or
     "no", never just one-sided or untagged) looks like real signal rather
     than annotation noise -- the npa_config.json src.npa.npa_config.
-    load_npa_config reads, and scripts/npa/fit_trees.py uses (in place of
+    load_npa_config reads, and scripts/npa/fit_candidate.py uses (in place of
     get_ud_langs' full ~190 language list) so run_agreement_pipeline only
     ever opens a language's np_instances parquet when there's a real
     chance of it contributing.
@@ -336,7 +327,7 @@ def build_lang_config(stats: dict, wilson_floor: float = 0.01,
     drop_unk=True, exactly this `both` count), so a target_col that can
     never reach both>=10 could never produce a fitted tree regardless of
     what (a) says; keeping it in npa_config.json would just be wasted work
-    for fit_trees.py to discover and skip later.
+    for fit_candidate.py to discover and skip later.
 
     A language failing either condition -- most simply, zero "both" rows
     at all -- can never pass fit_npa_tree's own checks anyway, so excluding
@@ -347,8 +338,13 @@ def build_lang_config(stats: dict, wilson_floor: float = 0.01,
     language is worth attempting, since those rows can never contribute a
     "yes"/"no" tree label.)
 
+    (c) and (d), see passes_agreement_bar: yes >= min_yes and the Wilson
+    lower bound of yes/both >= yes_rate_floor, so features tagged on both
+    sides but almost never agreeing (e.g. HEAD-ADJ_Derivation, 3 yes /
+    214 no) drop out.
+
     A target_col with NO language clearing the bar at all (e.g.
-    "DET-ADJ_Degree") gets no entry -- fit_trees.py's lookup falls back to
+    "DET-ADJ_Degree") gets no entry -- fit_candidate.py's lookup falls back to
     the full language list in that case, same as for a target_col this scan
     never encountered at all (e.g. a typo).
     """
@@ -359,7 +355,8 @@ def build_lang_config(stats: dict, wilson_floor: float = 0.01,
         for lang, c in sorted(entry["lang_counts"].items()):
             both = c["yes"] + c["no"]
             total = c["total"]
-            if both < min_both or wilson_lower_bound(both, total) < wilson_floor:
+            if not passes_agreement_bar(c["yes"], c["no"], total, wilson_floor,
+                                        min_both, min_yes, yes_rate_floor):
                 continue
 
             def pct(x, total=total):
@@ -493,6 +490,13 @@ if __name__ == "__main__":
                               "len(sub_df)>=10 requirement, so anything "
                               "below it could never be fit anyway -- see "
                               "build_lang_config.")
+    parser.add_argument("--min_yes", type=int, default=10,
+                         help="Minimum raw 'yes' (agreeing) count per language "
+                              "for a target_col -- see passes_agreement_bar.")
+    parser.add_argument("--yes_rate_floor", type=float, default=0.15,
+                         help="Minimum Wilson lower bound of yes/(yes+no) -- "
+                              "drops features jointly tagged but rarely "
+                              "agreeing (Derivation, PronType, ...).")
     parser.add_argument("--split_head_upos", action="store_true",
                          help="Split every HEAD-involving pair (e.g. "
                               "HEAD-DET_Gender) by the head token's own UPOS "
@@ -532,7 +536,8 @@ if __name__ == "__main__":
     summary.to_csv(OUT_CSV, index=False)
     print(f"wrote {OUT_CSV}")
 
-    config = build_lang_config(stats, wilson_floor=args.wilson_floor, min_both=args.min_both)
+    config = build_lang_config(stats, wilson_floor=args.wilson_floor, min_both=args.min_both,
+                               min_yes=args.min_yes, yes_rate_floor=args.yes_rate_floor)
     os.makedirs(os.path.dirname(OUT_CONFIG), exist_ok=True)
     with open(OUT_CONFIG, "w") as f:
         json.dump(config, f, indent=2, sort_keys=True)

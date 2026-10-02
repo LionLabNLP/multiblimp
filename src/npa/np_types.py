@@ -13,8 +13,9 @@ sys.path.append("../")
 
 from word_order.process_treebank import (
     load_treebank, get_all_feats, records_to_df, extract_node_features, _build_tree_maps,
-    tree2sen, tree_no_space_after,
+    tree2sen, tree_no_space_after, values_overlap,
 )
+from multiblimp.languages import is_treebank_row_excluded
 
 # Direct dependents that count toward an NP's UPOS-type projection, and the
 # UPOS each must carry to qualify -- mirrors npa.targets' det/nummod/amod/
@@ -136,7 +137,7 @@ def pairwise_agreement(val1, val2) -> str:
     """
     if val1 is None or val2 is None:
         return "unk"
-    return "yes" if val1 == val2 else "no"
+    return "yes" if (val1 == val2 or values_overlap(val1, val2)) else "no"
 
 
 def np_instance(tree, noun_token, all_feats: set, all_deprel: set, all_pos: set,
@@ -183,6 +184,14 @@ def np_instance(tree, noun_token, all_feats: set, all_deprel: set, all_pos: set,
             token, tree, tree_maps, role, all_feats, all_deprel, all_pos,
             None, lexicalize=True,
             excluded_deprels=set(qualifying_deps) if role == "HEAD" else None,
+            # xpos is still kept out of the tree FIT itself (some tagsets'
+            # xpos spells out the agreement feature directly, e.g. Czech
+            # positional tags -- see npa.agreement.npa_fit_omit_feats,
+            # which blocks every "_xpos" column from the fit by name
+            # regardless of this flag) -- extracting it here only makes it
+            # available for display, the same split SVA/subj_aux already
+            # use (word_order.process_treebank's own INCLUDE_XPOS default).
+            include_xpos=True,
         )
         instance.update(node_features)
         role_feats[role] = {
@@ -237,16 +246,21 @@ def _np_records_for_tree(tree, tree_idx: int, all_feats: set, all_deprel: set, a
     }
     records = []
     counts = Counter()
+    # excluded treebanks' records are kept (split off at read time, see
+    # npa.agreement.split_excluded) but never counted in the np_type distribution
+    counted = not is_treebank_row_excluded(meta["treebank"])
     for token in tree:
         if token["upos"] not in head_pos:
             continue
         roles = np_roles(tree, token, qualifying_deps)
         if len(roles) <= 1:  # bare head: no qualifying dependents
-            counts[token["upos"]] += 1
+            if counted:
+                counts[token["upos"]] += 1
             continue
         instance = np_instance(tree, token, all_feats, all_deprel, all_pos,
                                 tree_maps, meta, qualifying_deps, roles=roles)
-        counts[instance["np_type"]] += 1
+        if counted:
+            counts[instance["np_type"]] += 1
         records.append(instance)
     return records, counts
 
@@ -275,9 +289,15 @@ def build_np_data(lang: str, resource_dir: str, max_treebank_len: int | None = N
     Use build_np_data_streaming instead for a language too large to hold
     fully in memory this way.
 
+    Every treebank of the language is read, selected and excluded alike, each
+    record tagged by its "treebank" column (excluded ones are split off again
+    at read time, word_order.per_treebank.split_excluded); `counts`
+    covers the selected treebanks only.
+
     Returns (counts: Counter, df: pd.DataFrame).
     """
-    treebank = load_treebank(lang, resource_dir, max_treebank_len=max_treebank_len)
+    treebank = load_treebank(lang, resource_dir, max_treebank_len=max_treebank_len,
+                             use_selected_treebanks=False)
     all_feats, _, all_deprel, all_pos = get_all_feats(treebank)
 
     counts = Counter()
@@ -476,8 +496,11 @@ def build_np_data_streaming(lang: str, resource_dir: str, out_path: str,
     NOUN/PROPN/PRON heads at all (mirrors build_np_data: nothing gets
     written to `out_path` in that case, matching np_morph_pct.py's existing
     "no np_type column" handling for a degenerate/empty parquet).
+
+    Reads every treebank, counts selected ones only: as in build_np_data.
     """
-    treebank = load_treebank(lang, resource_dir, max_treebank_len=max_treebank_len)
+    treebank = load_treebank(lang, resource_dir, max_treebank_len=max_treebank_len,
+                             use_selected_treebanks=False)
     all_feats, _, all_deprel, all_pos = get_all_feats(treebank)
 
     parts_dir = f"{out_path}.parts"

@@ -13,7 +13,12 @@ from unidecode import unidecode
 from bs4 import BeautifulSoup
 
 from .config import UD_PATH
-from .languages import udlang2treebanks, convert_arabic_to_latin_langs, add_langs
+from .languages import (
+    is_treebank_excluded, is_treebank_row_excluded, convert_arabic_to_latin_langs, add_langs,
+    sent_id_prefix_keep,
+)
+
+_SENT_ID_PREFIX_RE = re.compile(r"^[a-z]+")
 
 
 def has_typo(item):
@@ -313,16 +318,48 @@ class Treebank:
         use_selected_treebanks: bool = True,
         remove_typo: bool = True,
         pickle_path: str = "ud/ud_pickles",
+        only_excluded: bool = False,
     ):
         if resource_dir is None:
             resource_dir = "."
 
-        if load_from_pickle:
+        # only_excluded reads the raw files of just the excluded treebanks (the
+        # pickles are SUPPOSED to omit them -- built that way at pickle-
+        # creation time). That invariant silently breaks the moment
+        # excluded_treebanks (multiblimp.languages) gains a new entry
+        # without every existing pickle being regenerated: the pickle keeps
+        # whatever treebanks it had when it was built, so a treebank excluded
+        # AFTER that still ships in every load_from_pickle=True call forever,
+        # invisibly corrupting the main (non-excluded) dataset -- caught via
+        # UD_Greek-GLCII ("learner data") and UD_Italian-PoSTWITA/TWITTIRO
+        # showing up in BOTH the regular full_df (from this pickle) and the
+        # correctly-filtered extra_df (only_excluded=True always re-reads
+        # raw files, so it never has this problem), which collided on the
+        # SAME per-treebank cache path in sva_trees.pipeline/word_order.
+        # per_treebank -- the included entry's dt_df got silently overwritten
+        # by the excluded entry's fit, and the next read-back raised a
+        # pandas KeyError the first time anyone noticed at all. Re-filtered
+        # here defensively (cheap -- a few hundred list comprehension checks,
+        # not a re-read) rather than requiring a full pickle-rebuild sweep
+        # every time the exclusion list changes.
+        if load_from_pickle and not only_excluded:
             pickle_path = os.path.join(resource_dir, pickle_path, f"{lang}.pickle")
             # TODO: if no pickle, run pickle script
             if os.path.exists(pickle_path):
                 with open(pickle_path, "rb") as f:
-                    return pickle.load(f)
+                    treebank = pickle.load(f)
+                if use_selected_treebanks:
+                    # is_treebank_row_excluded, not is_treebank_excluded(lang, ...):
+                    # a few bilingual/code-switched treebanks (e.g. UD_Turkish_
+                    # German-SAGT) are bundled into a DIFFERENT language's own
+                    # pickle than the one their excluded_treebanks entry is
+                    # registered under -- see multiblimp.languages.
+                    # _split_treebank_row's docstring.
+                    treebank = [
+                        tree for tree in treebank
+                        if not is_treebank_row_excluded(tree.metadata.get("treebank", "").split("/")[0])
+                    ]
+                return treebank
             else:
                 with open("error_log.txt", "a") as f:
                     f.write(f"Pickle not found for {lang} at {pickle_path}\n")
@@ -335,33 +372,30 @@ class Treebank:
         treebank_glob = os.path.join(resource_dir, treebank_glob)
         treebank_paths = glob(treebank_glob)
 
-        selected_treebanks = udlang2treebanks.get(lang)
-        if use_selected_treebanks and selected_treebanks is not None:
-            # An explicit udlang2treebanks pin is a deliberate, reviewed
-            # choice -- it overrides flag-based exclusion (sign language,
-            # and the 5 local flag_treebanks categories) entirely, rather
-            # than having those flags silently drop a pinned treebank.
+        if only_excluded:
             treebank_paths = [
                 p for p in treebank_paths
-                if Path(p).parent.name.split("-")[-1] in selected_treebanks
+                if is_treebank_excluded(lang, Path(p).parent.name.rsplit("-", 1)[-1])
             ]
-        else:
-            skip_flagged = {t.lower() for t in flag_treebanks("sign language").get(lang, [])}
+        elif use_selected_treebanks:
             treebank_paths = [
                 p for p in treebank_paths
-                if p.split("/")[-2].split("-")[-1].lower() not in skip_flagged
+                if not is_treebank_excluded(lang, Path(p).parent.name.rsplit("-", 1)[-1])
             ]
-
-            excluded_treebanks = get_excluded_treebanks(resource_dir)
-            treebank_paths = [p for p in treebank_paths if Path(p).parent.name not in excluded_treebanks]
 
         if verbose:
             print("Loading:\n", "\n".join(treebank_paths))
 
         treebank = []
         for filename in treebank_paths:
+            file_treebank_id = Path(filename).parent.name.rsplit("-", 1)[-1]
+            keep_prefixes = sent_id_prefix_keep(lang, file_treebank_id)
             with open(filename, encoding="utf-8") as f:
                 for tree in parse_incr(f):
+                    if keep_prefixes is not None:
+                        prefix_match = _SENT_ID_PREFIX_RE.match(tree.metadata.get("sent_id", ""))
+                        if not prefix_match or prefix_match.group(0) not in keep_prefixes:
+                            continue
                     tree.metadata["treebank"] = "/".join(filename.split("/")[-2:])
                     treebank.append(tree)
 

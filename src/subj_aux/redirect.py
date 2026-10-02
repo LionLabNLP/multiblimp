@@ -27,9 +27,29 @@ nsubj_aux_target = PredictionTarget(
 )
 
 
+# Object / indirect-object counterparts (object-auxiliary agreement, e.g.
+# Basque synthetic auxiliaries). Fresh instances for the same reason as above.
+obj_aux_target = PredictionTarget(
+    child_deprels=["obj"],
+    head_pos=["AUX"],
+    child_pos=["NOUN", "PROPN", "PRON"],
+)
+
+iobj_aux_target = PredictionTarget(
+    child_deprels=["iobj"],
+    head_pos=["AUX"],
+    child_pos=["NOUN", "PROPN", "PRON"],
+)
+
+
 def redirect_nsubj_to_aux(treebank) -> None:
-    """For every nsubj token whose governing predicate has an aux/aux:pass/cop
-    child, rewrite the nsubj's head to point at that aux (or copula) instead
+    redirect_to_aux(treebank, ("nsubj",))
+
+
+def redirect_to_aux(treebank, deprels=("nsubj",)) -> None:
+    """For every token with a deprel in `deprels` (written below for nsubj,
+    the default; obj/iobj work the same way) whose governing predicate has
+    an aux/aux:pass/cop child, rewrite the nsubj's head to point at that aux (or copula) instead
     of the predicate itself -- so nsubj_aux_target's ordinary head-vs-child
     extraction (word_order.process_treebank.extract_instances, unmodified)
     compares the subject against the token that actually carries the
@@ -104,7 +124,7 @@ def redirect_nsubj_to_aux(treebank) -> None:
         aux_by_head = defaultdict(list)
         for t in tree:
             deprel = t["deprel"]
-            if deprel == "nsubj":
+            if deprel in deprels:
                 nsubj_tokens.append(t)
             elif deprel == "aux" or deprel == "aux:pass" or (deprel == "cop" and t["upos"] == "AUX"):
                 aux_by_head[t["head"]].append(t)

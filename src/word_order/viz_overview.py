@@ -1,6 +1,7 @@
 from pathlib import Path
 import re
 import json
+from urllib.parse import quote, unquote
 
 from .html.html_overview import create_html
 from multiblimp.condition_taxonomy import (
@@ -51,6 +52,35 @@ def _extract_plot_data(html_content: str) -> dict | None:
 
 def _safe_id(deprel: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_-]", "_", deprel)
+
+
+def _point_url(raw_url: str | None, deprel: str, prefix: str = "") -> str | None:
+    """Re-anchor a scatter point's URL for embedding outside the deprel's
+    own directory. plotData's "url" (see viz_deprel.generate_plot_data) is
+    only ever meant to resolve next to the deprel's own index.html -- a
+    plain "Abkhaz.html" -- so it 404s once copied as-is into an overview
+    page one or more directories up. Some pre-existing deprel pages instead
+    still carry a stale "/multiblimp/{deprel}/{name}" absolute path (no
+    ".html") from an older version of that function, broken even on their
+    own page. Either way only the filename survives; the page is
+    re-addressed as "{prefix}{deprel}/{filename}".
+    """
+    if not raw_url:
+        return raw_url
+    filename = unquote(raw_url).rsplit("/", 1)[-1]
+    if not filename.endswith(".html"):
+        filename += ".html"
+    return f"{prefix}{deprel}/{quote(filename)}"
+
+
+def _localize_plot_data(data: dict, deprel: str, prefix: str = "") -> dict:
+    return {
+        entropy_type: [
+            {**point, "url": _point_url(point.get("url"), deprel, prefix)}
+            for point in points
+        ]
+        for entropy_type, points in data.items()
+    }
 
 
 # _GROUP_PREFIXES/_FEATURE_SUFFIXES/_FEATURE_ORDER and the NPA vocabulary
@@ -219,14 +249,22 @@ def _write_npa_subpages(npa_deprels: dict[str, dict], html_directory: Path) -> N
         for key, group in _npa_group_by(npa_deprels, axis).items():
             filename = _npa_page_filename(axis, key, group["label"])
             entries = group["entries"]
-            page_deprels = {deprel: npa_deprels[deprel] for _, _, deprel in entries}
+            page_deprels = {
+                deprel: _localize_plot_data(npa_deprels[deprel], deprel, prefix="../../")
+                for _, _, deprel in entries
+            }
             sections_html = (
                 f'        <div class="group-section">\n'
                 f'            <h2 class="group-title">{group["label"]}</h2>\n'
                 + _grid_html(entries, prefix="../../")
                 + "\n        </div>"
             )
-            html_content = create_html(sections_html, json.dumps(page_deprels))
+            # <html_directory>/npa/{by_pair,by_feature}/page.html: the overview is
+            # two levels up, the site's main page one level further
+            html_content = create_html(
+                sections_html, json.dumps(page_deprels),
+                back_links=(("../../../index.html", "Main Page"), ("../../index.html", "Overview")),
+            )
             (out_dir / f"{filename}.html").write_text(html_content, encoding="utf-8")
 
 
@@ -356,7 +394,9 @@ def generate_html_overview_index(html_directory: str) -> None:
         for group in group_order
     )
 
-    all_data_json = json.dumps(deprels)
+    all_data_json = json.dumps(
+        {deprel: _localize_plot_data(data, deprel) for deprel, data in deprels.items()}
+    )
 
     html_content = create_html(sections_html, all_data_json)
 

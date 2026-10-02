@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
 
-def filter_head_feats(value, exclude=None, require=None):
+def filter_head_feats(value, exclude=None, require=None, missing_matches=None):
     """Predicate for PredictionTarget.head_feats (e.g. {"VerbForm": ...}).
 
     Picklable replacement for the ad-hoc `lambda x: x != "Part"` /
@@ -29,7 +29,29 @@ def filter_head_feats(value, exclude=None, require=None):
     prefix-match: real UD's own canonical VerbForm inventory (Conv, Fin,
     Gdv, Ger, Inf, Part, Sup, Vnoun) has no other value sharing the "Part"
     prefix, so this can't accidentally catch something unrelated.
+
+    missing_matches: what to return when value is None (the head carries no
+    annotation for this feature at all), BEFORE the require/exclude check
+    runs -- None (default) falls through to the normal check, where a
+    missing value never matches a prefix (require=... rejects it, exclude=...
+    accepts it, same as any other non-matching value). Needed because
+    "missing" and "explicitly tagged with something else" are genuinely
+    different situations for VerbForm specifically: process_treebank.
+    expand_anno already assumes an untagged VERB/AUX is finite (UD
+    convention: Fin is the unmarked default, Part/Inf/Conv/... are the
+    marked exceptions) when matching it against a UniMorph lexicon row, but
+    that assumption was never carried over to this filter, which used to
+    require an explicit "Fin" string before -- so a treebank that never
+    annotates VerbForm at all (caught on Beja: 424 real nsubj-VERB
+    instances, zero of them ever counted for svNa) silently extracted
+    nothing for the whole sv/sp/ov/op/iov/iop family, not because it
+    disagreed on finiteness but because it never said anything. Pass
+    missing_matches=True only for a require="Fin" filter -- never for
+    require="Part"/exclude=..., where a genuinely missing tag must stay
+    "not a match" (missing doesn't mean participle, the inverse mistake).
     """
+    if value is None and missing_matches is not None:
+        return missing_matches
     matches = isinstance(value, str) and value.startswith(exclude if exclude is not None else (require or ""))
     if exclude is not None:
         return not matches

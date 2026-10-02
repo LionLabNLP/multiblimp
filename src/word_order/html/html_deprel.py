@@ -4,7 +4,7 @@ def create_html(
     languages_six_json="[]", languages_binary_json="[]",
     leaf_threshold=None, agreement_label="Subject-Verb", head_role_label="head",
     subject_label="subject", nsubj_label="nsubj", overview_href="../",
-    stats_overview_href="../../index.html",
+    stats_overview_href="../../index.html", show_diagnostics_panel=None,
 ):
     """Dispatches to one of two full, independent page templates.
 
@@ -51,6 +51,14 @@ def create_html(
     Overview" back-button. Same depth caveat as overview_href, one level
     deeper -- "../../index.html" (default) for "svNa/index.html",
     "../../../index.html" for NPA's nested pages.
+
+    show_diagnostics_panel: only meaningful alongside diagnostics_enabled=True.
+    None (default) matches diagnostics_enabled -- the panel shows whenever
+    the rich page renders at all, same as every caller before this existed.
+    False renders the same rich page (dark mode, scatter plot, Distribution
+    column, etc.) minus the "Diagnostics" toggle/bucket-breakdown UI -- the
+    data-debugging mode (word_order.viz_deprel's debug_view), which wants
+    the rich page but has no create_pairs output for that panel to show.
     """
     if diagnostics_enabled:
         return _create_diagnostics_html(
@@ -58,6 +66,7 @@ def create_html(
             languages_six_json, languages_binary_json, leaf_threshold,
             agreement_label, head_role_label, subject_label, nsubj_label,
             overview_href, stats_overview_href,
+            show_diagnostics=diagnostics_enabled if show_diagnostics_panel is None else show_diagnostics_panel,
         )
     return _create_classic_html(
         rows_six, rows_binary, plot_data_six_json, plot_data_binary_json,
@@ -252,7 +261,7 @@ def _create_classic_html(
                 border-radius: 8px;
                 background: white;
             }}
-            .trivial-note {{
+            .trivial-note, .sparse-note {{
                 font-size: 0.85rem;
                 color: #78716c;
                 margin-bottom: 1rem;
@@ -261,6 +270,40 @@ def _create_classic_html(
                 border: 1px solid var(--border);
                 border-radius: 6px;
             }}
+            .no-data-note {{
+                font-size: 0.85rem;
+                color: #78716c;
+                margin: 0 0 0.35rem;
+                padding: 0.6rem 0.875rem 0.1rem;
+                background: #fafaf9;
+                border: 1px solid var(--border);
+                border-radius: 6px 6px 0 0;
+                border-bottom: none;
+            }}
+            .no-data-list {{
+                font-size: 0.85rem;
+                color: #78716c;
+                margin: 0 0 1rem;
+                padding: 0.1rem 0.875rem 0.6rem 2rem; column-width: 16rem; column-gap: 1.5rem;
+                background: #fafaf9;
+                border: 1px solid var(--border);
+                border-top: none;
+                border-radius: 0 0 6px 6px;
+            }}
+            .no-data-list li {{ margin: 0.15rem 0; break-inside: avoid; }}
+.no-data-list.four-cols {{ column-count: 4; column-width: auto; }}
+            .notes-disclosure {{ margin-bottom: 1rem; }}
+            .notes-disclosure > summary {{
+                cursor: pointer; list-style: none; display: flex; align-items: center; gap: 6px;
+                font-size: 0.85rem; color: #78716c; padding: 0.6rem 0.875rem;
+                background: #fafaf9; border: 1px solid var(--border); border-radius: 6px;
+                user-select: none;
+            }}
+            .notes-disclosure > summary::-webkit-details-marker {{ display: none; }}
+            .notes-disclosure > summary .chevron {{ display: inline-flex; transition: transform .15s ease; flex-shrink: 0; }}
+            .notes-disclosure[open] > summary .chevron {{ transform: rotate(90deg); }}
+            .notes-disclosure-body {{ margin-top: 0.5rem; }}
+            .notes-disclosure-body > *:last-child {{ margin-bottom: 0; }}
         </style>
     </head>
     <body>
@@ -275,7 +318,7 @@ def _create_classic_html(
                         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
                             <path d="M10 12L6 8L10 4" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
                         </svg>
-                        Stats Overview
+                        Main Page
                     </a>
                     <a href="{overview_href}" class="back-btn">
                         <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -465,7 +508,7 @@ def _create_diagnostics_html(
     languages_six_json, languages_binary_json, leaf_threshold=None,
     agreement_label="Subject-Verb", head_role_label="head",
     subject_label="subject", nsubj_label="nsubj", overview_href="../",
-    stats_overview_href="../../index.html",
+    stats_overview_href="../../index.html", show_diagnostics=True,
 ):
     """Language-overview page for the SVA/agreement pipeline: same scatter
     plot, six/binary toggle and sortable columns as the classic page, plus an
@@ -476,6 +519,17 @@ def _create_diagnostics_html(
     page) rather than server-rendered, so colours -- which read CSS custom
     properties for light/dark theming -- and sorting can both work without a
     server round-trip.
+
+    show_diagnostics=False (the data-debugging mode, which never runs
+    create_pairs so there's no bucket-breakdown data to show at all) drops
+    the "Diagnostics" toggle button, the per-row bucket-chevron cell/zone,
+    and the bucket-breakdown legend section -- everything else (dark mode,
+    scatter plot anchoring/colouring, the Results panel, the Distribution
+    column) is unaffected, since none of it actually depends on create_pairs
+    having run: the Results panel already renders "—" placeholders when a
+    language's "diag" is None (see renderDetail below), and the Distribution
+    column reads a language's plain labelDistribution field (see
+    word_order.viz_deprel.build_languages), populated independent of "diag".
     """
     threshold_badge = (
         f'<span class="threshold-badge" title="The entropy cutoff N KEEP and the '
@@ -484,6 +538,52 @@ def _create_diagnostics_html(
         if leaf_threshold is not None else ""
     )
     threshold_text = f"entropy &lt; {leaf_threshold:g}" if leaf_threshold is not None else "the run's leaf-confidence filter"
+    diagnostics_button_html = (
+        '<button class="btn toggle-btn" id="diagnosticsBtn" type="button" aria-pressed="false" '
+        'title="Show the per-language bucket breakdown row (no match / no inflection / same '
+        f'inflection / same feature / undefined feature / ambiguous {subject_label} / '
+        'conflicting features).">Diagnostics</button>'
+    ) if show_diagnostics else ""
+    bucket_header_html = f"""
+                    <div class="cell c-bchev"></div>
+                    <div class="bucket-zone">
+                        <div class="bucket-item" title="no match: no candidate swap form was found for this row at all."></div><div class="bucket-item" title="no inflection: a swap form was targeted, but the inflector had nothing to offer for it."></div><div class="bucket-item" title="same inflection: the re-inflected form came back identical to the original surface form."></div>
+                        <div class="bucket-item" title="same feature: the re-inflected form's feature value still overlapped the original — the swap didn't actually change it."></div><div class="bucket-item" title="undefined feature: the target feature was undefined or missing for this form."></div><div class="bucket-item" title="ambiguous {subject_label}: the row's {subject_label} couldn't be uniquely resolved."></div><div class="bucket-item" title="conflicting features: The reinflected form directly opposes the original on another feature (or adds an argument slot or feature dimension), so it isn't a minimal pair."></div>
+                    </div>""" if show_diagnostics else ""
+    bucket_row_html = """
+          <div class="cell c-bchev"><button class="bucket-chevron-btn" type="button" aria-label="Toggle bucket breakdown"><span class="chevron">${chevronSvg()}</span></button></div>
+          <div class="bucket-zone">${renderBucketZone(lang.diag, lang.name)}</div>""" if show_diagnostics else ""
+    subtitle_html = (
+        f"{agreement_label} agreement prediction through decision trees. Click a language row "
+        f"(or the <strong>Results</strong> button) to open its create_pairs results below. "
+        f"The small chevron after N Keep (or the <strong>Diagnostics</strong> button) is "
+        f"separate: it opens just the bucket breakdown, inline, right where those items "
+        f"dropped out of the pipeline."
+    ) if show_diagnostics else (
+        f"{agreement_label} agreement prediction through decision trees. Click a language row "
+        f"(or the <strong>Results</strong> button) to open its coverage/volume panel below -- "
+        f"this is a data-debugging build, so there are no minimal pairs and no per-language "
+        f"diagnostics."
+    )
+    bucket_legend_html = f"""
+        <div class="legend-section">
+          <h3>Diagnostics (bucket breakdown)</h3>
+          <p style="font-size:0.8rem;color:var(--text-muted);margin:0 0 0.8rem;line-height:1.5;">
+            Any bucket with at least one row (here, and N PAIRS / "valid from multi" in the
+            Results panel above) has an <b>examples</b> link showing real sample rows &mdash;
+            reconstructed sentences, feature values, and a treebank link &mdash; for that
+            language and outcome.
+          </p>
+          <dl class="legend-list">
+            <div><dt>no match</dt><dd>No candidate swap form was found for this row at all.</dd></div>
+            <div><dt>no inflection</dt><dd>A swap form was targeted, but the inflector had nothing to offer for it.</dd></div>
+            <div><dt>same inflection</dt><dd>The re-inflected form came back identical to the original surface form.</dd></div>
+            <div><dt>same feature</dt><dd>The re-inflected form's feature value still overlapped the original. The swap didn't actually change it.</dd></div>
+            <div><dt>undefined feature</dt><dd>The target feature was undefined or missing for this form.</dd></div>
+            <div><dt>ambiguous {subject_label}</dt><dd>The row's {subject_label} couldn't be uniquely resolved.</dd></div>
+            <div><dt>conflicting features</dt><dd>The reinflected form directly opposes the original on another feature (or adds an argument slot or feature dimension), so it isn't a minimal pair.</dd></div>
+          </dl>
+        </div>""" if show_diagnostics else ""
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -496,7 +596,7 @@ def _create_diagnostics_html(
     </script>
     <title>MultiBLiMP 2.0 - {agreement_label} Agreement Overview</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
     <style>
         :root {{
@@ -512,7 +612,10 @@ def _create_diagnostics_html(
             --detail-bg: #fafaf9;
             --detail-border: #e7e5e4;
             --warn: #d97706;
+            --keep: #7c3aed;
+            --role-a: #d97706;
             --font-body: 'DM Sans', system-ui, sans-serif;
+            --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
             /* percentage colour scale: vermilion -> violet -> teal. A single
                steady hue rotation from 358deg down to 176deg (the "short
                way", through magenta/violet/blue), never wrapping the other
@@ -534,7 +637,8 @@ def _create_diagnostics_html(
             color-scheme: dark;
             --bg: #16140f; --card: #221f19; --text: #f0ede6; --text-muted: #a39a8a;
             --accent: #6ea8ff; --accent-soft: #1c2a42; --border: #38332a; --hover: #2a261e;
-            --detail-bg: #1c1a15; --detail-border: #38332a; --warn: #fbbf24;
+            --detail-bg: #1c1a15; --detail-border: #38332a; --warn: #fbbf24; --keep: #b18cf5;
+            --role-a: #f0a743;
             --pct-lo-l: 58%; --pct-hi-l: 56%;
             --pct-q1-l: 57%; --pct-mid-l: 57%; --pct-q3-l: 57%;
         }}
@@ -543,7 +647,8 @@ def _create_diagnostics_html(
                 color-scheme: dark;
                 --bg: #16140f; --card: #221f19; --text: #f0ede6; --text-muted: #a39a8a;
                 --accent: #6ea8ff; --accent-soft: #1c2a42; --border: #38332a; --hover: #2a261e;
-                --detail-bg: #1c1a15; --detail-border: #38332a; --warn: #fbbf24;
+                --detail-bg: #1c1a15; --detail-border: #38332a; --warn: #fbbf24; --keep: #b18cf5;
+                --role-a: #f0a743;
                 --pct-lo-l: 58%; --pct-hi-l: 56%;
                 --pct-q1-l: 57%; --pct-mid-l: 57%; --pct-q3-l: 57%;
             }}
@@ -612,9 +717,46 @@ def _create_diagnostics_html(
             width: 100%; height: 500px; margin-bottom: 1.5rem;
             border: 1px solid var(--border); border-radius: 8px; background: var(--card);
         }}
-        .trivial-note {{
+        .trivial-note, .sparse-note {{
             font-size: 0.85rem; color: var(--text-muted); margin-bottom: 1.25rem;
             padding: 0.6rem 0.875rem; background: var(--detail-bg); border: 1px solid var(--border); border-radius: 6px;
+        }}
+        .no-data-note {{
+            font-size: 0.85rem; color: var(--text-muted); margin: 0 0 0.35rem;
+            padding: 0.6rem 0.875rem 0.1rem; background: var(--detail-bg);
+            border: 1px solid var(--border); border-bottom: none; border-radius: 6px 6px 0 0;
+        }}
+        .no-data-list {{
+            font-size: 0.85rem; color: var(--text-muted); margin: 0 0 1.25rem;
+            padding: 0.1rem 0.875rem 0.6rem 2rem; column-width: 16rem; column-gap: 1.5rem; background: var(--detail-bg);
+            border: 1px solid var(--border); border-top: none; border-radius: 0 0 6px 6px;
+        }}
+        .no-data-list li {{ margin: 0.15rem 0; break-inside: avoid; }}
+.no-data-list.four-cols {{ column-count: 4; column-width: auto; }}
+        .notes-disclosure {{ margin-bottom: 1.25rem; }}
+        .notes-disclosure > summary {{
+            cursor: pointer; list-style: none; display: flex; align-items: center; gap: 6px;
+            font-size: 0.85rem; color: var(--text-muted); padding: 0.6rem 0.875rem;
+            background: var(--detail-bg); border: 1px solid var(--border); border-radius: 6px;
+            user-select: none;
+        }}
+        .notes-disclosure > summary::-webkit-details-marker {{ display: none; }}
+        .notes-disclosure > summary .chevron {{ display: inline-flex; transition: transform .15s ease; flex-shrink: 0; }}
+        .notes-disclosure[open] > summary .chevron {{ transform: rotate(90deg); }}
+        .notes-disclosure-body {{ margin-top: 0.5rem; }}
+        .notes-disclosure-body > *:last-child {{ margin-bottom: 0; }}
+
+        .table-toolbar {{ display: flex; align-items: center; flex-wrap: wrap; gap: 0.75rem 1rem; margin-bottom: 0.85rem; }}
+        input.lang-search {{
+            padding: 0.5rem 0.875rem; border: 1px solid var(--border); border-radius: 6px;
+            background: var(--card); color: var(--text); font-family: inherit; font-size: 0.85rem;
+            width: 100%; max-width: 280px; flex: 1 1 200px;
+        }}
+        input.lang-search:focus {{ outline: none; border-color: var(--accent); }}
+        .count-note {{ font-size: 0.8rem; color: var(--text-muted); }}
+        .sr-only {{
+            position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+            overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
         }}
 
         .legend-row {{ display: flex; align-items: center; gap: 0.75rem; margin-bottom: 1rem; }}
@@ -668,26 +810,32 @@ def _create_diagnostics_html(
         .examples-scroll {{ overflow-x: auto; max-width: 100%; }}
         .examples-scroll table.examples {{
             border-collapse: collapse; margin-top: 0.4rem; font-size: 0.78rem;
-            font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+            font-family: var(--font-mono);
         }}
         .examples-scroll table.examples th, .examples-scroll table.examples td {{
-            border-bottom: 1px solid var(--detail-border); padding: 0.35rem 0.7rem;
+            border-bottom: 1px solid var(--detail-border); padding: 6px 9px;
             text-align: left; white-space: nowrap; vertical-align: top;
         }}
         .examples-scroll table.examples th {{
-            color: var(--text-muted); font-weight: 600; font-family: var(--font-body);
-            text-transform: uppercase; letter-spacing: 0.03em; font-size: 0.66rem; white-space: nowrap;
+            color: var(--text-muted); font-weight: 700; font-family: var(--font-mono);
+            text-transform: uppercase; letter-spacing: 0.05em; font-size: 0.66rem; white-space: nowrap;
         }}
         .examples-scroll table.examples tbody tr:hover td {{ background: var(--hover); }}
         .examples-scroll table.examples td.sentence {{ white-space: normal; max-width: 320px; line-height: 1.45; }}
-        .examples-scroll table.examples td.sentence strong {{ color: var(--accent); font-weight: 700; }}
+        .examples-scroll table.examples td.sentence strong {{
+            color: var(--role-a); font-weight: 700; text-decoration: underline;
+            text-decoration-color: var(--role-a); text-decoration-thickness: 2px; text-underline-offset: 2px;
+        }}
         .examples-scroll table.examples td.feats {{ white-space: normal; max-width: 190px; color: var(--text-muted); }}
-        .examples-scroll table.examples td.feats strong.swap-feat {{ color: var(--accent); font-weight: 700; }}
-        .examples-scroll table.examples td.feats .swap-feat-badge {{ color: var(--accent); font-weight: 600; }}
+        .examples-scroll table.examples td.feats strong.swap-feat {{ color: var(--keep); font-weight: 700; }}
+        .examples-scroll table.examples td.feats .swap-feat-badge {{ color: var(--keep); font-weight: 600; }}
         .examples-scroll table.examples td.treebank a {{ color: var(--accent); text-decoration: none; }}
         .examples-scroll table.examples td.treebank a:hover {{ text-decoration: underline; }}
         .examples-scroll table.examples details {{ margin: 0; }}
-        .examples-scroll table.examples summary {{ cursor: pointer; color: var(--accent); font-size: 0.72rem; list-style: none; }}
+        .examples-scroll table.examples summary {{
+            cursor: pointer; color: var(--accent); font-family: var(--font-mono);
+            font-weight: 600; font-size: 0.72rem; list-style: none;
+        }}
         .examples-scroll table.examples summary::-webkit-details-marker {{ display: none; }}
         .examples-scroll table.examples summary::before {{ content: "▸ "; }}
         .examples-scroll table.examples details[open] summary::before {{ content: "▾ "; }}
@@ -788,9 +936,21 @@ def _create_diagnostics_html(
         }}
         .lang-row .c-base, .lang-row .c-reduced, .lang-row .c-delta,
         .lang-row .c-acc, .lang-row .c-raw, .lang-row .c-keep, .lang-row .c-pairs {{ text-align: right; }}
-        .lang-name {{ font-weight: 600 !important; }}
+        .lang-name {{
+            font-weight: 600 !important; display: flex; flex-direction: column;
+            align-items: flex-start; gap: 0.15rem; overflow: hidden;
+        }}
+        .lang-name .lang-name-text {{
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 100%;
+        }}
         .lang-name a {{ color: var(--accent); text-decoration: none; }}
         .lang-name a:hover {{ text-decoration: underline; }}
+        .retried-badge {{
+            display: inline-block; font-size: 0.62rem; font-weight: 700; text-transform: uppercase;
+            letter-spacing: 0.03em; color: var(--warn);
+            background: color-mix(in srgb, var(--warn) 18%, transparent);
+            border-radius: 999px; padding: 0.05rem 0.45rem; white-space: nowrap; cursor: default;
+        }}
         .dist-bar {{
             display: flex; width: 5.5rem; height: 8px; border-radius: 4px;
             overflow: hidden; background: var(--border);
@@ -903,11 +1063,7 @@ def _create_diagnostics_html(
             <div class="title-section">
                 <h1>MultiBLiMP 2.0 - {agreement_label} Agreement Overview</h1>
                 <div class="subtitle">
-                    {agreement_label} agreement prediction through decision trees. Click a language row
-                    (or the <strong>Results</strong> button) to open its create_pairs results below.
-                    The small chevron after N Keep (or the <strong>Diagnostics</strong> button) is
-                    separate: it opens just the bucket breakdown, inline, right where those items
-                    dropped out of the pipeline.
+                    {subtitle_html}
                 </div>
             </div>
             <div class="top-controls">
@@ -915,13 +1071,19 @@ def _create_diagnostics_html(
                     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
                         <path d="M10 12L6 8L10 4" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
                     </svg>
-                    Stats Overview
+                    Main Page
                 </a>
                 <a href="{overview_href}" class="back-btn">
                     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
                         <path d="M10 12L6 8L10 4" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
                     </svg>
                     Overview
+                </a>
+                <a href="#" id="conditionsBackBtn" class="back-btn" style="display:none">
+                    <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <path d="M10 12L6 8L10 4" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+                    </svg>
+                    <span id="conditionsBackLabel"></span>
                 </a>
                 <label for="entropyType">Entropy Type:</label>
                 <select id="entropyType">
@@ -952,7 +1114,13 @@ def _create_diagnostics_html(
                 </div>
             </div>
             <button class="btn toggle-btn" id="resultsBtn" type="button" aria-pressed="false" title="Show the per-language coverage &amp; volume panel below each row (UD candidates, forms of interest, UM/UM+UD coverage, unk-drop counts).">Results</button>
-            <button class="btn toggle-btn" id="diagnosticsBtn" type="button" aria-pressed="false" title="Show the per-language bucket breakdown row (no match / no inflection / same inflection / same feature / undefined feature / ambiguous {subject_label}).">Diagnostics</button>
+            {diagnostics_button_html}
+        </div>
+
+        <div class="table-toolbar">
+            <label for="langSearch" class="sr-only">Filter languages by name</label>
+            <input class="lang-search" id="langSearch" type="text" placeholder="Filter languages&hellip;">
+            <span class="count-note" id="langCount" aria-live="polite"></span>
         </div>
 
         <div class="table-scroll" id="tableScroll">
@@ -967,11 +1135,7 @@ def _create_diagnostics_html(
                     <div class="cell c-acc sortable" data-column="acc" title="The decision tree's accuracy scored on its own training data.">DT Acc%</div>
                     <div class="cell c-raw sortable" data-column="nRaw" title="Candidate rows before the entropy/leaf-confidence filter is applied.">N RAW</div>
                     <div class="cell c-keep sortable" data-column="nKeep" title="Of N RAW, the rows kept after the leaf-confidence filter — the ones actually attempted.">N KEEP</div>
-                    <div class="cell c-bchev"></div>
-                    <div class="bucket-zone">
-                        <div class="bucket-item" title="no match: no candidate swap form was found for this row at all."></div><div class="bucket-item" title="no inflection: a swap form was targeted, but the inflector had nothing to offer for it."></div><div class="bucket-item" title="same inflection: the re-inflected form came back identical to the original surface form."></div>
-                        <div class="bucket-item" title="same feature: the re-inflected form's feature value still overlapped the original — the swap didn't actually change it."></div><div class="bucket-item" title="undefined feature: the target feature was undefined or missing for this form."></div><div class="bucket-item" title="ambiguous {subject_label}: the row's {subject_label} couldn't be uniquely resolved."></div>
-                    </div>
+                    {bucket_header_html}
                     <div class="cell c-pairs sortable" data-column="nPairs" title="Rows that ended up as a correctly re-inflected minimal pair, as a fraction of N KEEP.">N PAIRS</div>
                 </div>
                 <div id="tableBody"></div>
@@ -999,8 +1163,8 @@ def _create_diagnostics_html(
             <div><dt>Reduced Entropy</dt><dd>Entropy remaining after fitting the decision tree; lower means the tree explains more of the outcome. Coloured on the item-loss scale (teal = low = good), on the same 1-bit-or-highest-base-entropy scale as Base Entropy above, so the two columns are directly comparable -- teal here means a language landed on a meaningfully low absolute entropy, not just a low entropy relative to its own (possibly already-low) starting point.</dd></div>
             <div><dt>Δ Entropy</dt><dd>Base Entropy minus Reduced Entropy. How much uncertainty the tree removes. Coloured on the coverage scale (teal = good), by what fraction of the base entropy that delta represents, not the raw number. 0.3 off a base of 0.4 is a much bigger win than 0.3 off a base of 2.0.</dd></div>
             <div><dt>DT Acc%</dt><dd>The decision tree's accuracy scored on its own training data. Coloured on the coverage scale (teal = high = good).</dd></div>
-            <div><dt>N RAW</dt><dd>Candidate rows before the entropy/leaf-confidence filter is applied. Not coloured. There's no cheap per-language reference point (like treebank size) to scale it against, and not informative enough to be worth adding one for.</dd></div>
-            <div><dt>N KEEP</dt><dd>Of those, the rows kept after the leaf-confidence filter ({threshold_text}). The ones actually attempted. Coloured on the coverage scale, as a fraction of N RAW &mdash; faded (with a hover tooltip) when N RAW is below 10, since that fraction is too noisy to mean much at that size (2/2 reads as a perfect 100% off pure small-sample luck). The colour still shows, just dimmed, rather than disappearing outright.</dd></div>
+            <div><dt>N RAW</dt><dd>Candidate rows before the entropy/leaf-confidence filter is applied. Not coloured. There's no cheap per-language reference point (like treebank size) to scale it against, and not informative enough to be worth adding one for. A language with more than zero but fewer than 10 is left out of this table entirely and listed instead, with its full label distribution, in the "too few or uninformative agreement labels" note above &mdash; still real data, just too little of it for this language &amp; condition to draw much of a conclusion from.</dd></div>
+            <div><dt>N KEEP</dt><dd>Of those, the rows kept after the leaf-confidence filter ({threshold_text}). The ones actually attempted. Coloured on the coverage scale, as a fraction of N RAW &mdash; faded (with a hover tooltip) when N RAW is below 10, since that fraction is too noisy to mean much at that size (2/2 reads as a perfect 100% off pure small-sample luck). The colour still shows, just dimmed, rather than disappearing outright. A language whose strict pass alone wasn't enough and got a laxer, depth-aware retry (sva_trees.second_chance) gets a "retried" tag under its name &mdash; N KEEP then reflects that retry's own per-leaf thresholds, whether or not it produced any pairs.</dd></div>
             <div><dt>N PAIRS</dt><dd>Rows that ended up as a correctly re-inflected minimal pair. Coloured on the coverage scale, as a fraction of N KEEP, with the same under-10 fade as N KEEP above (checked against N KEEP this time, not N RAW). Clickable when example rows are available &mdash; opens the same examples modal as the bucket breakdown.</dd></div>
           </dl>
         </div>
@@ -1020,23 +1184,7 @@ def _create_diagnostics_html(
           </dl>
         </div>
 
-        <div class="legend-section">
-          <h3>Diagnostics (bucket breakdown)</h3>
-          <p style="font-size:0.8rem;color:var(--text-muted);margin:0 0 0.8rem;line-height:1.5;">
-            Any bucket with at least one row (here, and N PAIRS / "valid from multi" in the
-            Results panel above) has an <b>examples</b> link showing real sample rows &mdash;
-            reconstructed sentences, feature values, and a treebank link &mdash; for that
-            language and outcome.
-          </p>
-          <dl class="legend-list">
-            <div><dt>no match</dt><dd>No candidate swap form was found for this row at all.</dd></div>
-            <div><dt>no inflection</dt><dd>A swap form was targeted, but the inflector had nothing to offer for it.</dd></div>
-            <div><dt>same inflection</dt><dd>The re-inflected form came back identical to the original surface form.</dd></div>
-            <div><dt>same feature</dt><dd>The re-inflected form's feature value still overlapped the original. The swap didn't actually change it.</dd></div>
-            <div><dt>undefined feature</dt><dd>The target feature was undefined or missing for this form.</dd></div>
-            <div><dt>ambiguous {subject_label}</dt><dd>The row's {subject_label} couldn't be uniquely resolved.</dd></div>
-          </dl>
-        </div>
+        {bucket_legend_html}
 
         <div class="legend-section">
           <h3>Numerator / denominator reference</h3>
@@ -1060,6 +1208,7 @@ def _create_diagnostics_html(
                 <tr><td>% same inflection</td><td># same inflection (<code>same_forms</code>)</td><td>swap_items</td><td><code>items_seen &minus; no_match &minus; no_inflection</code></td><td>item</td><td>Fires once per attempted swap_form; a row can yield more than one item.</td></tr>
                 <tr><td>% same feature</td><td># same feature (<code>same_features</code>)</td><td>swap_items</td><td><code>items_seen &minus; no_match &minus; no_inflection</code></td><td>item</td><td>Fires once per attempted swap_form.</td></tr>
                 <tr><td>% undefined feature</td><td># undefined feature (<code>undefined_features</code>)</td><td>swap_items</td><td><code>items_seen &minus; no_match &minus; no_inflection</code></td><td>item</td><td>Fires once per attempted swap_form.</td></tr>
+                <tr><td>% conflicting features</td><td># conflicting features (<code>conflicting_features</code>)</td><td>swap_items</td><td><code>items_seen &minus; no_match &minus; no_inflection</code></td><td>item</td><td>Fires once per attempted swap_form. Always 0 for NPA.</td></tr>
                 <tr><td>% ambiguous {subject_label}</td><td># ambiguous {subject_label} (<code>ambiguous_subjects</code>)</td><td>swap_items</td><td><code>items_seen &minus; no_match &minus; no_inflection</code></td><td>item</td><td>Fires once per attempted swap_form.</td></tr>
                 <tr><td>(not shown) extra_pairs</td><td><code>extra_pairs</code></td><td>swap_items</td><td><code>items_seen &minus; no_match &minus; no_inflection</code></td><td>item</td><td>Would collect otherwise-valid swaps (same eligibility as correct_swaps) that get capped once their FROM&rarr;TO combination hits the max_num_of_pairs limit. Always 0 today since create_pairs is never called with that limit set.</td></tr>
               </tbody>
@@ -1111,8 +1260,28 @@ def _create_diagnostics_html(
       }});
     }})();
 
+    (function() {{
+      // A deprel page like npa/HEAD-ADJ_N/index.html is linked to from
+      // BOTH npa/by_pair/HEAD-ADJ.html and npa/by_feature/Number.html
+      // (see word_order.viz_overview._write_npa_subpages), so which one
+      // to send the user back to can't be baked in statically -- read it
+      // off document.referrer instead, and just leave the button hidden
+      // (falling back to the static "Overview" button above) when it
+      // doesn't match either pattern, e.g. a direct link or a reload.
+      const m = document.referrer.match(/[/]npa[/](by_pair|by_feature)[/]([^/]+)[.]html(?:[?#]|$)/);
+      if (!m) return;
+      const [, kind, rawName] = m;
+      const name = decodeURIComponent(rawName);
+      const btn = document.getElementById('conditionsBackBtn');
+      const label = document.getElementById('conditionsBackLabel');
+      btn.href = document.referrer;
+      label.textContent = (kind === 'by_pair' ? 'By role pair: ' : 'By feature: ') + name;
+      btn.style.display = '';
+    }})();
+
     const LANGUAGES = {{ six: {languages_six_json}, binary: {languages_binary_json} }};
     const plotData = {{ six: {plot_data_six_json}, binary: {plot_data_binary_json} }};
+    const SHOW_DIAGNOSTICS = {str(show_diagnostics).lower()};
 
     const BUCKETS = [
       {{ key: "no_match", label: "no match", desc: "No candidate swap form was found for this row at all." }},
@@ -1121,6 +1290,7 @@ def _create_diagnostics_html(
       {{ key: "same_feature", label: "same feature", desc: "The re-inflected form's feature value still overlapped the original — the swap didn't actually change it." }},
       {{ key: "undefined_feature", label: "undefined feature", desc: "The target feature was undefined or missing for this form." }},
       {{ key: "ambiguous_subject", label: "ambiguous {subject_label}", desc: "The row's {subject_label} couldn't be uniquely resolved." }},
+      {{ key: "conflicting_features", label: "conflicting features", desc: "The reinflected form directly opposes the original on another feature (or adds an argument slot or feature dimension), so it isn't a minimal pair." }},
     ];
 
     // Fixed left-to-right order for the distribution bar -- matches
@@ -1129,22 +1299,19 @@ def _create_diagnostics_html(
     // whose predictor_var was never simplified (Pipeline.simplify=False)
     // carries "+-"/"--" instead of "unk"; both are covered here so either
     // convention renders, though a run only ever produces one or the other.
-    // Lowercase "yes"/"no" alongside SVA's own "Yes"/"No": NPA's pairwise
-    // target_cols (e.g. "HEAD-DET_Number") use lowercase labels throughout
-    // (see word_order.utils.is_agreement_predictor's module comment) --
-    // "unk" already happened to match both conventions, but "yes"/"no"
-    // didn't, so a label_distribution built from an NPA target_col only
-    // ever matched the "unk" entry here, silently dropping its Yes/No
-    // segments from the bar instead of rendering them.
     const LABEL_ORDER = [
-      ["Yes", "#31cb9f"],
       ["yes", "#31cb9f"],
-      ["No", "#f16393"],
       ["no", "#f16393"],
       ["unk", "#b893de"],
       ["+-", "#e5c64d"],
       ["--", "#b893de"],
     ];
+
+    // Reader-facing class names (the data keeps yes/no/unk).
+    function displayClass(label) {{
+      const l = label.toLowerCase();
+      return l === "yes" ? "Agree" : l === "no" ? "Disagree" : l === "unk" ? "unknown" : label;
+    }}
 
     function renderDistBar(dist) {{
       if (!dist || Object.keys(dist).length === 0) {{
@@ -1154,7 +1321,7 @@ def _create_diagnostics_html(
       if (total === 0) return `<span class="dist-bar" style="background:none;"></span>`;
       const present = LABEL_ORDER.filter(([label]) => dist[label] > 0);
       const title = present
-        .map(([label]) => `${{label}} ${{(dist[label] / total * 100).toFixed(1)}}%`)
+        .map(([label]) => `${{displayClass(label)}} ${{(dist[label] / total * 100).toFixed(1)}}%`)
         .join("  ·  ");
       const segs = present
         .map(([label, color]) => `<span style="width:${{dist[label] / total * 100}}%;background:${{color}};"></span>`)
@@ -1204,9 +1371,11 @@ def _create_diagnostics_html(
     // the theme's default text colour (not left at full opacity -- plain
     // opacity blends with whatever's behind it and reads as low-contrast
     // rather than "dimmed").
-    function dimColorStyle(color, dim, reason) {{
-      if (!dim) return ` style="color:${{color}}"`;
-      return ` style="color:color-mix(in srgb, ${{color}} 40%, var(--text) 60%)" title="${{reason}}"`;
+    function dimColorStyle(color, dim, reason, extraTitle) {{
+      const titleParts = [dim ? reason : null, extraTitle || null].filter(Boolean);
+      const titleAttr = titleParts.length ? ` title="${{titleParts.join(' — ')}}"` : "";
+      const colorStyle = dim ? `color-mix(in srgb, ${{color}} 40%, var(--text) 60%)` : color;
+      return ` style="color:${{colorStyle}}"${{titleAttr}}`;
     }}
 
     const MIN_N_FOR_COLOR = 10;
@@ -1260,11 +1429,14 @@ def _create_diagnostics_html(
         return `<div class="bucket-item no-data">No diagnostics available</div>`;
       }}
       return BUCKETS.map(b => {{
-        const [n, pct] = diag.buckets[b.key] || [0, 0];
+        const [n, pct, nSecond] = diag.buckets[b.key] || [0, 0, 0];
         const color = pctColor(pct, true);
         const hasExamples = n > 0 && diag.examples && diag.examples[b.key];
+        const splitText = nSecond > 0
+          ? `; ${{(n - nSecond).toLocaleString()}} from the strict first pass, ${{nSecond.toLocaleString()}} from a second_chance retry`
+          : "";
         return `
-          <div class="bucket-item" title="${{escapeAttr(b.desc)}} (${{n.toLocaleString()}} rows, ${{pct.toFixed(1)}}% of swap attempts)">
+          <div class="bucket-item" title="${{escapeAttr(b.desc)}} (${{n.toLocaleString()}} rows, ${{pct.toFixed(1)}}% of swap attempts${{splitText}})">
             <span class="b-label">${{b.label}}</span>
             <span class="b-value" style="color:${{color}}">${{pct.toFixed(1)}}%</span>
             <span class="b-count">${{n.toLocaleString()}}</span>
@@ -1322,7 +1494,9 @@ def _create_diagnostics_html(
             </div>
           </div>
 
-          ${{!diag ? `<p class="no-diag-note">No further diagnostics available for this language (it may not have been processed by create_pairs, or the diagnostics step failed for it).</p>` : ""}}
+          ${{!diag ? (SHOW_DIAGNOSTICS
+            ? `<p class="no-diag-note">No further diagnostics available for this language (it may not have been processed by create_pairs, or the diagnostics step failed for it).</p>`
+            : `<p class="no-diag-note">No pairs/diagnostics in this data-debugging build -- create_pairs never runs here.</p>`) : ""}}
 
           ${{diag && diag.distribution ? `
           <div>
@@ -1356,6 +1530,13 @@ def _create_diagnostics_html(
       nKeep: (l) => l.nKeep,
       nPairs: (l) => l.nPairs,
     }};
+
+    let langFilter = "";
+    const langCount = document.getElementById("langCount");
+    document.getElementById("langSearch").addEventListener("input", (e) => {{
+      langFilter = e.target.value;
+      renderAll();
+    }});
 
     const gridTable = document.getElementById("gridTable");
     const tableBody = document.getElementById("tableBody");
@@ -1391,17 +1572,26 @@ def _create_diagnostics_html(
       // landed on a meaningfully low entropy in absolute terms, not just
       // which ones improved a lot relatively.
       //
-      // .filter(Number.isFinite): a trivial-included row (no fitted tree --
-      // see the include_trivial_labels/include_trivial_min_count handling
-      // below) has base = NaN by design (there's no real entropy to report
-      // for it). Math.max with even one NaN argument returns NaN, no matter
+      // .filter(Number.isFinite): defensive -- a row with no fitted tree
+      // would have base = NaN by design (there's no real entropy to report
+      // for it), and every such row is omitted from the table entirely
+      // (see generate_html_deprel_index's trivial/undersized/sparse
+      // handling) before this ever runs, so this should never actually
+      // trigger. Math.max with even one NaN argument returns NaN, no matter
       // how many real numbers are also present -- left unfiltered, a single
       // such row poisoned this table-wide ceiling and broke Base/Reduced
       // Entropy's colour for every OTHER language's row too, not just the
       // trivial one's own (already-handled-separately) blank cell.
       const maxBaseEntropy = Math.max(1, ...list.map(l => l.base).filter(Number.isFinite));
       const acc = SORT_ACCESSORS[currentSort.column];
-      const sorted = [...list].sort((a, b) => {{
+      // Space-/comma-separated terms, case-insensitive, OR'd -- same matching
+      // as the stats overview's language filter.
+      const terms = langFilter.toLowerCase().split(/[\\s,]+/).filter(Boolean);
+      const visible = terms.length
+        ? list.filter(l => terms.some(t => l.name.toLowerCase().includes(t)))
+        : list;
+      langCount.textContent = `${{visible.length}} of ${{list.length}} languages`;
+      const sorted = [...visible].sort((a, b) => {{
         const av = acc(a), bv = acc(b);
         if (typeof av === "string") {{
           return currentSort.ascending ? av.localeCompare(bv) : bv.localeCompare(av);
@@ -1418,8 +1608,11 @@ def _create_diagnostics_html(
 
         const nameStyle = lang.color ? ` style="color:${{lang.color}};font-weight:600;"` : "";
         const nameHtml = lang.langUrl
-          ? `<a href="${{lang.langUrl}}"${{nameStyle}}>${{lang.name}}</a>`
-          : `<span${{nameStyle}}>${{lang.name}}</span>`;
+          ? `<a class="lang-name-text" href="${{lang.langUrl}}"${{nameStyle}}>${{lang.name}}</a>`
+          : `<span class="lang-name-text"${{nameStyle}}>${{lang.name}}</span>`;
+        const retriedBadge = lang.retried
+          ? `<span class="retried-badge" title="sva_trees.second_chance retried this language at a laxer, depth-aware entropy bar after the strict pass alone wasn't enough.">retried</span>`
+          : "";
 
         const hasPairsExamples = lang.diag && lang.diag.examples && lang.diag.examples.correct_swaps && lang.nPairs > 0;
         const nPairsText = lang.nPairs.toLocaleString();
@@ -1427,11 +1620,23 @@ def _create_diagnostics_html(
           ? `<button class="cell-examples-btn" type="button" data-lang="${{escapeAttr(lang.name)}}" data-bucket="correct_swaps">${{nPairsText}}</button>`
           : nPairsText;
 
-        // A trivial-but-shown language (see viz_deprel.generate_html_deprel_index's
-        // include_trivial_min_count) has no fitted tree, so base/reduced/delta/acc
-        // arrive as NaN rather than a real number -- render those as a blank dash
-        // instead of "NaN"/"NaN%", and skip the color-scale functions (which assume
-        // a real number) in favor of a plain muted tone.
+        // First-pass vs. second_chance-retry split, shown as an extra tooltip
+        // line on N KEEP/N PAIRS -- 0/blank for a language never retried.
+        const nKeepSecond = lang.diag ? lang.diag.nKeepSecondChance : 0;
+        const nKeepSplitTitle = nKeepSecond > 0
+          ? `${{(lang.nKeep - nKeepSecond).toLocaleString()}} from the strict first pass, ${{nKeepSecond.toLocaleString()}} from a second_chance retry`
+          : "";
+        const nPairsSecond = lang.diag ? lang.diag.nPairsSecondChance : 0;
+        const nPairsSplitTitle = nPairsSecond > 0
+          ? `${{(lang.nPairs - nPairsSecond).toLocaleString()}} from the strict first pass, ${{nPairsSecond.toLocaleString()}} from a second_chance retry`
+          : "";
+
+        // Defensive: a language with no fitted tree would have base/reduced/
+        // delta/acc arrive as NaN rather than a real number, but every such
+        // language is omitted from the table entirely before this ever runs
+        // (see generate_html_deprel_index) -- render those as a blank dash
+        // instead of "NaN"/"NaN%", and skip the color-scale functions (which
+        // assume a real number) in favor of a plain muted tone, just in case.
         const baseText = Number.isNaN(lang.base) ? "—" : lang.base.toFixed(3);
         const reducedText = Number.isNaN(lang.reduced) ? "—" : lang.reduced.toFixed(3);
         const deltaText = Number.isNaN(lang.delta) ? "—" : lang.delta.toFixed(3);
@@ -1443,17 +1648,16 @@ def _create_diagnostics_html(
 
         langRow.innerHTML = `
           <div class="cell c-chev"><span class="chevron">${{chevronSvg()}}</span></div>
-          <div class="cell c-lang lang-name">${{nameHtml}}</div>
-          <div class="cell c-dist">${{renderDistBar(lang.diag && lang.diag.labelDistribution)}}</div>
+          <div class="cell c-lang lang-name">${{nameHtml}}${{retriedBadge}}</div>
+          <div class="cell c-dist">${{renderDistBar((lang.diag && lang.diag.labelDistribution) || lang.labelDistribution)}}</div>
           <div class="cell c-base" style="color:${{baseColor}}">${{baseText}}</div>
           <div class="cell c-reduced" style="color:${{reducedColor}}">${{reducedText}}</div>
           <div class="cell c-delta" style="color:${{deltaColorVal}}">${{deltaText}}</div>
           <div class="cell c-acc" style="color:${{accColor}}">${{accText}}</div>
           <div class="cell c-raw">${{lang.nRaw.toLocaleString()}}</div>
-          <div class="cell c-keep"${{dimColorStyle(investmentColor(lang.nKeep, lang.nRaw), lang.nRaw < MIN_N_FOR_COLOR, `N RAW is only ${{lang.nRaw}} — too small a sample for this ratio to be meaningful`)}}>${{lang.nKeep.toLocaleString()}}</div>
-          <div class="cell c-bchev"><button class="bucket-chevron-btn" type="button" aria-label="Toggle bucket breakdown"><span class="chevron">${{chevronSvg()}}</span></button></div>
-          <div class="bucket-zone">${{renderBucketZone(lang.diag, lang.name)}}</div>
-          <div class="cell c-pairs"${{dimColorStyle(investmentColor(lang.nPairs, lang.nKeep), lang.nKeep < MIN_N_FOR_COLOR, `N KEEP is only ${{lang.nKeep}} — too small a sample for this ratio to be meaningful`)}}>${{nPairsHtml}}</div>
+          <div class="cell c-keep"${{dimColorStyle(investmentColor(lang.nKeep, lang.nRaw), lang.nRaw < MIN_N_FOR_COLOR, `N RAW is only ${{lang.nRaw}} — too small a sample for this ratio to be meaningful`, nKeepSplitTitle)}}>${{lang.nKeep.toLocaleString()}}</div>
+          {bucket_row_html}
+          <div class="cell c-pairs"${{dimColorStyle(investmentColor(lang.nPairs, lang.nKeep), lang.nKeep < MIN_N_FOR_COLOR, `N KEEP is only ${{lang.nKeep}} — too small a sample for this ratio to be meaningful`, nPairsSplitTitle)}}>${{nPairsHtml}}</div>
         `;
 
         const detailRow = document.createElement("div");
@@ -1468,7 +1672,7 @@ def _create_diagnostics_html(
         }});
 
         const bucketBtn = langRow.querySelector(".bucket-chevron-btn");
-        bucketBtn.addEventListener("click", (e) => {{
+        if (bucketBtn) bucketBtn.addEventListener("click", (e) => {{
           e.stopPropagation();
           const open = langRow.classList.toggle("buckets-open");
           if (open) openBuckets.add(lang.name); else openBuckets.delete(lang.name);
@@ -1512,7 +1716,7 @@ def _create_diagnostics_html(
       resultsBtn.setAttribute("aria-pressed", String(shouldOpen));
     }});
 
-    diagnosticsBtn.addEventListener("click", () => {{
+    if (diagnosticsBtn) diagnosticsBtn.addEventListener("click", () => {{
       const rows = document.querySelectorAll(".lang-row");
       const shouldOpen = Array.from(rows).some(r => !r.classList.contains("buckets-open"));
       rows.forEach(r => r.classList.toggle("buckets-open", shouldOpen));
@@ -1546,7 +1750,7 @@ def _create_diagnostics_html(
     const examplesSubtitle = document.getElementById("examplesSubtitle");
     const examplesBody = document.getElementById("examplesBody");
 
-    // BUCKETS only covers the 6 "problem" buckets shown in the bucket zone.
+    // BUCKETS only covers the 7 "problem" buckets shown in the bucket zone.
     // correct_swaps (linked from N PAIRS), multi_now_valid (linked from
     // "valid from multi"), and head_unk/nsubj_unk/both_unk (linked from the
     // "Dropped before fitting" stats) aren't in that list, so they need

@@ -3,27 +3,92 @@ from glob import glob
 from pathlib import Path
 from urllib.parse import quote
 from typing import Dict, Tuple
+import html as html_lib
 import re
 import json
 
 import joblib
 import pandas as pd
+import pyarrow.parquet as pq
 from sklearn.pipeline import Pipeline
 from tqdm import tqdm
 
-from .entropy import calculate_base_entropy, calculate_tree_entropy
+from multiblimp.agreement_pipeline_utils import read_label_distribution, wilson_lower_bound
+
+from .entropy import calculate_base_entropy, calculate_tree_entropy, leaf_weighted_entropy
 from .html.html_deprel import create_html
 from .utils import is_agreement_predictor
 
+# A language/condition with SOME "Yes"/"Agree" candidates (n_raw > 0) but
+# fewer than this many is pulled out of the table entirely and folded into
+# the trivial-note list instead (see the undersized_langs block below) --
+# same threshold html_deprel.py's client-side MIN_N_FOR_COLOR already fades
+# N KEEP/N PAIRS's coverage colour at, for the same reason (too few rows for
+# a per-language read to mean much).
+UNDERSIZED_MAX_N_RAW = 10
 
-def _dtype_coerced_metrics(dt, df, target_col, binary_entropy, smoothing):
+
+def is_undersized(n_raw: int) -> bool:
+    return 0 < n_raw < UNDERSIZED_MAX_N_RAW
+
+
+# Same default scripts/sva_trees/agreement_candidates.py's own config scan
+# uses (passes_agreement_bar's wilson_floor) -- a language with plenty of
+# raw "Yes" rows (>= UNDERSIZED_MAX_N_RAW, so not already undersized) can
+# still have a Wilson lower bound this low on both/total if those rows are
+# a vanishingly thin slice of its whole treebank (e.g. Naija: 16 Yes out of
+# 9,634 rows -- a 0.1% lower bound). Distinct from undersized: this is
+# "enough Yes in absolute terms, but too sparse relative to everything
+# else to be confident it's real signal rather than incidental tagging".
+SPARSE_WILSON_FLOOR = 0.01
+
+# Same chevron glyph html_deprel.py's own JS chevronSvg() renders, inlined
+# here since this note is built server-side in plain HTML, never through
+# that JS.
+_CHEVRON_SVG = (
+    '<svg width="14" height="14" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">'
+    '<path d="M6 4l4 4-4 4" stroke="currentColor" stroke-width="1.75" '
+    'stroke-linecap="round" stroke-linejoin="round"/></svg>'
+)
+
+
+def _notes_disclosure(summary: str, body: str) -> str:
+    """<details>-based collapse for a note that can get long (an omitted-
+    languages list, potentially 50+ entries) -- collapsed by default via
+    plain HTML semantics (no JS needed), with a chevron matching html_
+    deprel.py's own per-language one for visual consistency."""
+    return (
+        '<details class="notes-disclosure"><summary>'
+        f'<span class="chevron">{_CHEVRON_SVG}</span>{html_lib.escape(summary)}'
+        f'</summary><div class="notes-disclosure-body">{body}</div></details>'
+    )
+
+
+def _dtype_coerced_metrics(dt, df, target_col, binary_entropy, smoothing,
+                           eval_cache=None, cache_key=None):
     """Coerce df's feature columns to match the fitted pipeline's expected dtypes
     (mutates df in place), then compute (base_entropy, reduced_entropy,
     delta_entropy, accuracy).
 
     Shared by calculate_metrics and calculate_agreement_metrics, which only
     differ in the extra per-language stats appended after this.
+
+    eval_cache: optional dict shared across calls (the six-class and binary
+    passes evaluate the same model on the same df); the tree's leaf ids and
+    accuracy don't depend on the entropy variant, so they're computed once
+    per (cache_key, df).
     """
+    cached = eval_cache.get(cache_key) if eval_cache is not None else None
+    if cached is not None and cached[0] is df:
+        _, leaf_ids, accuracy = cached
+        base_ent = calculate_base_entropy(
+            df, target_col, binary=binary_entropy, smoothing=smoothing
+        )
+        reduced_ent = leaf_weighted_entropy(
+            leaf_ids, df, target_col, binary=binary_entropy, smoothing=smoothing
+        )
+        return base_ent, reduced_ent, base_ent - reduced_ent, accuracy
+
     # ensure dtype matching of loaded data and classifier
     cat_cols = [
         col
@@ -46,15 +111,25 @@ def _dtype_coerced_metrics(dt, df, target_col, binary_entropy, smoothing):
     base_ent = calculate_base_entropy(
         df, target_col, binary=binary_entropy, smoothing=smoothing
     )
-    reduced_ent = calculate_tree_entropy(
-        dt, df, target_col, binary=binary_entropy, smoothing=smoothing
-    )
-    delta_ent = base_ent - reduced_ent
-
-    # Calculate accuracy on full training data
     X = df.drop(columns=[target_col])
     y = df[target_col]
-    accuracy = dt.score(X, y)
+    if [name for name, _ in dt.steps] == ["preprocessor", "clf"]:
+        # one transform serves both the leaf assignment and the accuracy
+        X_t = dt.named_steps["preprocessor"].transform(X)
+        leaf_ids = dt.named_steps["clf"].apply(X_t)
+        reduced_ent = leaf_weighted_entropy(
+            leaf_ids, df, target_col, binary=binary_entropy, smoothing=smoothing
+        )
+        # Calculate accuracy on full training data
+        accuracy = dt.named_steps["clf"].score(X_t, y)
+        if eval_cache is not None:
+            eval_cache[cache_key] = (df, leaf_ids, accuracy)
+    else:
+        reduced_ent = calculate_tree_entropy(
+            dt, df, target_col, binary=binary_entropy, smoothing=smoothing
+        )
+        accuracy = dt.score(X, y)
+    delta_ent = base_ent - reduced_ent
 
     return base_ent, reduced_ent, delta_ent, accuracy
 
@@ -78,6 +153,7 @@ def calculate_metrics(
     target_col: str = "deprel_order",
     binary_entropy: bool = False,
     smoothing: float = 0.5,
+    eval_cache: dict | None = None,
 ) -> pd.DataFrame:
     """Calculate metrics for all languages.
 
@@ -95,7 +171,8 @@ def calculate_metrics(
 
     for lang_name, (dt, df) in tqdm(language_data.items()):
         base_ent, reduced_ent, delta_ent, accuracy = _dtype_coerced_metrics(
-            dt, df, target_col, binary_entropy, smoothing
+            dt, df, target_col, binary_entropy, smoothing,
+            eval_cache=eval_cache, cache_key=lang_name,
         )
 
         # Number of items
@@ -135,12 +212,10 @@ def calculate_metrics(
 
 
 def _agreement_row_stats(df, target_col, leaf_threshold, pairs_dir, lang_name):
-    """(n_raw, n_keep, n_pairs) for one language's agreement dataframe.
+    """(n_raw, n_keep, n_pairs, retried) for one language's agreement dataframe.
 
     n_raw: rows with target_col's positive label (candidates for a feature
-        swap) -- SVA's convention is "Yes", NPA's pairwise columns (e.g.
-        "HEAD-DET_Number") use lowercase "yes" instead, so this matches
-        case-insensitively rather than "Yes" literally.
+        swap), labelled "yes" in both SVA and NPA.
     n_keep: of those, how many pass the same leaf_top1_entropy < leaf_threshold
         and leaf_decision filter sva_trees.create_pairs.create_pairs uses to pick
         which rows to actually attempt to re-inflect. Trivial languages (no fitted
@@ -149,12 +224,33 @@ def _agreement_row_stats(df, target_col, leaf_threshold, pairs_dir, lang_name):
     n_pairs: rows actually turned into a re-inflected minimal pair by create_pairs,
         read from "<pairs_dir>/<language>/correct_swaps.parquet". 0 if pairs_dir is
         None or that file doesn't exist yet (create_pairs not run, or n_keep was 0).
+    retried: whether sva_trees.second_chance attempted a laxer retry for this
+        language, regardless of whether it produced any pairs (meta.json's
+        "second_pass", set only on that attempt -- see sva_trees.pipeline).
     """
-    is_yes = df[target_col].astype(str).str.lower() == "yes"
+    is_yes = df[target_col] == "yes"
     n_raw = int(is_yes.sum())
 
+    # A language's own meta.json threshold wins over the pipeline-wide one, so
+    # a language that got a second, laxer pass is counted at that threshold.
+    retried = False
+    if pairs_dir is not None:
+        meta_fn = os.path.join(pairs_dir, lang_name, "meta.json")
+        if os.path.exists(meta_fn):
+            with open(meta_fn) as f:
+                meta = json.load(f)
+            leaf_threshold = meta.get("leaf_threshold", leaf_threshold)
+            retried = bool(meta.get("second_pass"))
+
     if "leaf_top1_entropy" in df.columns and "leaf_decision" in df.columns:
-        keep = (df["leaf_top1_entropy"] < leaf_threshold) & df["leaf_decision"]
+        # A second_chance depth-aware retry's meta.json stores {leaf_id: that
+        # leaf's own cutoff} instead of one number; JSON round-trips the keys
+        # as strings, so normalize back to int before mapping onto leaf_id.
+        row_threshold = (
+            df["leaf_id"].map({int(k): v for k, v in leaf_threshold.items()})
+            if isinstance(leaf_threshold, dict) else leaf_threshold
+        )
+        keep = (df["leaf_top1_entropy"] < row_threshold) & df["leaf_decision"]
         n_keep = int((keep & is_yes).sum())
     else:
         n_keep = n_raw
@@ -163,9 +259,9 @@ def _agreement_row_stats(df, target_col, leaf_threshold, pairs_dir, lang_name):
     if pairs_dir is not None:
         pairs_fn = os.path.join(pairs_dir, lang_name, "correct_swaps.parquet")
         if os.path.exists(pairs_fn):
-            n_pairs = len(pd.read_parquet(pairs_fn))
+            n_pairs = pq.ParquetFile(pairs_fn).metadata.num_rows
 
-    return n_raw, n_keep, n_pairs
+    return n_raw, n_keep, n_pairs, retried
 
 
 def calculate_agreement_metrics(
@@ -175,6 +271,7 @@ def calculate_agreement_metrics(
     pairs_dir: str | None = None,
     binary_entropy: bool = False,
     smoothing: float = 0.5,
+    eval_cache: dict | None = None,
 ) -> pd.DataFrame:
     """Calculate metrics for the SVA/agreement pipeline.
 
@@ -185,16 +282,17 @@ def calculate_agreement_metrics(
 
     Returns:
         DataFrame with columns: language, base_entropy, reduced_entropy,
-                                delta_entropy, accuracy, n_raw, n_keep, n_pairs
+                                delta_entropy, accuracy, n_raw, n_keep, n_pairs, retried
     """
     metrics = []
 
     for lang_name, (dt, df) in tqdm(language_data.items()):
         base_ent, reduced_ent, delta_ent, accuracy = _dtype_coerced_metrics(
-            dt, df, target_col, binary_entropy, smoothing
+            dt, df, target_col, binary_entropy, smoothing,
+            eval_cache=eval_cache, cache_key=lang_name,
         )
 
-        n_raw, n_keep, n_pairs = _agreement_row_stats(
+        n_raw, n_keep, n_pairs, retried = _agreement_row_stats(
             df, target_col, leaf_threshold, pairs_dir, lang_name
         )
 
@@ -208,12 +306,13 @@ def calculate_agreement_metrics(
                 "n_raw": n_raw,
                 "n_keep": n_keep,
                 "n_pairs": n_pairs,
+                "retried": retried,
             }
         )
 
     return _metrics_df(metrics, [
         "language", "base_entropy", "reduced_entropy", "delta_entropy", "accuracy",
-        "n_raw", "n_keep", "n_pairs",
+        "n_raw", "n_keep", "n_pairs", "retried",
     ])
 
 
@@ -259,8 +358,6 @@ def generate_html_deprel_index(
     target_col: str = "deprel_order",
     smoothing: float = 0.5,
     exclude_labels: set | None = None,
-    include_trivial_labels: set | None = None,
-    include_trivial_min_count: int = 0,
     leaf_threshold: float = 0.1,
     pairs_dir: str | None = None,
     diagnostics_by_lang: dict | None = None,
@@ -268,6 +365,7 @@ def generate_html_deprel_index(
     head_role_label: str = "head",
     subject_label: str = "subject",
     nsubj_label: str = "nsubj",
+    debug_view: bool = False,
 ) -> None:
     """Generate interactive overview page with metrics and language links.
 
@@ -294,19 +392,6 @@ def generate_html_deprel_index(
         exclude_labels: Labels that, when they are the only labels present, mark a
             language as uninformative and cause it to be coloured yellow and omitted
             from the table (e.g. {"--", "+-"}).
-        include_trivial_labels: Trivial labels that are still linguistically interesting
-            and should be kept in the table/scatter plot with a green marker instead of
-            being omitted (e.g. {"Yes"}).
-        include_trivial_min_count: A kept trivial language (see include_trivial_labels)
-            also needs strictly more than this many rows of that label to actually be
-            shown -- a language whose ENTIRE signal is e.g. 2 "yes" rows is still just
-            noise, even though the label itself is the interesting one. Real pairs/
-            diagnostics still get computed and shown for it (via _agreement_row_stats,
-            reading the same pairs_dir every fitted-tree language's row does) -- only
-            entropy/accuracy are left blank (there's no tree, so nothing to report
-            there), everything else is a genuine, non-synthetic row. Default 0 (any
-            count at all qualifies) matches every pre-existing caller's behavior
-            unchanged.
         leaf_threshold, pairs_dir: only used when "agreement" is in target_col (the
             SVA pipeline). In that case the word-order "N 1 swap"/"N 4 swap"/"N Pairs"
             columns (based on get_all_orders word-order permutation codes, meaningless
@@ -322,9 +407,20 @@ def generate_html_deprel_index(
             the plain table. A language present in the metrics but missing from this dict
             (e.g. create_pairs raised on it) still gets a row, just without a diagnostics
             panel. None/empty falls back to the plain table, same as before this existed.
+        debug_view: the data-debugging mode (no create_pairs ever run, so
+            diagnostics_by_lang is always empty) still wants the richer
+            dark-mode/scatter-colouring page instead of falling back to the
+            plain table -- just without the (necessarily empty) diagnostics
+            panel. True renders that page (word_order.html.html_deprel's
+            _create_diagnostics_html with show_diagnostics=False) for an
+            agreement target regardless of diagnostics_by_lang. The
+            Distribution column still works either way: it reads each
+            language's plain labelDistribution (multiblimp.
+            agreement_pipeline_utils.read_label_distribution, written
+            unconditionally by the caller -- see sva_trees.pipeline.Pipeline/
+            npa.agreement.run_agreement_pipeline), independent of "diag".
     """
     html_path = Path(html_directory)
-    include_trivial_labels = include_trivial_labels or set()
     is_agreement = is_agreement_predictor(target_col)
 
     # "../" only reaches decision_trees/index.html for a page one directory
@@ -351,6 +447,21 @@ def generate_html_deprel_index(
         if dist is not None:
             trivial_langs[html_file.stem] = dist  # ← stem string, not Path
 
+    # Languages that produced literally zero raw instances (never got a
+    # tree, pairs, or HTML page at all -- e.g. sva_trees.pipeline.Pipeline's
+    # "Skipping {lang}, raw_df has no entries" console-only skip) -- see
+    # Pipeline._write_no_data_markers. Scanned from data_dir (where the
+    # marker is written, alongside the .joblib/.parquet files), not
+    # html_path, since a no-data language has no HTML page to glob for.
+    no_data_langs = {}
+    for marker_fn in glob(os.path.join(data_dir, "*.no_data.json")):
+        lang_name = Path(marker_fn).stem.removesuffix(".no_data")
+        try:
+            with open(marker_fn) as f:
+                no_data_langs[lang_name] = json.load(f).get("reason", "no reason recorded")
+        except (OSError, json.JSONDecodeError):
+            continue
+
     if language_data is None:
         language_data = {}
 
@@ -370,127 +481,80 @@ def generate_html_deprel_index(
                 pd.read_parquet(parquet_fn),
             )
 
-    # Calculate metrics for BOTH entropy types
+    # Calculate metrics for BOTH entropy types (sharing each language's tree
+    # evaluation between the two passes)
+    eval_cache = {}
     if is_agreement:
         metrics_six = calculate_agreement_metrics(
             language_data, target_col, leaf_threshold=leaf_threshold,
-            pairs_dir=pairs_dir, binary_entropy=False, smoothing=smoothing
+            pairs_dir=pairs_dir, binary_entropy=False, smoothing=smoothing,
+            eval_cache=eval_cache,
         )
         metrics_binary = calculate_agreement_metrics(
             language_data, target_col, leaf_threshold=leaf_threshold,
-            pairs_dir=pairs_dir, binary_entropy=True, smoothing=smoothing
+            pairs_dir=pairs_dir, binary_entropy=True, smoothing=smoothing,
+            eval_cache=eval_cache,
         )
     else:
         metrics_six = calculate_metrics(
-            language_data, target_col, binary_entropy=False, smoothing=smoothing
+            language_data, target_col, binary_entropy=False, smoothing=smoothing,
+            eval_cache=eval_cache,
         )
         metrics_binary = calculate_metrics(
-            language_data, target_col, binary_entropy=True, smoothing=smoothing
+            language_data, target_col, binary_entropy=True, smoothing=smoothing,
+            eval_cache=eval_cache,
         )
 
     # Pick up any trivial langs not yet covered by placeholder files
     for l in metrics_six[metrics_six["base_entropy"] == 0.0]["language"]:
         trivial_langs[l] = dict(language_data[l][1][target_col].value_counts())
 
-    # Split trivial langs: any language with MORE than include_trivial_min_count
-    # rows in an include_trivial_labels value (e.g. "yes") goes back into the
-    # main table/plot, even if the rest of its rows carry other values -- a
-    # language whose only signal is a handful of such rows is still just noise
-    # at that count, regardless of which label it is.
-    def _passes_trivial_threshold(dist: dict) -> bool:
-        return any(
-            dist.get(label, 0) > include_trivial_min_count
-            for label in include_trivial_labels
-        )
-
-    include_trivial_langs = {
-        k: v for k, v in trivial_langs.items() if _passes_trivial_threshold(v)
-    }
-    omit_langs = {
-        k: v for k, v in trivial_langs.items() if not _passes_trivial_threshold(v)
-    }
-
-    # Remove omitted langs from metrics; include_trivial_langs are re-added below
+    # Every trivial-distribution language (including an all-one-label case
+    # like 100% "Yes") is omitted from the table -- there used to be an
+    # exception that coloured an all-"Yes" language green and kept it in
+    # the table/scatter plot instead, but that never actually fires in
+    # practice (verified: zero real occurrences across every condition
+    # built so far), so it was pure dead weight. Omitted languages are
+    # listed instead, with their label distribution, in the trivial-note
+    # built below.
+    omit_langs = dict(trivial_langs)
     metrics_six = metrics_six[~metrics_six["language"].isin(omit_langs.keys())]
     metrics_binary = metrics_binary[~metrics_binary["language"].isin(omit_langs.keys())]
-    # Also drop include_trivial_langs that were in language_data (they have no tree)
-    metrics_six = metrics_six[
-        ~metrics_six["language"].isin(include_trivial_langs.keys())
-    ]
-    metrics_binary = metrics_binary[
-        ~metrics_binary["language"].isin(include_trivial_langs.keys())
-    ]
 
-    # Add include_trivial_langs back as synthetic rows
-    if include_trivial_langs:
-        trivial_rows = []
-        for lang, dist in include_trivial_langs.items():
-            if lang in language_data:
-                lang_df = language_data[lang][1]
-            else:
-                # Reconstruct a df with the real per-value counts (not just the
-                # dominant value repeated), so _agreement_row_stats' n_raw
-                # correctly counts only the "Yes" rows for a mixed-label,
-                # too-few-samples language.
-                values = [v for v, n in dist.items() for _ in range(n)]
-                lang_df = pd.DataFrame({target_col: values})
+    sparse_langs = {}
+    if is_agreement:
+        # Pull undersized languages (real variation, even a real fitted tree
+        # in some cases -- just too few "Yes" rows to mean much) out of the
+        # table too, same as the trivial ones above: folded into omit_langs
+        # so they share that one note/list instead of a separate per-row
+        # badge (read_label_distribution works for any language that
+        # reached write_label_distribution, fitted tree or not). A language
+        # with real entropy (never "trivial" at all, e.g. a thin-but-real
+        # split like Akuntsu/Assyrian) only ever shows up as an ordinary
+        # metrics_six row, never in trivial_langs -- this check has to run
+        # here, against metrics_six directly, to catch those too.
+        undersized_mask = metrics_six["n_raw"].apply(is_undersized)
+        undersized_langs = set(metrics_six.loc[undersized_mask, "language"])
+        for lang in undersized_langs:
+            omit_langs.setdefault(lang, read_label_distribution(data_dir, lang) or {})
+        metrics_six = metrics_six[~metrics_six["language"].isin(undersized_langs)]
+        metrics_binary = metrics_binary[~metrics_binary["language"].isin(undersized_langs)]
 
-            if is_agreement:
-                n_raw, n_keep, n_pairs = _agreement_row_stats(
-                    lang_df, target_col, leaf_threshold, pairs_dir, lang
-                )
-                trivial_rows.append(
-                    {
-                        "language": lang,
-                        # NaN (not 0.0/1.0): no tree was fit for this
-                        # language at all, so there's no real entropy/
-                        # accuracy to report -- a hardcoded 1.0 accuracy
-                        # here would misleadingly read as "a tree achieved
-                        # perfect accuracy" rather than "no tree exists".
-                        # A real float (not None) so both the classic
-                        # f-string table (":.4f" on None raises TypeError;
-                        # on NaN it just prints "nan") and the JS table
-                        # format it without crashing either way -- the JS
-                        # side is still updated separately to render NaN as
-                        # a blank cell rather than the literal text "NaN".
-                        # n_raw/n_keep/n_pairs below are real, non-synthetic
-                        # numbers either way (from the actual pairs run).
-                        "base_entropy": float("nan"),
-                        "reduced_entropy": float("nan"),
-                        "delta_entropy": float("nan"),
-                        "accuracy": float("nan"),
-                        "n_raw": n_raw,
-                        "n_keep": n_keep,
-                        "n_pairs": n_pairs,
-                    }
-                )
-                continue
-
-            n_items = len(lang_df)
-            trivial_rows.append(
-                {
-                    "language": lang,
-                    "base_entropy": 0.0,
-                    "reduced_entropy": 0.0,
-                    "delta_entropy": 0.0,
-                    "accuracy": 1.0,
-                    "n_items": n_items,
-                    "n_flexible": 0,
-                    "n_fully_flexible": 0,
-                    "total_pairs": 0,
-                }
-            )
-        trivial_df = pd.DataFrame(trivial_rows)
-        metrics_six = (
-            pd.concat([metrics_six, trivial_df])
-            .sort_values("language")
-            .reset_index(drop=True)
-        )
-        metrics_binary = (
-            pd.concat([metrics_binary, trivial_df])
-            .sort_values("language")
-            .reset_index(drop=True)
-        )
+        # Separately: languages with enough raw "Yes" rows to clear
+        # undersized, but whose joint-tagging rate is still too sparse
+        # relative to the full dataset -- see SPARSE_WILSON_FLOOR. Its own
+        # category/note, not folded into omit_langs -- "too little data" and
+        # "enough data but too thin a slice of a much bigger whole" are
+        # different failure modes worth telling apart.
+        sparse_langs = {}
+        for lang in metrics_six["language"]:
+            dist = read_label_distribution(data_dir, lang) or {}
+            total = sum(dist.values())
+            both = dist.get("yes", 0) + dist.get("no", 0)
+            if total and wilson_lower_bound(both, total) < SPARSE_WILSON_FLOOR:
+                sparse_langs[lang] = dist
+        metrics_six = metrics_six[~metrics_six["language"].isin(sparse_langs.keys())]
+        metrics_binary = metrics_binary[~metrics_binary["language"].isin(sparse_langs.keys())]
 
     # Find corresponding HTML files — stem string -> Path
     html_files = {
@@ -512,11 +576,28 @@ def generate_html_deprel_index(
             else:
                 lang_link = f"<span{name_style}>{lang_name}</span>"
 
+            if is_agreement and row.get("retried"):
+                lang_link += (
+                    ' <span style="display:inline-block;font-size:0.68rem;'
+                    'font-weight:600;color:#d97706;background:#fef3c7;'
+                    'border-radius:999px;padding:0.05rem 0.5rem;vertical-align:middle;"'
+                    ' title="sva_trees.second_chance retried this language at a laxer,'
+                    ' depth-aware entropy bar after the strict pass alone wasn\'t'
+                    ' enough.">retried</span>'
+                )
+
             if is_agreement:
+                # N KEEP/N PAIRS (rows attempted for re-inflection / actually
+                # turned into a pair) are dropped here -- generate_rows only
+                # ever runs when diagnostics_enabled is False (see its "else"
+                # call site below), which for an agreement target means
+                # create_pairs never ran or raised for every language, so
+                # both numbers would just be a meaningless, permanent 0.
+                # N RAW (rows with the positive label) is a property of the
+                # tree's own label distribution, not the pairs stage, so it
+                # stays.
                 count_cells = f"""
-                <td data-sort="{row['n_raw']}">{row['n_raw']:,}</td>
-                <td data-sort="{row['n_keep']}">{row['n_keep']:,}</td>
-                <td data-sort="{row['n_pairs']}">{row['n_pairs']:,}</td>"""
+                <td data-sort="{row['n_raw']}">{row['n_raw']:,}</td>"""
             else:
                 count_cells = f"""
                 <td data-sort="{row['n_items']}">{row['n_items']:,}</td>
@@ -541,20 +622,21 @@ def generate_html_deprel_index(
     lang_colors = {}
     for _, row in metrics_six.iterrows():
         lang_name = row["language"].replace("_", " ")
-        trivial_dist = include_trivial_langs.get(row["language"])
-        # Green means "categorical agreement throughout"
-        if trivial_dist is not None and set(trivial_dist) <= include_trivial_labels:
-            lang_colors[lang_name] = "#31cb9f"  # green — matches palette_map "Yes"
-        else:
-            lang_colors[lang_name] = scatter_color(
-                row, language_data, target_col, exclude_labels=exclude_labels
-            )
+        lang_colors[lang_name] = scatter_color(
+            row, language_data, target_col, exclude_labels=exclude_labels
+        )
 
     # Only meaningful for the agreement/SVA target — word-order pages (and
     # agreement pages nobody bothered to pass diagnostics for) keep the
     # plain, table-based page unchanged.
     diagnostics_by_lang = diagnostics_by_lang or {}
     diagnostics_enabled = is_agreement and bool(diagnostics_by_lang)
+    # The richer dark-mode/scatter-colouring page is also worth it for an
+    # agreement target with no diagnostics at all, as long as the caller
+    # says so explicitly (debug_view) -- just without the diagnostics panel
+    # itself (show_diagnostics=diagnostics_enabled below, i.e. only when
+    # real per-language diagnostics exist).
+    use_rich_table = diagnostics_enabled or (is_agreement and debug_view)
 
     def build_languages(metrics_df, lang_colors):
         """Per-language dicts for the diagnostics page's client-side
@@ -563,9 +645,11 @@ def generate_html_deprel_index(
         (which read CSS custom properties for light/dark theming) and
         sorting can both happen client-side instead of being baked in here.
         A language with no diagnostics_by_lang entry (e.g. create_pairs
-        raised on it) still gets a row, with "diag": null — the page's JS
-        renders that as a "no diagnostics available" state rather than
-        failing.
+        raised on it, or debug_view never ran create_pairs at all) still
+        gets a row, with "diag": null — the page's JS renders that as a "no
+        diagnostics available" state rather than failing. labelDistribution
+        is independent of "diag" (see read_label_distribution) so the
+        Distribution column still works in that case.
         """
         languages = []
         for _, row in metrics_df.iterrows():
@@ -582,13 +666,15 @@ def generate_html_deprel_index(
                 "delta": row["delta_entropy"],
                 "acc": row["accuracy"],
                 "nRaw": int(row["n_raw"]),
+                "retried": bool(row["retried"]),
+                "labelDistribution": read_label_distribution(data_dir, row["language"]),
                 "nKeep": int(row["n_keep"]),
                 "nPairs": int(row["n_pairs"]),
                 "diag": diagnostics_by_lang.get(row["language"]),
             })
         return languages
 
-    if diagnostics_enabled:
+    if use_rich_table:
         languages_six_json = json.dumps(build_languages(metrics_six, lang_colors))
         languages_binary_json = json.dumps(build_languages(metrics_binary, lang_colors))
         rows_six = rows_binary = ""
@@ -626,43 +712,22 @@ def generate_html_deprel_index(
     plot_data_binary_json = json.dumps(plot_data_binary)
 
     # Build legend / notes
-    any_yellow_drawn = "#e5c64d" in lang_colors.values()
-    color_note_parts = []
-    if any_yellow_drawn:
-        color_note_parts.append(
+    color_note = ""
+    if "#e5c64d" in lang_colors.values():
+        color_note = (
             '<p class="trivial-note">'
             '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;'
             'background:#e5c64d;margin-right:6px;vertical-align:middle;"></span>'
             "Languages shown in <strong>yellow</strong> only exhibit uninformative agreement "
-            "(labels <code>--</code> and <code>+-</code>) — no Yes/No contrast was observed."
+            "(labels <code>--</code> and <code>+-</code>) — no Yes/No contrast was observed.</p>"
         )
-    if include_trivial_labels:
-        labels_str = ", ".join(
-            f"<code>{l}</code>" for l in sorted(include_trivial_labels)
+
+    def _fmt_dist(dist):
+        return "; ".join(
+            f"{value}: {n}" for value, n in sorted(dist.items(), key=lambda kv: -kv[1])
         )
-        color_note_parts.append(
-            ('<br>' if any_yellow_drawn else '<p class="trivial-note">')
-            + '<span style="display:inline-block;width:10px;height:10px;border-radius:50%;'
-            'background:#31cb9f;margin-right:6px;margin-top:6px;vertical-align:middle;"></span>'
-            f"Languages shown in <strong>green</strong> have categorical agreement throughout "
-            f"— all samples share the label {labels_str}."
-        )
-    if color_note_parts:
-        color_note_parts.append("</p>")
-    color_note = "".join(color_note_parts)
 
     if omit_langs:
-        def _fmt_dist(dist):
-            # A single-value distribution IS the "uninformative label" the
-            # intro sentence already names as the reason for omission -- just
-            # show its count. Only mixed distributions need the value labeled.
-            if len(dist) == 1:
-                (n,) = dist.values()
-                return str(n)
-            return "; ".join(
-                f"{value}: {n}" for value, n in sorted(dist.items(), key=lambda kv: -kv[1])
-            )
-
         skipped_links = []
         for lang, dist in sorted(omit_langs.items()):
             lang_display = lang.replace("_", " ")
@@ -678,14 +743,93 @@ def generate_html_deprel_index(
                     f'<span style="color:#b893de;font-weight:600;">{lang_display}</span> ({dist_str})'
                 )
 
+        skipped_items = "".join(f"<li>{x}</li>" for x in skipped_links)
         trivial_note = (
-            f'<p class="trivial-note">The following languages were omitted for having too few or '
-            f'uninformative agreement labels (label distribution shown): {", ".join(skipped_links)}.</p>'
+            '<p class="no-data-note">The following languages were omitted for having too few or '
+            'uninformative agreement labels (label distribution shown):</p>'
+            f'<ul class="no-data-list">{skipped_items}</ul>'
         )
     else:
         trivial_note = ""
 
-    notes = color_note + trivial_note
+    if sparse_langs:
+        sparse_links = []
+        for lang, dist in sorted(sparse_langs.items()):
+            lang_display = lang.replace("_", " ")
+            dist_str = _fmt_dist(dist)
+            lang_file = html_files.get(lang)  # ← stem matches directly
+            if lang_file:
+                url = f"{quote(lang_file.name)}"
+                sparse_links.append(
+                    f'<a href="{url}" style="color:#60a5fa;font-weight:600;">{lang_display}</a> ({dist_str})'
+                )
+            else:
+                sparse_links.append(
+                    f'<span style="color:#60a5fa;font-weight:600;">{lang_display}</span> ({dist_str})'
+                )
+
+        sparse_items = "".join(f"<li>{x}</li>" for x in sparse_links)
+        sparse_note = (
+            '<p class="no-data-note">The following languages have enough raw "Yes" samples '
+            f'(&ge; {UNDERSIZED_MAX_N_RAW}) but too sparse a joint-tagging rate relative to '
+            "the full dataset to be statistically confident this isn't incidental tagging "
+            f'(Wilson lower bound below {SPARSE_WILSON_FLOOR:.0%}; label distribution shown):</p>'
+            f'<ul class="no-data-list">{sparse_items}</ul>'
+        )
+    else:
+        sparse_note = ""
+
+    if no_data_langs:
+        by_reason = {}
+        for lang, reason in no_data_langs.items():
+            by_reason.setdefault(reason, []).append(lang.replace("_", " "))
+        intro = (
+            "The following languages have NO data at all for this condition "
+            "(zero raw instances extracted -- no tree, pairs, or page was ever "
+            "produced for them)"
+        )
+        if len(by_reason) == 1:
+            ((reason, langs),) = by_reason.items()
+            groups = [(f"{intro}. {html_lib.escape(reason)}", langs)]
+        else:
+            groups = [(f"{intro}. {html_lib.escape(r)}", ls) for r, ls in by_reason.items()]
+        no_data_note = "".join(
+            f'<p class="no-data-note">{head}</p><ul class="no-data-list four-cols">'
+            + "".join(f"<li>{html_lib.escape(n)}</li>" for n in sorted(ls))
+            + "</ul>"
+            for head, ls in groups
+        )
+    else:
+        no_data_note = ""
+
+    trivial_disclosure = ""
+    if trivial_note:
+        n_trivial = len(omit_langs)
+        trivial_disclosure = _notes_disclosure(
+            f"{n_trivial} language{'s' if n_trivial != 1 else ''} omitted "
+            "(too few or uninformative labels) — click to expand",
+            trivial_note,
+        )
+
+    sparse_disclosure = ""
+    if sparse_note:
+        n_sparse = len(sparse_langs)
+        sparse_disclosure = _notes_disclosure(
+            f"{n_sparse} language{'s' if n_sparse != 1 else ''} with too sparse a "
+            "joint-tagging rate to be confident — click to expand",
+            sparse_note,
+        )
+
+    no_data_disclosure = ""
+    if no_data_note:
+        n_no_data = len(no_data_langs)
+        no_data_disclosure = _notes_disclosure(
+            f"{n_no_data} language{'s' if n_no_data != 1 else ''} with no data at all "
+            "for this condition — click to expand",
+            no_data_note,
+        )
+
+    notes = color_note + trivial_disclosure + sparse_disclosure + no_data_disclosure
 
     header_cells = [
         '<th class="sortable" data-column="0">Language</th>',
@@ -695,11 +839,19 @@ def generate_html_deprel_index(
         '<th class="sortable" data-column="4">DT Acc%</th>',
     ]
     if is_agreement:
-        header_cells += [
-            '<th class="sortable" data-column="5">N RAW</th>',
-            '<th class="sortable" data-column="6">N KEEP</th>',
-            '<th class="sortable" data-column="7">N PAIRS</th>',
-        ]
+        # Only meaningful in the classic (non-diagnostics-panel) page --
+        # _create_diagnostics_html doesn't take header_cells at all. See
+        # generate_rows' matching count_cells comment above for why N KEEP/
+        # N PAIRS are dropped whenever there's no real diagnostics data.
+        header_cells += (
+            [
+                '<th class="sortable" data-column="5">N RAW</th>',
+                '<th class="sortable" data-column="6">N KEEP</th>',
+                '<th class="sortable" data-column="7">N PAIRS</th>',
+            ] if diagnostics_enabled else [
+                '<th class="sortable" data-column="5">N RAW</th>',
+            ]
+        )
     else:
         header_cells += [
             '<th class="sortable" data-column="5">N Items</th>',
@@ -715,7 +867,8 @@ def generate_html_deprel_index(
         plot_data_binary_json,
         trivial_note=notes,
         header_cells="".join(header_cells),
-        diagnostics_enabled=diagnostics_enabled,
+        diagnostics_enabled=use_rich_table,
+        show_diagnostics_panel=diagnostics_enabled,
         languages_six_json=languages_six_json,
         languages_binary_json=languages_binary_json,
         leaf_threshold=leaf_threshold if is_agreement else None,

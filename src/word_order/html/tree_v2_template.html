@@ -1,4 +1,5 @@
 <meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Minimal-Pair Attention Trace</title>
 <script>
   try {
@@ -121,13 +122,10 @@
      pane underneath it (.scroll-pane), so the tree (and its own pan/zoom)
      never scrolls out of view while browsing a long sample/pairs list. */
   .page {
-    max-width: 1180px;
-    margin: 0 auto;
     height: 100vh;
-    padding: 20px 24px;
+    padding: 12px 14px;
     display: flex;
     flex-direction: column;
-    gap: 14px;
     overflow: hidden;
   }
 
@@ -151,6 +149,97 @@
      silently clip away most of a long sample/pairs list rather than the
      intended pane-level scrollbar ever appearing. */
   .scroll-pane > .card { flex-shrink: 0; }
+
+  /* ── Samples / pairs drawer: overlays the bottom of the tree card (up to
+     half of it), opened by clicking a node, resized by dragging its handle. ── */
+  .drawer {
+    position: absolute; left: 0; right: 0; bottom: 0;
+    height: 40%; min-height: 120px; max-height: 90%;
+    display: flex; flex-direction: column;
+    background: var(--surface); border-top: 1px solid var(--border);
+    box-shadow: 0 -8px 24px rgba(0, 0, 0, 0.25);
+    z-index: 200;
+  }
+  .drawer[hidden] { display: none; }
+  .drawer-handle {
+    flex: 0 0 auto; height: 14px; cursor: ns-resize; touch-action: none;
+    display: flex; align-items: center; justify-content: center;
+  }
+  .drawer-grip { width: 44px; height: 4px; border-radius: 2px; background: var(--border); transition: background 0.15s; }
+  .drawer-handle, .drawer-bar { user-select: none; -webkit-user-select: none; }
+  body.dragging-drawer { user-select: none; -webkit-user-select: none; cursor: ns-resize; }
+  .drawer-handle:hover .drawer-grip { background: var(--text-tertiary); }
+  .drawer-bar {
+    flex: 0 0 auto; display: flex; align-items: center; gap: 12px;
+    padding: 0 14px 8px; border-bottom: 1px solid var(--border);
+  }
+  .drawer-tabs { display: flex; align-items: center; gap: 16px; min-width: 0; }
+  /* Samples and its label chips read as one group; Pairs (purple, like the
+     🔑 badge on the leaves) and its own role chips read as a second,
+     separately-outlined group, same shape. */
+  .drawer-group {
+    display: flex; align-items: center; gap: 4px; min-width: 0;
+    padding: 3px; border: 1px solid var(--border); border-radius: 24px; background: var(--surface-raised);
+  }
+  .drawer-group.pairs-group { border-color: var(--keep-light); }
+  .drawer-tab.pairs-tab { color: var(--keep); border-color: var(--keep); background: var(--surface); }
+  .drawer-tab.pairs-tab:hover { background: var(--keep-light); color: var(--keep); border-color: var(--keep); }
+  .drawer-tab.pairs-tab.active { background: var(--keep-light); color: var(--keep); border-color: var(--keep); box-shadow: inset 0 0 0 1px var(--keep); }
+  .drawer-tab {
+    font-family: var(--font-ui); font-size: 12px; font-weight: 600; cursor: pointer; white-space: nowrap;
+    color: var(--text-secondary); background: var(--surface-raised);
+    border: 1.5px solid var(--border); border-radius: 20px; padding: 4px 12px;
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
+  }
+  .drawer-tab:hover { border-color: var(--accent); color: var(--accent); }
+  .drawer-tab.active { background: var(--accent-light); border-color: var(--accent); color: var(--accent); }
+  .drawer-tab[hidden] { display: none; }
+  .drawer-tab:disabled { opacity: 0.4; cursor: not-allowed; border-style: dashed; }
+  .drawer-tab:disabled:hover { border-color: var(--border); color: var(--text-secondary); }
+  .drawer-tab.pairs-tab:disabled, .drawer-tab.pairs-tab:disabled:hover { color: var(--keep); border-color: var(--keep); background: var(--surface); }
+  .drawer-labels {
+    display: flex; align-items: center; gap: 6px; flex: 0 1 auto; min-width: 0;
+    overflow-x: auto; overflow-y: hidden; scrollbar-width: thin;
+    padding: 0 6px 0 4px;
+  }
+  /* A chip row that's actually scrollable, not just clipped -- with enough
+     chips (e.g. an incl.-unk tree's Agree/Disagree/det_unknown/adj_unknown/
+     both_unknown) this can run out of room next to the Samples/Pairs pill;
+     overflow-x:auto (rather than :hidden) lets the rest still be reached
+     instead of silently disappearing past the edge. */
+  .drawer-labels::-webkit-scrollbar { height: 4px; }
+  .drawer-labels::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+  .drawer-labels::-webkit-scrollbar-track { background: transparent; }
+  .drawer-labels[hidden] { display: none; }
+  .label-jump {
+    display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; cursor: pointer;
+    font-family: var(--font-ui); font-size: 11.5px; font-weight: 600; color: var(--text-secondary);
+    background: var(--surface); border: 1px solid var(--border); border-radius: 20px; padding: 3px 9px;
+    transition: border-color 0.15s, color 0.15s;
+  }
+  .label-jump:hover { border-color: var(--accent); color: var(--accent); }
+  .label-jump .swatch { width: 8px; height: 8px; border-radius: 2px; flex-shrink: 0; }
+  .label-jump .n { font-family: var(--font-mono); font-size: 10.5px; font-weight: 500; opacity: 0.7; }
+  /* Pairs' own role-jump chips reuse .label-jump's shape but hover/focus in
+     --keep (the Pairs tab's purple) rather than --accent, so they read as
+     belonging to Pairs the same way the tab itself does. */
+  .label-jump.pairs-role:hover { border-color: var(--keep); color: var(--keep); }
+  @keyframes labelFlash { from { background: var(--accent-light); } to { background: transparent; } }
+  .group-header-row.jump-flash { animation: labelFlash 1.4s ease; }
+  .drawer-hint {
+    margin-left: auto; min-width: 0; font-size: 12px; color: var(--text-tertiary);
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  .drawer-close {
+    flex: 0 0 auto; width: 24px; height: 24px; padding: 0; cursor: pointer;
+    border: 1px solid var(--border); border-radius: 6px; background: var(--surface);
+    color: var(--text-secondary); font-size: 12px;
+  }
+  .drawer-close:hover { border-color: var(--accent); color: var(--accent); }
+  .drawer .scroll-pane { padding: 0; gap: 0; }
+  .drawer .scroll-pane > .card { border: none; border-radius: 0; box-shadow: none; }
+  .drawer details > summary { display: none; }
+  .drawer[data-tab="samples"] #pairsCard, .drawer[data-tab="pairs"] #sampleCard { display: none; }
 
   .card {
     background: var(--surface);
@@ -177,7 +266,26 @@
     color: var(--text-secondary);
   }
   .card-header .hint { font-size: 12px; color: var(--text-tertiary); }
+  .header-left { display: flex; align-items: baseline; gap: 12px; min-width: 0; }
   .header-right { display: flex; align-items: center; gap: 10px; }
+  .overview-link {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 9px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--surface);
+    color: var(--text-secondary);
+    font-family: var(--font-ui);
+    font-size: 12px;
+    font-weight: 600;
+    text-decoration: none;
+    flex-shrink: 0;
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
+  }
+  .overview-link:hover { border-color: var(--accent); color: var(--accent); background: var(--accent-light); }
+  .overview-link svg { flex-shrink: 0; }
   .theme-toggle {
     width: 24px; height: 24px;
     border: 1px solid var(--border);
@@ -209,8 +317,79 @@
   .tree-select-btn.active { background: var(--accent-light); border-color: var(--accent); color: var(--accent); }
   .tree-select-btn .keep-count { font-family: var(--font-mono); font-size: 10.5px; opacity: 0.75; margin-left: 4px; }
 
+  /* ── Treebank row (pooled tree + per-treebank trees; only rendered when
+     the language has several treebanks) ── */
+  .treebank-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; padding: 10px 18px 0; }
+  .treebank-row .tb-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.07em; color: var(--text-tertiary); }
+  .treebank-row a.tree-select-btn { text-decoration: none; }
+  .treebank-row .tree-select-btn.tb-muted { cursor: default; opacity: 0.55; border-style: dashed; }
+  .treebank-row a.tree-select-btn.tb-muted-link { border-style: dashed; opacity: 0.85; }
+  .treebank-row .tree-select-btn.tb-muted:hover { border-color: var(--border); color: var(--text-secondary); }
+  /* Include-unk switch: a link between the as-is and incl.-unk pages,
+     pushed to the row's right edge and styled as an on/off switch so it
+     doesn't read as another treebank tab. */
+  .unk-toggle {
+    margin-left: auto;
+    display: inline-flex; align-items: center; gap: 8px;
+    font-family: var(--font-ui); font-size: 12px; font-weight: 600;
+    color: var(--text-secondary); text-decoration: none;
+    padding: 4px 10px 4px 6px; border-radius: 6px;
+    border: 1px solid var(--border); background: var(--surface);
+    transition: border-color 0.15s, color 0.15s, background 0.15s;
+  }
+  .unk-toggle:hover { border-color: var(--accent); color: var(--accent); }
+  .unk-toggle.on { color: var(--accent); border-color: var(--accent); background: var(--accent-light); }
+  .unk-switch {
+    position: relative; width: 26px; height: 14px; border-radius: 7px;
+    background: var(--border); flex-shrink: 0; transition: background 0.15s;
+  }
+  .unk-knob {
+    position: absolute; top: 2px; left: 2px; width: 10px; height: 10px; border-radius: 50%;
+    background: var(--surface); box-shadow: 0 1px 2px rgba(0,0,0,0.3); transition: transform 0.15s;
+  }
+  .unk-toggle.on .unk-switch { background: var(--accent); }
+  .unk-toggle.on .unk-knob { transform: translateX(12px); background: #fff; }
+  /* Row for the include-unk switch, just above the tree. */
+  .tb-controls { display: flex; flex-wrap: wrap; align-items: flex-start; gap: 8px 12px; flex-basis: 100%; padding-bottom: 8px; }
+  /* Chevron on the left, its chips in a wrapping column to its right; when
+     the row is too narrow the switch drops beneath instead of squeezing them. */
+  .tb-excl-wrap { display: flex; align-items: flex-start; gap: 6px; flex: 1 1 300px; min-width: 0; }
+  .tb-excl-wrap .tb-excluded-toggle { flex: 0 0 auto; white-space: nowrap; margin-top: 3px; }
+  .tb-excluded-toggle {
+    font-family: var(--font-ui); font-size: 11px; font-weight: 600; text-transform: uppercase;
+    letter-spacing: 0.07em; color: var(--text-tertiary); background: none; border: none;
+    cursor: pointer; padding: 4px 6px;
+  }
+  .tb-excluded-toggle:hover, .tb-excluded-toggle.has-current { color: var(--accent); }
+  .unk-toggle { flex-shrink: 0; }
+  /* Excluded treebanks: small chips grouped by exclusion reason, so each
+     reason is written once instead of on every pill. */
+  .tb-excluded { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; flex: 1 1 0; min-width: 0; }
+  .tb-excluded[hidden] { display: none; }
+  .tb-excl-group {
+    display: inline-flex; flex-wrap: wrap; align-items: center; gap: 4px;
+    padding: 3px 10px 3px 6px; border: 1px dashed var(--border); border-radius: 16px;
+  }
+  .tb-excl-reason { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--text-tertiary); margin-left: 2px; }
+  .tb-chip {
+    display: inline-flex; align-items: baseline; gap: 5px;
+    font-family: var(--font-ui); font-size: 11px; font-weight: 600; color: var(--text-secondary);
+    background: var(--surface-raised); border: 1px solid var(--border); border-radius: 12px;
+    padding: 2px 8px; text-decoration: none;
+  }
+  .tb-chip .n { font-family: var(--font-mono); font-size: 10px; font-weight: 500; opacity: 0.7; }
+  a.tb-chip:hover { border-color: var(--accent); color: var(--accent); }
+  .tb-chip.active { background: var(--accent-light); border-color: var(--accent); color: var(--accent); }
+  .tb-chip.muted { opacity: 0.55; border-style: dashed; }
+  a.tb-chip.muted { opacity: 0.85; }
+  .tb-tag {
+    font-size: 10px; font-weight: 700; margin-left: 6px; padding: 1px 6px; border-radius: 10px;
+    background: var(--accent); color: #fff; letter-spacing: 0.02em;
+  }
+
   /* ── Tree panel ── */
-  .tree-wrap { position: relative; flex: 0 0 auto; }
+  .tree-wrap { position: relative; flex: 1 1 0; min-height: 0; display: flex; flex-direction: column; }
+  .tree-wrap > .card-header, .tree-select-row, .treebank-row { flex: 0 0 auto; }
   /* :fullscreen alone would work in most browsers, but this class (toggled
      in JS off the fullscreenchange event) is the reliable cross-browser
      hook -- the UA's own fullscreen sizing can otherwise fight this card's
@@ -227,7 +406,11 @@
      own fit (see its comment below) -- rather than the card's overflow:hidden
      silently clipping a stray pixel, this lets just the canvas scroll
      horizontally while the header and tree switcher above it stay put. */
-  .tree-scroll { position: relative; overflow-x: auto; }
+  .tree-scroll {
+    position: relative; overflow: hidden;
+    flex: 1 1 0; min-height: 0;
+    display: flex; align-items: center; justify-content: center;
+  }
   /* Sized by JS (sizeTreeBox()) to the tree's fitted *window* -- CANVAS_W x
      CANVAS_H scaled by whatever factor fills the card's width up to
      TREE_BOX_MAX_H -- and centered via auto margins once narrower than the
@@ -314,7 +497,7 @@
   .zoom-controls {
     position: absolute;
     right: 16px;
-    bottom: 16px;
+    top: 16px;
     z-index: 100;
     display: flex;
     flex-direction: column;
@@ -436,6 +619,11 @@
   .node-keep.yes { background: var(--keep-light); color: var(--keep); border: 1px solid var(--keep); }
   .node-keep.yes:hover { filter: brightness(1.08); }
   .node-keep.no { color: var(--text-tertiary); font-weight: 500; }
+  /* Only kept because a second_chance retry loosened the entropy bar past
+     this leaf's own H -- same keep color, dashed instead of solid so a
+     leaf that cleared the strict bar on its own still reads as the plain
+     (stronger) case. */
+  .node-keep.yes.second-chance { border-style: dashed; }
 
   /* ── Per-node class-distribution bar (real Yes/No split at that node) ── */
   .node-dist-bar-wrap { position: relative; margin-top: 4px; }
@@ -448,6 +636,7 @@
     transition: transform 0.12s ease;
   }
   .node-dist-bar .seg { height: 100%; }
+  .node-dist-bar .seg:not(:last-child) { border-right: 1px solid rgba(0, 0, 0, 0.65); }
   .node-dist-bar-wrap:hover .node-dist-bar { transform: scaleY(1.8); }
   .node-dist-bar-wrap:hover .node-dist-popover { display: flex; }
 
@@ -488,14 +677,28 @@
   .dist-col-bar-wrap { display: flex; align-items: flex-end; justify-content: center; }
   .dist-col-bar { width: 100%; border-radius: 2px 2px 0 0; min-height: 2px; }
   .dist-col-count { font-family: var(--font-mono); color: var(--text-secondary); text-align: center; white-space: nowrap; }
-  .dist-col-label { font-family: var(--font-mono); color: var(--text-tertiary); text-align: center; white-space: nowrap; }
-  .node-dist-popover .dist-col { width: 40px; }
+  /* normal, not nowrap: a multi-word class name (e.g. "Subject unknown")
+     wraps onto a second line within its own column instead of
+     overflowing into the neighboring column -- these columns get more
+     numerous and label-heavy as soon as an unk-split condition (Head/
+     Subject/Both unknown, or NPA's role-named equivalents) is in play. */
+  .dist-col-label { font-family: var(--font-mono); color: var(--text-tertiary); text-align: center; white-space: normal; word-break: break-word; line-height: 1.15; }
+  .node-dist-popover .dist-col { width: 46px; }
   .node-dist-popover .dist-col-bar-wrap { width: 13px; height: 34px; }
   .node-dist-popover .dist-col-count { font-size: 8.5px; }
   .node-dist-popover .dist-col-label { font-size: 7.5px; }
 
   .node-slot { position: absolute; transform: translate(-50%, -50%); }
   .node-slot.current .node-box { box-shadow: 0 0 0 4px var(--accent), 0 0 14px 3px var(--accent); }
+  /* .node-slot's own transform above makes it a stacking context, so a
+     popover's z-index (.node-dist-popover/.corr-popover, both z-index: 60)
+     only wins against content inside its OWN node-slot -- against a
+     different, overlapping node-slot (stacked purely by DOM/paint order,
+     since neither has its own z-index) it can still end up underneath.
+     Bump the whole hovered slot's z-index so its popover clears every
+     other node regardless of paint order. */
+  .node-slot:has(.node-dist-bar-wrap:hover),
+  .node-slot:has(.corr-marker-wrap:hover) { z-index: 65; }
 
   .ring { fill: none; stroke-width: 3; opacity: 0.9; }
 
@@ -717,7 +920,7 @@
     border-left: 1px solid var(--border);
     background: var(--surface-raised);
   }
-  .node-dist-detail .dist-col { width: 34px; }
+  .node-dist-detail .dist-col { width: 42px; }
   .node-dist-detail .dist-col-bar-wrap { width: 30px; height: 56px; }
   .node-dist-detail .dist-col-count { font-size: 12px; }
   .node-dist-detail .dist-col-label { font-size: 9.5px; }
@@ -809,6 +1012,15 @@
     margin-left: auto;
   }
   .group-feats-toggle:hover { text-decoration: underline; }
+  /* Route toggles: same look as the features ones but their own, separate
+     open state (the route block sits one level below the feature table). */
+  .group-route-toggle {
+    font-family: var(--font-mono); font-size: 10.5px; font-weight: 600;
+    color: var(--text-secondary); background: none; border: none; cursor: pointer; padding: 0;
+  }
+  .group-route-toggle:hover { text-decoration: underline; }
+  .group-header-row .group-route-toggle { margin-left: auto; }
+  .group-header-row .group-route-toggle + .group-feats-toggle { margin-left: 12px; }
 
   /* ── Feature mini table: one row per role (nsubj/verb), one column per
      feature -- lines the two roles' values up for a direct comparison,
@@ -853,9 +1065,26 @@
      it still grows for a genuinely long word, but for the common case it
      stops that word length from being what shifts every later column
      sideways relative to the other 4 samples' tables. */
-  .node-table-wrap .feat-mini-table tbody th { min-width: 92px; }
+  .node-table-wrap .feat-mini-table tbody th.role-form-cell { min-width: 70px; }
   .feat-mini-table tbody tr + tr th, .feat-mini-table tbody tr + tr td { border-top: 1px solid var(--border-subtle); }
-  .feat-mini-table .role-form { font-weight: 700; margin-left: 4px; }
+  /* The row label and its token are separate cells so the tokens line up
+     in one column whatever the label's length (Verb / subject / swapped_...). */
+  .feat-mini-table tbody th.role-label-cell { border-right: none; padding-right: 4px; color: var(--text-secondary); font-weight: 600; }
+  .feat-mini-table tbody th.role-form-cell { padding-left: 4px; }
+  .feat-mini-table thead th:nth-child(-n+2) { border-right: none; }
+  /* Token-level fields (lemma, deprel, upos, xpos) sit after the
+     morphological features, set off by a divider and a quieter header. */
+  .feat-mini-table th.other-first, .feat-mini-table td.other-first { border-left: 2px solid var(--border); }
+  .feat-mini-table thead th.other-feat { font-style: italic; letter-spacing: 0.02em; text-transform: none; }
+  .feat-mini-table td.other-feat { background: var(--surface-raised); }
+  .feat-mini-table .role-form { font-weight: 700; margin-left: 0; }
+  .route-block { margin-top: 10px; }
+  .route-body { margin-top: 4px; }
+  .route-body[hidden] { display: none; }
+  .route-table th.route-node { color: var(--text-tertiary); font-weight: 600; }
+  .route-table td.route-branch.true { color: var(--ok); font-weight: 700; }
+  .route-table td.route-branch.false { color: var(--danger); font-weight: 700; }
+  .route-table td.route-value { font-weight: 700; color: var(--text-primary); }
   .feat-mini-table .role-form.role-a { color: var(--role-a); }
   .feat-mini-table .role-form.role-b { color: var(--role-b); }
   .feat-mini-table td b { color: var(--sample-color, var(--keep)); font-weight: 700; }
@@ -874,6 +1103,7 @@
      shown under the plain "NUMBER" table column) as distinct from a
      genuinely plain feature reading -- never render the two the same way,
      down to this smallest visual unit. */
+  .feat-mini-table td .fit-excluded { opacity: 0.5; cursor: help; }
   .feat-mini-table td .feat-bracket { color: var(--text-secondary); font-size: 0.75em; font-weight: 500; margin-left: 2px; }
   /* One line per bracket variant of a dimension (Number[abs]/Number[erg]/...),
      stacked instead of joined inline with a separator -- keeps every table
@@ -884,7 +1114,7 @@
   .feat-mini-table th.decisive, .feat-mini-table td.decisive { background: var(--sample-color-light, var(--accent-light)); }
   /* "linked" rows: a role and its reinflected swapped_ counterpart, tied
      together with a matching colored rail down the row-label cell. */
-  .feat-mini-table tr.linked-row th { box-shadow: inset 3px 0 0 var(--keep); }
+  .feat-mini-table tr.linked-row th.role-label-cell { box-shadow: inset 3px 0 0 var(--keep); }
   .feat-mini-table td.decisive.swapped { background: var(--trace-c-light); }
   .feat-mini-table td.decisive.swapped b { color: var(--trace-c); }
   /* Overrides the rule above for a bonus entry (see the general
@@ -975,6 +1205,19 @@
     color: var(--keep);
   }
   .pairs-leaf-heading .n { color: var(--text-tertiary); font-weight: 500; }
+  /* One per reinflected component (e.g. DET vs ADJ), only when a leaf's
+     pairs actually mix both directions -- see swap_roles_for_target_col --
+     so a two-direction leaf reads as two labelled runs instead of its
+     pairs interleaved with no indication of which side got reinflected. */
+  .pairs-role-header {
+    display: flex; align-items: baseline; gap: 8px;
+    font-family: var(--font-mono); font-size: 10.5px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 0.04em; color: var(--keep);
+    margin: 10px 0 6px;
+  }
+  .pairs-role-header:first-child { margin-top: 0; }
+  .pairs-role-header .n { font-weight: 500; color: var(--text-tertiary); text-transform: none; letter-spacing: normal; }
+  .pairs-role-header.jump-flash { animation: labelFlash 1.4s ease; border-radius: 4px; }
   .pair-example {
     --sample-color: var(--keep); --sample-color-light: var(--keep-light);
     border: 1px solid var(--border); border-radius: 8px; padding: 11px 13px;
@@ -1008,18 +1251,33 @@
   @media (max-width: 480px) {
     .node-table td.col-link { display: none; }
   }
+  @media (max-width: 720px) {
+    .card-header .hint { display: none; }
+    .header-left h2 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .tree-select-btn { padding: 4px 10px; }
+    .treebank-row, .tree-select-row { padding-left: 12px; padding-right: 12px; gap: 6px; }
+  }
 </style>
 
 <div class="page">
   <div class="card tree-wrap">
     <div class="card-header">
-      <h2 id="treeTitle">Tree</h2>
+      <div class="header-left">
+        <a href="index.html" class="overview-link" title="Back to the overview for this dependency relation">
+          <svg width="12" height="12" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <path d="M10 12L6 8L10 4" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+          </svg>
+          Overview
+        </a>
+        <h2 id="treeTitle">Tree</h2>
+      </div>
       <div class="header-right">
-        <span class="hint">click a node to browse its samples</span>
+        <span class="hint">click a node for its samples · click it again to close</span>
         <button type="button" class="theme-toggle" id="themeToggleBtn" title="Toggle light/dark theme">☾</button>
       </div>
     </div>
     <div class="tree-select-row" id="treeSelectRow"></div>
+    <div class="treebank-row" id="treebankRow" style="display:none"></div>
     <div class="tree-scroll" id="treeScroll">
     <div class="tree-scale-outer" id="treeScaleOuter">
     <div class="tree-svg-box grabbable" id="treeBox">
@@ -1044,7 +1302,7 @@
       <div class="info-panel-header">
         <button type="button" class="minimize-button" id="minimizeBtn" title="Expand panel">+</button>
         <div class="language-name" id="infoPanelTitle"></div>
-        <div class="accuracy-badge"><span class="accuracy-dot"></span><span id="infoPanelAccuracy"></span> accuracy</div>
+        <div class="accuracy-badge"><span class="accuracy-dot"></span><span id="infoPanelAccuracy"></span></div>
       </div>
       <div class="info-panel-body">
         <div class="info-panel-meta" id="infoPanelMeta"></div>
@@ -1063,41 +1321,57 @@
       </div>
     </div>
     </div>
-  </div>
+    <div class="drawer" id="drawer" data-tab="samples" hidden>
+      <div class="drawer-handle" id="drawerHandle" title="Drag to resize"><span class="drawer-grip"></span></div>
+      <div class="drawer-bar">
+        <div class="drawer-tabs" role="tablist">
+          <div class="drawer-group">
+            <button type="button" class="drawer-tab active" id="tabSamples" data-tab="samples" role="tab">Samples</button>
+            <div class="drawer-labels" id="drawerLabels" hidden></div>
+          </div>
+          <div class="drawer-group pairs-group">
+            <button type="button" class="drawer-tab pairs-tab" id="tabPairs" data-tab="pairs" role="tab">🔑 Pairs</button>
+            <div class="drawer-labels pairs-roles" id="drawerPairRoles" hidden></div>
+          </div>
+        </div>
+        <span class="drawer-hint" id="drawerHint"></span>
+        <button type="button" class="drawer-close" id="drawerClose" title="Close (Esc)">✕</button>
+      </div>
+    <div class="scroll-pane" id="scrollPane">
+      <details class="card samples-card" id="sampleCard" open>
+        <summary class="card-header">
+          <h2 id="sampleGridTitle">Node samples</h2>
+          <span class="summary-right">
+            <span class="hint">click a row to trace it · up to 15 real rows per class</span>
+            <span class="chevron"></span>
+          </span>
+        </summary>
+        <div class="node-summary-row">
+          <div class="node-note" id="nodeNote"></div>
+          <div class="node-dist-detail" id="nodeDistDetail"></div>
+        </div>
+        <div class="node-table-wrap">
+          <table class="node-table">
+            <thead>
+              <tr>
+                <th></th><th>Sentence</th><th></th>
+              </tr>
+            </thead>
+            <tbody id="sampleGrid"></tbody>
+          </table>
+        </div>
+      </details>
 
-  <div class="scroll-pane" id="scrollPane">
-    <details class="card samples-card" id="sampleCard" open>
-      <summary class="card-header">
-        <h2 id="sampleGridTitle">Node samples</h2>
-        <span class="summary-right">
-          <span class="hint">click a row to trace it · up to 15 real rows per class</span>
+      <details class="card pairs-card" id="pairsCard" open>
+        <summary>
+          <h2 id="pairsTitle">🔑 Generated minimal pairs</h2>
           <span class="chevron"></span>
-        </span>
-      </summary>
-      <div class="node-summary-row">
-        <div class="node-note" id="nodeNote"></div>
-        <div class="node-dist-detail" id="nodeDistDetail"></div>
-      </div>
-      <div class="node-table-wrap">
-        <table class="node-table">
-          <thead>
-            <tr>
-              <th></th><th>Sentence</th><th></th>
-            </tr>
-          </thead>
-          <tbody id="sampleGrid"></tbody>
-        </table>
-      </div>
-    </details>
-
-    <details class="card pairs-card" id="pairsCard">
-      <summary>
-        <h2 id="pairsTitle">🔑 Generated minimal pairs</h2>
-        <span class="chevron"></span>
-      </summary>
-      <div class="pairs-intro" id="pairsIntro"></div>
-      <div class="pairs-list" id="pairsList"></div>
-    </details>
+        </summary>
+        <div class="pairs-intro" id="pairsIntro"></div>
+        <div class="pairs-list" id="pairsList"></div>
+      </details>
+    </div>
+    </div>
   </div>
 </div>
 
@@ -1128,6 +1402,13 @@ __V2_TREE_DATA_JS__
   const treeBox = document.getElementById('treeBox');
   const treeViewport = document.getElementById('treeViewport');
   const scrollPane = document.getElementById('scrollPane');
+  const drawer = document.getElementById('drawer');
+  const drawerHandle = document.getElementById('drawerHandle');
+  const drawerHint = document.getElementById('drawerHint');
+  const tabSamples = document.getElementById('tabSamples');
+  const tabPairs = document.getElementById('tabPairs');
+  const drawerLabels = document.getElementById('drawerLabels');
+  const drawerPairRoles = document.getElementById('drawerPairRoles');
   const sampleGrid = document.getElementById('sampleGrid');
   const sampleGridTitle = document.getElementById('sampleGridTitle');
   const nodeNote = document.getElementById('nodeNote');
@@ -1139,6 +1420,7 @@ __V2_TREE_DATA_JS__
   const pairsTitle = document.getElementById('pairsTitle');
   const treeTitle = document.getElementById('treeTitle');
   const treeSelectRow = document.getElementById('treeSelectRow');
+  const treebankRow = document.getElementById('treebankRow');
   const treeWrap = document.querySelector('.tree-wrap');
   const fullscreenBtn = document.getElementById('fullscreenBtn');
   const classDistLegend = document.getElementById('classDistLegend');
@@ -1192,22 +1474,21 @@ __V2_TREE_DATA_JS__
   // offscreen on load.
   let fitScale = 1;
   let contentScale = 1;
+  // The pan/zoom surface (treeBox) fills the whole tree area, so panning and
+  // zooming are clipped only by the card's edges, not by a box sized to the
+  // canvas's own aspect ratio. The tree itself stays laid out at its native
+  // CANVAS_W x CANVAS_H (treeViewport); fitToContent() scales it into view.
   function sizeTreeBox() {
-    const maxW = treeScroll.clientWidth;
-    // Fullscreen drops the 460px/46%-of-viewport cap entirely -- that cap
-    // exists so the node-samples panel below stays reachable without
-    // scrolling, which no longer matters once this card is the only thing
-    // on screen; almost the full viewport height goes to the tree instead,
-    // minus the header/tree-select-row still visible above it.
-    const maxH = document.fullscreenElement === treeWrap
-      ? window.innerHeight - treeWrap.querySelector('.card-header').offsetHeight - treeSelectRow.offsetHeight - 16
-      : Math.min(window.innerHeight * 0.46, 460);
-    fitScale = Math.min(maxW / CANVAS_W, maxH / CANVAS_H);
-    contentScale = Math.min(1, fitScale);
-    treeBox.style.width = `${CANVAS_W}px`;
-    treeBox.style.transform = `scale(${contentScale})`;
-    treeScaleOuter.style.width = `${CANVAS_W * fitScale}px`;
-    treeScaleOuter.style.height = `${CANVAS_H * fitScale}px`;
+    const w = treeScroll.clientWidth, h = treeScroll.clientHeight;
+    fitScale = 1;
+    contentScale = 1;
+    treeBox.style.width = `${w}px`;
+    treeBox.style.height = `${h}px`;
+    treeBox.style.transform = 'none';
+    treeScaleOuter.style.width = `${w}px`;
+    treeScaleOuter.style.height = `${h}px`;
+    treeViewport.style.width = `${CANVAS_W}px`;
+    treeViewport.style.height = `${CANVAS_H}px`;
   }
 
   // Both demo trees' node coordinates were hand-placed to already fit the
@@ -1235,10 +1516,13 @@ __V2_TREE_DATA_JS__
     // along with everything else instead of staying fixed.
     const NODE_HALF_W = 84;  // half of .node-box's fixed 168px width
     const NODE_HALF_H = 45;  // rough half-height allowance (rule, stats, dist bar, keep badge)
-    const boxW = treeBox.clientWidth || CANVAS_W;
-    const boxH = boxW * (CANVAS_H / CANVAS_W);
-    const toPxX = x => (x / CANVAS_W) * boxW;
-    const toPxY = y => (y / CANVAS_H) * boxH;
+    const PAD = 20;
+    const boxW = Math.max(1, treeBox.clientWidth - 2 * PAD);
+    const boxH = Math.max(1, treeBox.clientHeight - 2 * PAD);
+    // treeViewport is laid out at native canvas size, so canvas coordinates
+    // are already CSS pixels.
+    const toPxX = x => x;
+    const toPxY = y => y;
     const minPxX = Math.min(...nodes.map(n => toPxX(n.x))) - NODE_HALF_W;
     const maxPxX = Math.max(...nodes.map(n => toPxX(n.x))) + NODE_HALF_W;
     const minPxY = Math.min(...nodes.map(n => toPxY(n.y))) - NODE_HALF_H;
@@ -1247,8 +1531,8 @@ __V2_TREE_DATA_JS__
     const scaleY = boxH / (maxPxY - minPxY);
     zoom.scale = Math.min(1, scaleX, scaleY); // never zoom *in* past 1:1 just to fit
     const cx = (minPxX + maxPxX) / 2, cy = (minPxY + maxPxY) / 2;
-    zoom.tx = boxW / 2 - cx * zoom.scale;
-    zoom.ty = boxH / 2 - cy * zoom.scale;
+    zoom.tx = treeBox.clientWidth / 2 - cx * zoom.scale;
+    zoom.ty = treeBox.clientHeight / 2 - cy * zoom.scale;
     applyZoom();
   }
 
@@ -1282,18 +1566,6 @@ __V2_TREE_DATA_JS__
   // zoom-controls, info-panel), so nothing else has to move for this.
   function isTreeFullscreen() {
     return document.fullscreenElement === treeWrap;
-  }
-  // Runs fn immediately outside fullscreen; inside it, leaves fullscreen
-  // first and waits for that to actually finish before running fn --
-  // exitFullscreen is async, and anything fn does that depends on layout
-  // outside .tree-wrap (scrolling to it, measuring it) would otherwise run
-  // while that content is still hidden behind the fullscreen element.
-  function leaveFullscreenThen(fn) {
-    if (isTreeFullscreen()) {
-      document.exitFullscreen().then(fn);
-    } else {
-      fn();
-    }
   }
   fullscreenBtn.addEventListener('click', () => {
     if (isTreeFullscreen()) {
@@ -1400,8 +1672,24 @@ __V2_TREE_DATA_JS__
   // identifying context like deprel/upos, not agreement-relevant morphology,
   // but the Python side (_build_feat_columns/_v2_pair_feat_list) already
   // emits a "lemma=..." entry for every row -- it just never had a matching
-  // ORDERED_FEATS column to render into.
-  const ORDERED_FEATS = ['Number', 'Person', 'Gender', 'Case', 'Mood', 'Tense', 'Aspect', 'Voice', 'VerbForm', 'Definite', 'PronType', 'Poss', 'Reflex', 'deprel', 'upos', 'lemma'];
+  // feature column to render into.
+  // Every feature the rows carry gets a column. Morphological features come
+  // first (the usual ones in this order, any others alphabetically after),
+  // then the token-level fields, marked off visually.
+  const MORPH_ORDER = ['Number', 'Person', 'Gender', 'Case', 'Mood', 'Tense', 'Aspect', 'Voice', 'VerbForm', 'Definite', 'PronType', 'Poss', 'Reflex'];
+  const OTHER_FEATS = ['lemma', 'deprel', 'upos', 'xpos'];
+  function featBase(f) {
+    return f.replace(/<\/?[bi]>/g, '').split('=')[0].split('[')[0];
+  }
+  function featColumns(featLists) {
+    const seen = new Set();
+    featLists.forEach(list => list.forEach(f => { const b = featBase(f); if (b) seen.add(b); }));
+    const present = k => featLists.some(l => featEntry(l, k));
+    const rank = k => { const i = MORPH_ORDER.indexOf(k); return i < 0 ? MORPH_ORDER.length : i; };
+    const morph = [...seen].filter(k => !OTHER_FEATS.includes(k) && present(k))
+      .sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
+    return [...morph, ...OTHER_FEATS.filter(k => seen.has(k) && present(k))];
+  }
 
   function featEntries(feats, key) {
     // A plain "Number=..." entry and a bracketed "Number[abs]=..." one both
@@ -1517,16 +1805,52 @@ __V2_TREE_DATA_JS__
   // Rows flagged `linked` get a colored left rail connecting them (a role and
   // its reinflected "swapped_" counterpart); a row flagged `swapped` gets its
   // decisive cell flagged as the violation rather than the grammatical value.
+  // "Why this row is here": for each split on the way from the root to the
+  // current node, the rule, the branch this row took, and the row's own
+  // value of the column that split looks at.
+  function buildRouteTable(s, key) {
+    const route = s.route || {};
+    const path = T.PATHS[currentNode];
+    const esc = v => String(v).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+    const rows = [];
+    for (let i = 0; i + 1 < path.length; i++) {
+      const p = path[i], child = path[i + 1];
+      const val = route[String(p)];
+      if (val === undefined) continue;
+      const branch = T.NODES[child].branch;
+      rows.push(`<tr><th class="route-node">[${p}]</th><td class="route-rule">${nodeRuleDisplay(T.NODES[p])}</td>` +
+        `<td class="route-branch ${branch}">→ ${branch === 'true' ? 'True' : 'False'}</td><td class="route-value">${esc(val)}</td></tr>`);
+    }
+    if (!rows.length) return '';
+    const open = openRouteLabels.has(s.label);
+    return `<div class="route-block" data-label="${s.label}">
+      <button type="button" class="group-route-toggle" data-label="${s.label}" data-text="why this row is at node ${currentNode}" data-scroll-anchor="routerow_${key}" aria-expanded="${open}">${open ? '▾' : '▸'} why this row is at node ${currentNode}</button>
+      <div class="route-body"${open ? '' : ' hidden'}><div class="feat-mini-table-wrap"><table class="feat-mini-table route-table">
+        <thead><tr><th>node</th><th>split</th><th>answer</th><th>this row's value</th></tr></thead>
+        <tbody>${rows.join('')}</tbody></table></div></div></div>`;
+  }
+
   function buildFeatTable(decisiveFeat, rows, forceCols) {
     // forceCols lets a caller fix the same column set across several of
     // these tables (e.g. all 5 sample rows for a node) so they line up
     // visually -- left to compute its own columns, each table only shows
     // the features actually set for its own two rows, which drifts from
     // sample to sample.
-    const cols = forceCols || ORDERED_FEATS.filter(k => rows.some(r => featEntry(r.feats, k)));
-    const headHtml = cols.map(k => `<th${k === decisiveFeat ? ' class="decisive"' : ''}>${k}</th>`).join('');
+    const cols = forceCols || featColumns(rows.map(r => r.feats));
+    const firstOther = cols.findIndex(k => OTHER_FEATS.includes(k));
+    const colCls = (k, i, extra) => {
+      const c = [];
+      if (extra) c.push(extra);
+      if (OTHER_FEATS.includes(k)) c.push('other-feat');
+      if (i === firstOther) c.push('other-first');
+      return c;
+    };
+    const headHtml = cols.map((k, i) => {
+      const c = colCls(k, i, k === decisiveFeat ? 'decisive' : '');
+      return `<th${c.length ? ` class="${c.join(' ')}"` : ''}>${k}</th>`;
+    }).join('');
     const rowHtml = (r) => {
-      const cells = cols.map(k => {
+      const cells = cols.map((k, ci) => {
         // Every entry for this column, not just one -- a token can carry
         // more than one bracket of the same dimension at once (see
         // featEntries), and all of them are shown, separated, so e.g. a
@@ -1535,7 +1859,8 @@ __V2_TREE_DATA_JS__
         // entry for that exact bracket.
         const entries = featEntries(r.feats, k);
         const isDecisive = k === decisiveFeat;
-        const cls = isDecisive ? ` class="decisive${r.variant === 'swapped' ? ' swapped' : ''}"` : '';
+        const cellCls = colCls(k, ci, isDecisive ? `decisive${r.variant === 'swapped' ? ' swapped' : ''}` : '');
+        const cls = cellCls.length ? ` class="${cellCls.join(' ')}"` : '';
         if (!entries.length) return `<td${cls}><span class="na">–</span></td>`;
         // One line per entry, stacked vertically (feat-entry-line is
         // block-level), not joined inline with a "/" separator -- 2-3
@@ -1556,17 +1881,24 @@ __V2_TREE_DATA_JS__
             : e.bold ? `<b>${e.value}</b>`
             : e.value;
           const bracketHtml = e.bracket ? `<span class="feat-bracket">${e.bracket}</span>` : '';
-          return `<div class="feat-entry-line">${valueHtml}${bracketHtml}</div>`;
+          // A column kept out of the tree fit (e.g. the head's xpos or its
+          // Number, the label itself) is still shown, dimmed with a hint.
+          const fullKey = k + (e.bracket || '');
+          const blocked = (T.META.fitExcluded || []).some(x => x.role === r.role && x.feat === fullKey);
+          const line = `${valueHtml}${bracketHtml}`;
+          return `<div class="feat-entry-line">${blocked
+            ? `<span class="fit-excluded" title="Not used when fitting the tree: this feature is, or can spell out, the agreement label the tree predicts">${line}</span>`
+            : line}</div>`;
         });
         return `<td${cls}>${parts.join('')}</td>`;
       }).join('');
       const rowCls = r.linked ? ' class="linked-row"' : '';
       const roleCls = r.role ? ` role-${r.role}` : '';
-      return `<tr${rowCls}><th>${r.label} <span class="role-form${roleCls}">${r.form}</span></th>${cells}</tr>`;
+      return `<tr${rowCls}><th class="role-label-cell">${r.label}</th><th class="role-form-cell"><span class="role-form${roleCls}">${r.form}</span></th>${cells}</tr>`;
     };
     return `
       <div class="feat-mini-table-wrap"><table class="feat-mini-table">
-        <thead><tr><th></th>${headHtml}</tr></thead>
+        <thead><tr><th></th><th></th>${headHtml}</tr></thead>
         <tbody>
           ${rows.map(rowHtml).join('\n          ')}
         </tbody>
@@ -1636,10 +1968,29 @@ __V2_TREE_DATA_JS__
   function displayLabel(cls) {
     return cls.split(' / ').map(part => {
       const lower = part.toLowerCase();
-      if (lower !== 'yes' && lower !== 'no') return part;
-      const word = lower === 'yes' ? 'agree' : 'disagree';
-      return part[0] === part[0].toUpperCase() ? word[0].toUpperCase() + word.slice(1) : word;
+      if (lower === 'yes') return 'Agree';
+      if (lower === 'no') return 'Disagree';
+      if (lower === 'unk') return 'unknown';
+      return part;
     }).join(' / ');
+  }
+
+  // T.roleA/T.roleB (and each pair's own swapRole 'A'/'B') are always the
+  // short raw role token the pipeline used internally (UD upos-ish tags for
+  // NPA -- "det", "adj", "adp", "num", "pron", "head" -- or SVA/subj_aux's
+  // "nsubj"/"verb"/"aux") -- spelled out here only where it's shown to a
+  // reader (the Pairs tab's role chips/group headers), the same "relabel at
+  // render time, keep the raw token as the identifier everywhere else"
+  // split as displayLabel above. An unrecognized token still degrades
+  // gracefully to Titlecase rather than showing raw lowercase.
+  const ROLE_DISPLAY_NAMES = {
+    det: 'Determiner', adj: 'Adjective', adp: 'Adposition', num: 'Numeral',
+    pron: 'Pronoun', head: 'Head', nsubj: 'Subject', verb: 'Verb', aux: 'Auxiliary',
+  };
+  function displayRole(token) {
+    const key = String(token || '').toLowerCase();
+    if (ROLE_DISPLAY_NAMES[key]) return ROLE_DISPLAY_NAMES[key];
+    return token ? key.charAt(0).toUpperCase() + key.slice(1) : token;
   }
 
   // Leaf node boxes render node.rule verbatim ("predict: Yes") server-side --
@@ -1672,7 +2023,11 @@ __V2_TREE_DATA_JS__
   function buildDistBar(node) {
     if (!node.dist) return '';
     const total = node.dist.reduce((s, d) => s + d.cnt, 0) || 1;
-    const segs = node.dist.map(d => {
+    // Zero-count classes are dropped before rendering, not just given 0%
+    // width -- a 0%-wide segment would still take its :not(:last-child)
+    // divider (a border-right renders regardless of width), producing a
+    // stray line with nothing on one side of it.
+    const segs = node.dist.filter(d => d.cnt > 0).map(d => {
       return `<span class="seg" style="width:${(d.cnt / total * 100).toFixed(2)}%; background:${classColor(d.cls)}"></span>`;
     }).join('');
     const hidden = showNodeDist ? '' : ' style="display:none"';
@@ -1721,9 +2076,12 @@ __V2_TREE_DATA_JS__
       // the threshold; omit the badge entirely there rather than show a
       // "kept" or "not kept" note that can't ever inform anything.
       const isAgreeLeaf = node.majorityLabel && node.majorityLabel.toLowerCase() === 'yes';
-      const keepHtml = !node.leaf || !isAgreeLeaf ? '' : node.keep
-        ? `<span class="node-keep yes" data-keep-toggle="1">🔑 ${node.kept.toLocaleString()} kept › ${node.correctSwaps.toLocaleString()} pairs ▸</span>`
-        : `<span class="node-keep no">not kept (H≥${T.META.keepThresholdH.toFixed(2)})</span>`;
+      // node.keepThresholdH is this leaf's own cutoff -- same value for every
+      // leaf unless second_chance's depth-aware retry gave leaves different
+      // ones, in which case T.META's single global number can't be trusted.
+      const keepHtml = !node.leaf || !isAgreeLeaf || node.keepThresholdH == null ? '' : node.keep
+        ? `<span class="node-keep yes${node.secondChance ? ' second-chance' : ''}" data-keep-toggle="1">🔑${node.secondChance ? '2️⃣' : ''} ${node.kept.toLocaleString()} kept${node.secondChance ? ` (H<${node.keepThresholdH.toFixed(2)})` : ''} › ${node.correctSwaps.toLocaleString()} pairs ▸</span>`
+        : `<span class="node-keep no">not kept (H≥${node.keepThresholdH.toFixed(2)})</span>`;
       const fill = nodeFillColor(node);
       // [+] marker: flags a split rule where some other feature was >99%
       // correlated with the chosen one in the rows reaching this node (the
@@ -1759,29 +2117,9 @@ __V2_TREE_DATA_JS__
       nodeBoxEl.tabIndex = 0;
       nodeBoxEl.setAttribute('role', 'button');
       nodeBoxEl.setAttribute('aria-label', `Node ${id}: ${nodeRuleDisplay(node)}`);
-      nodeBoxEl.addEventListener('click', () => selectNode(id));
+      nodeBoxEl.addEventListener('click', () => onNodeClick(id));
       nodeBoxEl.addEventListener('keydown', e => {
-        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectNode(id); }
-      });
-      // Double-click is the fullscreen equivalent of the plain click above
-      // (which already ran twice by the time this fires, same as any
-      // dblclick): the node-samples table it updates lives outside
-      // .tree-wrap, in .scroll-pane, so it's not enough on its own while
-      // fullscreen -- this leaves fullscreen and jumps to it too.
-      nodeBoxEl.addEventListener('dblclick', () => {
-        leaveFullscreenThen(() => {
-          selectNode(id);
-          sampleCard.open = true;
-          // A tick after opening the <details>, not the same one: a smooth
-          // scroll started before the browser's committed the reflow from
-          // open=true can animate toward stale (still-collapsed)
-          // coordinates. setTimeout, not requestAnimationFrame -- rAF is
-          // suspended entirely while the document isn't the active,
-          // rendering one, which a plain deferred timer isn't.
-          setTimeout(() => {
-            sampleCard.scrollIntoView({ behavior: 'smooth', block: 'start' });
-          }, 0);
-        });
+        if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onNodeClick(id); }
       });
       const keepEl = slot.querySelector('[data-keep-toggle]');
       if (keepEl) {
@@ -1790,34 +2128,10 @@ __V2_TREE_DATA_JS__
         keepEl.setAttribute('aria-label', `View the ${node.correctSwaps.toLocaleString()} minimal pairs this leaf produced`);
         const openPairs = e => {
           e.stopPropagation();
-          // The pairs table lives outside .tree-wrap, in .scroll-pane --
-          // invisible while fullscreen (a fullscreened element is the only
-          // thing the browser renders) -- so this leaves fullscreen first.
-          leaveFullscreenThen(() => {
-            pairsCard.open = true;
-            // A tick after opening the <details>, not the same one -- see
-            // the node dblclick handler's own comment on this same pattern
-            // and why setTimeout, not requestAnimationFrame.
-            setTimeout(() => {
-              // Scroll straight to *this* leaf's own group, not just the
-              // pairs card in general -- with more than one leaf kept,
-              // landing on the top of the card could leave the one the
-              // badge was actually about scrolled well out of view. Falls
-              // back to the card itself if the group isn't found (e.g.
-              // stale T.NODES).
-              const leafGroup = pairsList.querySelector(`[data-leaf-group="${CSS.escape(id)}"]`);
-              (leafGroup || pairsCard).scrollIntoView({ behavior: 'smooth', block: 'nearest' });
-              if (leafGroup) {
-                // Restart the animation even if this leaf was just jumped
-                // to a moment ago (removing the class before re-adding it
-                // forces the browser to treat it as a fresh animation, not
-                // a no-op).
-                leafGroup.classList.remove('jump-highlight');
-                void leafGroup.offsetWidth;
-                leafGroup.classList.add('jump-highlight');
-              }
-            }, 0);
-          });
+          openDrawer('pairs');
+          selectNode(id);
+          revealSelectedNode();
+          setTimeout(() => jumpToLeafGroup(id), 0);
         };
         keepEl.addEventListener('click', openPairs);
         keepEl.addEventListener('keydown', e => {
@@ -1825,6 +2139,109 @@ __V2_TREE_DATA_JS__
         });
       }
     });
+  }
+
+  // Pooled tree + one pill per treebank tree (word_order.per_treebank).
+  // A pill is tagged when that treebank's own tree beats the pooled tree on
+  // the same held-out rows by a clear margin.
+  function buildTreebankRow() {
+    const nav = T.META.nav;
+    if (!nav) return;
+    const pct = v => (v * 100).toFixed(1) + '%';
+    const esc = s => String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+    const pills = [`<span class="tb-label">Trees</span>`];
+    const unkView = nav.variant === 'unk';
+    const pAcc = unkView ? nav.pooledUnkAcc : nav.pooledAcc;
+    const pN = unkView ? nav.pooledUnkTestN : nav.pooledTestN;
+    // Row count the tree was actually fit on: without unk rows (as-is) or
+    // with them (incl. unk).
+    const rowsHtml = (n, unkN) => `${(unkView ? n + unkN : n).toLocaleString()} rows`;
+    const pooledInner = `Pooled<span class="keep-count">${rowsHtml(nav.pooledRows, nav.pooledUnkRows)}${pAcc == null ? '' : ' · ' + pct(pAcc)}</span>`;
+    const pooledTitle = pAcc == null ? 'All treebanks together'
+      : `All treebanks together; held-out accuracy ${pct(pAcc)} on ${pN.toLocaleString()} rows${unkView ? ' (unk rows included)' : ''}`;
+    pills.push(nav.pooledCurrent
+      ? `<span class="tree-select-btn active" title="${pooledTitle}">${pooledInner}</span>`
+      : `<a class="tree-select-btn" href="${nav.pooledHref}" title="${pooledTitle}">${pooledInner}</a>`);
+    // Treebank pills stay within the current view: the as-is trees, or (on an
+    // incl.-unk debugging page) the trees that also fit the unk rows.
+    const unkMode = nav.variant === 'unk';
+    // Excluded treebanks (never in the pooled tree or the pairs) become
+    // compact chips, grouped by reason under the chevron below.
+    const excludedItems = [];
+    nav.items.forEach(it => {
+      // In the incl.-unk view a treebank with no unk tree (e.g. a single-label
+      // one) still links to its as-is page, so its pill stays reachable.
+      const href = unkMode ? (it.unkHref || it.href) : (it.href || it.unkHref);
+      const acc = unkMode ? it.unkAcc : it.acc;
+      const noTree = it.placeholder && !(unkMode && it.unkHref);
+      if (it.excluded) {
+        const n = (unkMode ? it.rows + it.unkRows : it.rows).toLocaleString();
+        const detail = `${it.name}: ${n} rows${acc == null ? '' : ' · ' + pct(acc) + ' held-out'}. Excluded from the minimal-pair pipeline (${it.reason || it.status}); not part of the pooled tree`;
+        const inner = `${esc(it.name)}<span class="n">${n} rows${acc != null ? ' · ' + pct(acc) : noTree ? ' · ' + esc(it.status) : ''}</span>`;
+        excludedItems.push({
+          key: it.reason || it.status,
+          chip: it.current ? `<span class="tb-chip active" title="${esc(detail)}">${inner}</span>`
+            : href ? `<a class="tb-chip${noTree ? ' muted' : ''}" href="${href}" title="${esc(detail)}${noTree ? ' -- no tree, placeholder page' : ''}">${inner}</a>`
+            : `<span class="tb-chip muted" title="${esc(detail)}; no tree fitted (${esc(it.status)})">${inner}</span>`,
+        });
+        return;
+      }
+      const out = pills;
+      if (!href && !it.current) {
+        out.push(`<span class="tree-select-btn tb-muted" title="No tree fitted: ${esc(it.status)}">${esc(it.name)}<span class="keep-count">${esc(it.status)}</span></span>`);
+        return;
+      }
+      const unkOnly = !unkMode && !it.href;
+      const title = unkMode ? 'Fit on unk rows too -- not comparable with the pooled tree'
+        : unkOnly ? `${it.status} without unk rows; only the incl.-unk tree exists`
+        : it.pooledAcc == null ? ''
+        : `Own tree ${pct(it.acc)} vs pooled tree ${pct(it.pooledAcc)} on this treebank's held-out rows`;
+      const tag = !unkMode && it.diverges ? `<span class="tb-tag">differs +${(it.delta * 100).toFixed(0)}</span>` : '';
+      const accTxt = acc == null ? '' : ` · ${pct(acc)}`;
+      const note = unkOnly ? ` · ${esc(it.status)}, incl. unk only` : noTree ? ` · ${esc(it.status)}` : '';
+      const inner = `${esc(it.name)}<span class="keep-count">${rowsHtml(it.rows, it.unkRows)}${accTxt}${note}</span>${tag}`;
+      out.push(it.current
+        ? `<span class="tree-select-btn active" title="${title}">${inner}</span>`
+        : `<a class="tree-select-btn${noTree ? ' tb-muted-link' : ''}" href="${href}" title="${noTree ? esc(it.status) + ' -- no tree, placeholder page with the label counts' : title}">${inner}</a>`);
+    });
+    const excludedCount = excludedItems.length;
+    // One row above the tree: the excluded-treebanks chevron on the left (its
+    // chips open to the right of it) and the include-unk switch at the right
+    // end. The open state is remembered per browser so it survives moving
+    // between pages, e.g. via the switch.
+    let storedOpen = false;
+    try { storedOpen = localStorage.getItem('excludedOpen') === '1'; } catch (e) {}
+    const excludedOpen = storedOpen;
+    const excludedCurrent = nav.items.some(it => it.excluded && it.current);
+    const rowParts = [];
+    if (excludedCount) {
+      const groups = new Map();
+      excludedItems.forEach(x => { if (!groups.has(x.key)) groups.set(x.key, []); groups.get(x.key).push(x.chip); });
+      const groupsHtml = [...groups].map(([reason, chips]) =>
+        `<div class="tb-excl-group">${chips.join('')}<span class="tb-excl-reason">${esc(reason)}</span></div>`).join('');
+      rowParts.push(`<div class="tb-excl-wrap"><button type="button" class="tb-excluded-toggle${excludedCurrent ? ' has-current' : ''}" id="excludedToggle" aria-expanded="${excludedOpen}">${excludedOpen ? '▾' : '▸'} Excluded from pairs (${excludedCount})</button>` +
+        `<div class="tb-excluded" id="excludedList"${excludedOpen ? '' : ' hidden'}>${groupsHtml}</div></div>`);
+    }
+    if (nav.counterpartHref) {
+      rowParts.push(`<a class="unk-toggle${unkMode ? ' on' : ''}" href="${nav.counterpartHref}" role="switch" aria-checked="${unkMode}"
+        title="${unkMode ? 'Debugging view is on -- click to go back to the tree fit without unk rows' : 'Debugging view: same treebank, tree also fit on its unk rows'}"><span class="unk-switch"><span class="unk-knob"></span></span>Include rows missing annotation ("unk")</a>`);
+    }
+    if (rowParts.length) pills.push(`<div class="tb-controls">${rowParts.join('')}</div>`);
+    treebankRow.innerHTML = pills.join('');
+    treebankRow.style.display = '';
+    const excludedToggle = document.getElementById('excludedToggle');
+    if (excludedToggle) {
+      excludedToggle.addEventListener('click', () => {
+        const list = document.getElementById('excludedList');
+        list.hidden = !list.hidden;
+        excludedToggle.setAttribute('aria-expanded', String(!list.hidden));
+        excludedToggle.textContent = `${list.hidden ? '▸' : '▾'} Excluded from pairs (${excludedCount})`;
+        try { localStorage.setItem('excludedOpen', list.hidden ? '0' : '1'); } catch (e) {}
+        scheduleRefit();
+      });
+    }
+    const overview = document.querySelector('.overview-link');
+    if (overview && nav.overviewHref) overview.setAttribute('href', nav.overviewHref);
   }
 
   function buildTreeSelector() {
@@ -1848,7 +2265,7 @@ __V2_TREE_DATA_JS__
   // Blue "current" outline covers the whole root→currentNode route, not just
   // the node itself, so you can see how you got there at a glance.
   function markCurrentPath() {
-    const onPath = new Set(T.PATHS[currentNode]);
+    const onPath = new Set(drawerOpen ? T.PATHS[currentNode] : []);
     document.querySelectorAll('.node-slot').forEach(el => {
       el.classList.toggle('current', onPath.has(Number(el.dataset.node)));
     });
@@ -1860,20 +2277,29 @@ __V2_TREE_DATA_JS__
   // T.CLASSES -- both read from decision_trees/{cond}/{lang}.html's own
   // info-panel, not recomputed here.
   const META_ROWS = [
-    ['Language', 'language'], ['Keep threshold', 'keepThreshold'], ['accuracy', 'accuracy'],
+    ['Language', 'languageName'], ['Treebank', 'treebank'], ['Excluded from pairs', 'excludedReason'], ['Keep threshold', 'keepThreshold'], ['train accuracy', 'accuracy'], ['test accuracy', 'testAccuracyRow'],
     ['base entropy', 'baseEntropy'], ['reduced entropy', 'reducedEntropy'],
     ['Nodes', 'nodes'], ['Depth', 'depth'],
     ['Training samples', 'trainingSamples'], ['Predictor', 'predictor'],
   ];
   function buildInfoPanel() {
+    // Pages built before languageName existed only carry the combined name.
+    if (T.META.languageName === undefined) T.META.languageName = T.META.language;
+    if (T.META.testAccuracy) T.META.testAccuracyRow = `${T.META.testAccuracy} (n=${T.META.testN})`;
+    else META_ROWS[META_ROWS.findIndex(r => r[1] === 'accuracy')][0] = 'accuracy';
     infoPanelTitle.textContent = T.META.language;
-    infoPanelAccuracy.textContent = T.META.accuracy;
-    infoPanelMeta.innerHTML = META_ROWS.map(([label, key]) => `
+    // Train = accuracy on the rows the tree was fit on; test = on its held-out
+    // split. Pages built before the test figure existed just show "accuracy".
+    infoPanelAccuracy.textContent = T.META.testAccuracy
+      ? `train ${T.META.accuracy} · test ${T.META.testAccuracy}`
+      : `${T.META.accuracy} accuracy`;
+    infoPanelMeta.innerHTML = META_ROWS.filter(([, key]) => T.META[key] !== undefined).map(([label, key]) => `
       <div class="meta-row"><span class="meta-key">${label}</span><span class="meta-val">${T.META[key]}</span></div>`).join('');
 
     const maxCnt = Math.max(...T.CLASSES.map(c => c.cnt), 1);
+    const excluded = new Set(T.META.excludedClasses || []);
     classDistLegend.innerHTML = T.CLASSES.map(c => `
-      <div class="class-dist-row" style="${c.cnt === 0 ? 'opacity:0.35' : ''}">
+      <div class="class-dist-row" style="${c.cnt === 0 ? 'opacity:0.35' : excluded.has(c.cls) ? 'opacity:0.45' : ''}"${excluded.has(c.cls) ? ' title="Not used in this tree\'s fit -- shown for context"' : ''}>
         <span class="class-dist-swatch" style="background:${c.color}"></span>
         <span class="class-dist-label">${displayLabel(c.cls)}</span>
         <span class="class-dist-count">${c.cnt.toLocaleString()}</span>
@@ -1920,6 +2346,7 @@ __V2_TREE_DATA_JS__
     currentNode = T.defaultNode;
     active.clear();
     openLabels.clear();
+    openRouteLabels.clear();
     // Leaf ids aren't unique across trees (both demo trees happen to have a
     // leaf "3"), so leaving these set would leak one tree's open/highlight
     // state onto the other tree's same-numbered leaf.
@@ -1948,6 +2375,7 @@ __V2_TREE_DATA_JS__
     currentNode = id;
     markCurrentPath();
     buildSampleGrid();
+    buildPairsList();
     render();
   }
 
@@ -1989,6 +2417,10 @@ __V2_TREE_DATA_JS__
   // open No's, since they're a separate group with nothing to compare
   // against Yes row-for-row.
   let openLabels = new Set();
+  // Same idea one level down: which label groups have their "why this row"
+  // route tables open. Separate from openLabels (the feature tables that
+  // contain them), so opening one never opens the other.
+  let openRouteLabels = new Set();
 
   // Which leaves currently have every one of their pairs' feature tables
   // open -- keyed by leafId, not per-pair: a leaf's pairs have no Yes/No
@@ -2047,6 +2479,15 @@ __V2_TREE_DATA_JS__
     el.addEventListener('dblclick', () => onDouble());
   }
 
+  function setLabelRouteOpen(label, open) {
+    if (open) openRouteLabels.add(label); else openRouteLabels.delete(label);
+    document.querySelectorAll(`.route-block[data-label="${CSS.escape(label)}"] .route-body`).forEach(el => { el.hidden = !open; });
+    document.querySelectorAll(`.group-route-toggle[data-label="${CSS.escape(label)}"]`).forEach(btn => {
+      btn.textContent = (open ? '▾' : '▸') + ' ' + btn.dataset.text;
+      btn.setAttribute('aria-expanded', String(open));
+    });
+  }
+
   function setLabelFeatsOpen(label, open) {
     if (open) openLabels.add(label); else openLabels.delete(label);
     document.querySelectorAll(`#sampleGrid tr.feat-row[data-label="${CSS.escape(label)}"]`).forEach(el => { el.hidden = !open; });
@@ -2072,11 +2513,13 @@ __V2_TREE_DATA_JS__
   // a hidden row's cells measure 0-width -- so this runs after that, not at
   // build time.
   function alignFeatLabelCols() {
-    const cells = [...document.querySelectorAll('#sampleGrid tr.feat-row:not([hidden]) .feat-mini-table tbody th')];
-    if (!cells.length) return;
-    cells.forEach(c => { c.style.width = ''; });
-    const maxW = Math.max(...cells.map(c => c.getBoundingClientRect().width));
-    cells.forEach(c => { c.style.width = maxW + 'px'; });
+    ['role-label-cell', 'role-form-cell'].forEach(cls => {
+      const cells = [...document.querySelectorAll(`#sampleGrid tr.feat-row:not([hidden]) .feat-mini-table tbody th.${cls}`)];
+      if (!cells.length) return;
+      cells.forEach(c => { c.style.width = ''; });
+      const maxW = Math.max(...cells.map(c => c.getBoundingClientRect().width));
+      cells.forEach(c => { c.style.width = maxW + 'px'; });
+    });
   }
 
   // Auto-derived from T.NODES/T.PATHS alone: the chain of split rules and the
@@ -2108,9 +2551,7 @@ __V2_TREE_DATA_JS__
     // VerbForm land in the same position across all 5 -- otherwise a
     // feature only some samples have shifts every later column sideways
     // from row to row, and nothing lines up for comparison.
-    const sharedCols = ORDERED_FEATS.filter(k =>
-      samples.some(s => featEntry(s.nsubjFeats, k) || featEntry(s.verbFeats, k))
-    );
+    const sharedCols = featColumns(samples.flatMap(s => [s.nsubjFeats, s.verbFeats]));
 
     function addRow(s, idx, displayIdx) {
       const key = currentNode + '_' + idx;
@@ -2143,7 +2584,12 @@ __V2_TREE_DATA_JS__
       featRow.innerHTML = `<td colspan="3">${buildFeatTable(T.decisiveFeat, [
         { label: T.roleA, form: s.nsubj, feats: s.nsubjFeats, role: 'a' },
         { label: T.roleB, form: s.verb, feats: s.verbFeats, role: 'b' },
-      ], sharedCols)}</td>`;
+      ], sharedCols)}${buildRouteTable(s, key)}</td>`;
+      featRow.querySelectorAll('.group-route-toggle').forEach(btn => {
+        btn.addEventListener('click', () => {
+          preservingScroll(btn, `routerow_${key}`, () => setLabelRouteOpen(s.label, !openRouteLabels.has(s.label)));
+        });
+      });
 
       row.querySelector('a').addEventListener('click', e => e.stopPropagation());
       const featBtn = row.querySelector('.group-feats-toggle');
@@ -2205,12 +2651,18 @@ __V2_TREE_DATA_JS__
         const pct = (distEntry.cnt / node.n * 100).toFixed(1);
         const header = document.createElement('tr');
         header.className = 'sample-group-header';
+        header.dataset.label = label;
         header.innerHTML = `<td colspan="3"><div class="group-header-row">
           <span class="group-swatch" style="background:${classColor(label)}"></span>
           <span class="group-label">${displayLabel(label)}</span>
           <span class="group-n">showing ${idxs.length} of ${distEntry.cnt.toLocaleString()} (${pct}% of this node)</span>
+          ${T.PATHS[currentNode].length > 1 ? `<button type="button" class="group-route-toggle" data-label="${label}" data-text="route" data-scroll-anchor="routehdr_${label}" aria-expanded="${openRouteLabels.has(label)}">${openRouteLabels.has(label) ? '▾' : '▸'} route</button>` : ''}
           <button type="button" class="group-feats-toggle" data-label="${label}" data-scroll-anchor="samplehdr_${label}" aria-expanded="${isOpen}">${isOpen ? '▾' : '▸'} features</button>
         </div></td>`;
+        const routeHdrBtn = header.querySelector('.group-route-toggle');
+        if (routeHdrBtn) routeHdrBtn.addEventListener('click', () => {
+          preservingScroll(routeHdrBtn, `routehdr_${label}`, () => setLabelRouteOpen(label, !openRouteLabels.has(label)));
+        });
         const hdrBtn = header.querySelector('.group-feats-toggle');
         hdrBtn.addEventListener('click', () => {
           preservingScroll(hdrBtn, `samplehdr_${label}`, () => setLabelFeatsOpen(label, !openLabels.has(label)));
@@ -2220,31 +2672,86 @@ __V2_TREE_DATA_JS__
       idxs.forEach((idx, i) => addRow(samples[idx], idx, i + 1));
     });
     if (openLabels.size) alignFeatLabelCols();
+    buildLabelJumps(labels, node);
+  }
+
+  // One chip per label present in this node's samples, jumping to that
+  // label's group in the table -- including a unanimous (single-label)
+  // node's one chip: that count is still real signal (how many of this
+  // node's n it covers), not just a jump target, so it stays visible
+  // rather than only showing up once there's something to jump between.
+  function buildLabelJumps(labels, node) {
+    drawerLabels.innerHTML = '';
+    if (labels.length >= 1) {
+      labels.forEach(label => {
+        const entry = (node.dist || []).find(d => d.cls === label);
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'label-jump';
+        btn.title = `Jump to the ${displayLabel(label)} samples`;
+        btn.innerHTML = `<span class="swatch" style="background:${classColor(label)}"></span>${displayLabel(label)}` +
+          (entry ? `<span class="n">${entry.cnt.toLocaleString()}</span>` : '');
+        btn.addEventListener('click', () => {
+          // From the Pairs tab, jump means "show me these samples".
+          if (drawerTab !== 'samples') setDrawerTab('samples');
+          const header = sampleGrid.querySelector(`tr.sample-group-header[data-label="${CSS.escape(label)}"]`);
+          if (!header) return;
+          header.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          const row = header.querySelector('.group-header-row');
+          row.classList.remove('jump-flash');
+          void row.offsetWidth;
+          row.classList.add('jump-flash');
+        });
+        drawerLabels.appendChild(btn);
+      });
+    }
+    updateLabelJumps();
+  }
+  function updateLabelJumps() {
+    drawerLabels.hidden = !drawerLabels.children.length;
+  }
+
+  function nodeHasPairs(id) {
+    const n = T.NODES[id];
+    return !!(n && n.leaf && n.keep && T.PAIRS.some(p => String(p.leaf) === String(id)));
+  }
+  // The Pairs tab is only usable on a leaf that generated pairs; if the
+  // drawer is on it when the selection moves elsewhere, fall back to Samples.
+  function syncPairsTab() {
+    const ok = nodeHasPairs(currentNode);
+    tabPairs.disabled = !ok;
+    tabPairs.title = ok ? '' : 'Only kept leaves that generated pairs have a Pairs view';
+    if (!ok && drawerTab === 'pairs') setDrawerTab('samples');
   }
 
   function buildPairsList() {
     pairsList.innerHTML = '';
-    // Caps how many real pair examples render per leaf -- T.PAIRS is a
-    // hand-picked demo subset today (a handful per leaf), but a leaf's real
-    // correct_swaps.parquet can run into the thousands, so this keeps the
-    // page from ever having to render all of them at once.
-    const PAIR_LIMIT = 15;
-    const keepLeaves = Object.entries(T.NODES).filter(([, n]) => n.keep).map(([id]) => id);
+    // Pages without a keep threshold (per-treebank trees) generate no pairs.
+    if (T.META.keepThresholdH == null) { pairsCard.style.display = 'none'; tabPairs.hidden = true; drawerPairRoles.hidden = true; return; }
+    // Pairs belong to leaves: only the selected node's own pairs are shown,
+    // and only when it is a kept leaf that actually generated some. T.PAIRS
+    // itself is already capped server-side (html_tree._v2_build_pairs, up
+    // to 10 rows per reinflection direction per leaf -- a leaf's real
+    // correct_swaps.parquet can run into the thousands), so nothing further
+    // needs capping here; allPairs below IS what renders.
+    const keepLeaves = nodeHasPairs(currentNode) ? [String(currentNode)] : [];
+    syncPairsTab();
     const pairsByLeaf = keepLeaves.map(leafId => [leafId, T.PAIRS.filter(p => String(p.leaf) === String(leafId))]);
-    const shownTotal = pairsByLeaf.reduce((sum, [, all]) => sum + Math.min(all.length, PAIR_LIMIT), 0);
-    const leafWord = keepLeaves.length === 1 ? 'leaf' : 'leaves';
-    pairsTitle.textContent = `🔑 Generated minimal pairs (${keepLeaves.length} ${leafWord} kept, ${shownTotal} shown)`;
+    const shownTotal = pairsByLeaf.reduce((sum, [, all]) => sum + all.length, 0);
+    pairsTitle.textContent = keepLeaves.length
+      ? `🔑 Generated minimal pairs · leaf ${keepLeaves[0]} (${shownTotal} shown)`
+      : `No minimal pairs for node ${currentNode}`;
+    updateDrawerHint();
 
     // Which leaf/leaves, how many kept, and H vs. the keep threshold are all
     // already on the node badges above (and repeated in pairsTitle just
     // above this); this only needs to add what those don't already say --
     // that these specific pairs come straight from correct_swaps.parquet.
-    const leafList = keepLeaves.length > 1 ? `leaves ${keepLeaves.join(' and ')}` : `leaf ${keepLeaves[0]}`;
-    pairsIntro.textContent = `Minimal pairs from ${leafList}`;
+    pairsIntro.textContent = keepLeaves.length ? `Minimal pairs from leaf ${keepLeaves[0]}` : '';
+    buildPairRoleJumps(keepLeaves.length ? keepLeaves[0] : null);
 
-    pairsByLeaf.forEach(([leafId, allPairs]) => {
-      if (allPairs.length === 0) return;
-      const leafPairs = allPairs.slice(0, PAIR_LIMIT);
+    pairsByLeaf.forEach(([leafId, leafPairs]) => {
+      if (leafPairs.length === 0) return;
       const group = document.createElement('div');
       group.className = 'pairs-leaf-group';
       // Stable target for a node's "kept › pairs" badge (see openPairs
@@ -2258,7 +2765,7 @@ __V2_TREE_DATA_JS__
       const allOpen = openLeaves.has(leafId);
       const headingRow = document.createElement('div');
       headingRow.className = 'pairs-leaf-heading-row';
-      const shownNote = allPairs.length > PAIR_LIMIT ? `, showing ${PAIR_LIMIT} of ${allPairs.length}` : '';
+      const shownNote = leaf.correctSwaps > leafPairs.length ? `, showing ${leafPairs.length} of ${leaf.correctSwaps.toLocaleString()}` : '';
       const headingHtml = keepLeaves.length > 1
         ? `<span class="pairs-leaf-heading">Leaf ${leafId} <span class="n">— ${leaf.kept.toLocaleString()} kept, ${leaf.correctSwaps ? leaf.correctSwaps.toLocaleString() + ' pairs generated' : ''}${shownNote}</span></span>`
         : '';
@@ -2282,7 +2789,7 @@ __V2_TREE_DATA_JS__
       pathTrace.innerHTML = buildBreadcrumb(leafId);
       group.appendChild(pathTrace);
 
-      leafPairs.forEach((p, i) => {
+      const appendPairItem = (p, i) => {
         const key = leafId + '_' + i;
         // Every pair in an open leaf shows its feature table together (no
         // per-pair open state); activePairKey is the single, separate
@@ -2354,10 +2861,174 @@ __V2_TREE_DATA_JS__
           if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleHighlight(); }
         });
         group.appendChild(el);
+      };
+
+      // Group by which component this leaf's pairs actually reinflected
+      // (npa.agreement.swap_roles_for_target_col: a no-HEAD pair like
+      // DET-ADJ reinflects each role in turn and merges both directions into
+      // one bucket) -- same idea as the samples table's byLabel groups, so a
+      // leaf that mixes e.g. DET- and ADJ-reinflected pairs shows them as two
+      // labelled runs instead of interleaved with no indication of which
+      // side was reinflected. A leaf with only one direction (SVA/subj_aux,
+      // or NPA's HEAD pairs) renders exactly as before -- no header, one
+      // flat list -- since there's nothing to distinguish.
+      const byRole = new Map();
+      leafPairs.forEach((p, i) => {
+        const role = p.swapRole || T.swappedRole;
+        if (!byRole.has(role)) byRole.set(role, []);
+        byRole.get(role).push(i);
       });
+      const roleOrder = ['A', 'B'].filter(r => byRole.has(r));
+      if (roleOrder.length > 1) {
+        const esc = v => String(v).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+        roleOrder.forEach(role => {
+          const idxs = byRole.get(role);
+          const roleLabel = displayRole(role === 'A' ? T.roleA : T.roleB);
+          const header = document.createElement('div');
+          header.className = 'pairs-role-header';
+          header.setAttribute('data-role-group', role);
+          header.innerHTML = `<span class="pairs-role-label">${esc(roleLabel)} reinflected</span><span class="n">${idxs.length}</span>`;
+          group.appendChild(header);
+          idxs.forEach(i => appendPairItem(leafPairs[i], i));
+        });
+      } else {
+        leafPairs.forEach((p, i) => appendPairItem(p, i));
+      }
       pairsList.appendChild(group);
     });
   }
+
+  // One chip per reinflected component present among the current leaf's
+  // pairs (only when the leaf actually mixes both -- see roleOrder above),
+  // sitting next to the Pairs tab the same way drawerLabels' Agree/Disagree
+  // chips sit next to Samples. Counts come from node.pairRoleCounts -- the
+  // REAL per-direction total straight from correct_swaps.parquet, not just
+  // however many of that direction happen to be materialized into T.PAIRS
+  // -- the same "real distribution, not the capped sample" convention
+  // node.dist gives the Agree/Disagree chips (see buildLabelJumps). Jumps
+  // to that component's group header (built above) rather than filtering.
+  function buildPairRoleJumps(leafId) {
+    drawerPairRoles.innerHTML = '';
+    const counts = (leafId != null && T.NODES[leafId] && T.NODES[leafId].pairRoleCounts) || {};
+    const roleOrder = ['A', 'B'].filter(r => counts[r] > 0);
+    if (roleOrder.length > 1) {
+      const esc = v => String(v).replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]));
+      roleOrder.forEach(role => {
+        const roleLabel = displayRole(role === 'A' ? T.roleA : T.roleB);
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'label-jump pairs-role';
+        btn.title = `Jump to pairs with a reinflected ${roleLabel}`;
+        btn.innerHTML = `${esc(roleLabel)}<span class="n">${counts[role].toLocaleString()}</span>`;
+        btn.addEventListener('click', () => {
+          if (drawerTab !== 'pairs') setDrawerTab('pairs');
+          const header = pairsList.querySelector(`[data-role-group="${role}"]`);
+          if (!header) return;
+          header.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          header.classList.remove('jump-flash');
+          void header.offsetWidth;
+          header.classList.add('jump-flash');
+        });
+        drawerPairRoles.appendChild(btn);
+      });
+    }
+    drawerPairRoles.hidden = !drawerPairRoles.children.length;
+  }
+
+  // ── Samples / pairs drawer ──
+  // Click a node: open the drawer on its samples. Click another node: switch
+  // to it. Click the highlighted node (or the close button / Esc): close.
+  let drawerOpen = false;
+  let drawerTab = 'samples';
+  const DRAWER_KEY = 'treeDrawerFrac';
+  let drawerFrac = 0.4;
+  try {
+    const v = parseFloat(localStorage.getItem(DRAWER_KEY));
+    if (v >= 0.15 && v <= 0.9) drawerFrac = v;
+  } catch (e) {}
+  function applyDrawerHeight() { drawer.style.height = `${drawerFrac * 100}%`; }
+  function updateDrawerHint() {
+    drawerHint.textContent = drawerTab === 'pairs'
+      ? pairsTitle.textContent
+      : 'click a row to trace it · up to 15 real rows per class';
+  }
+  function setDrawerTab(tab) {
+    drawerTab = tab;
+    drawer.dataset.tab = tab;
+    tabSamples.classList.toggle('active', tab === 'samples');
+    tabPairs.classList.toggle('active', tab === 'pairs');
+    updateDrawerHint();
+    updateLabelJumps();
+  }
+  function openDrawer(tab) {
+    drawerOpen = true;
+    drawer.hidden = false;
+    applyDrawerHeight();
+    setDrawerTab(tab || drawerTab);
+  }
+  function closeDrawer() {
+    drawerOpen = false;
+    drawer.hidden = true;
+    if (revealShift) { zoom.ty += revealShift / contentScale; revealShift = 0; applyZoom(); }
+    active.clear();
+    markCurrentPath();
+    render();
+  }
+  // Pan the tree up if the drawer would cover the selected node; the shift is
+  // undone when the drawer closes so the tree isn't left displaced.
+  let revealShift = 0;
+  function revealSelectedNode() {
+    const box = nodesLayer.querySelector(`.node-slot[data-node="${CSS.escape(String(currentNode))}"] .node-box`);
+    if (!box) return;
+    const r = box.getBoundingClientRect();
+    const over = r.bottom + 12 - drawer.getBoundingClientRect().top;
+    if (over <= 0) return;
+    const room = r.top - treeScroll.getBoundingClientRect().top - 8;
+    const dy = Math.min(over, Math.max(0, room));
+    if (dy > 0) { zoom.ty -= dy / contentScale; revealShift += dy; applyZoom(); }
+  }
+  function jumpToLeafGroup(id) {
+    const group = pairsList.querySelector(`[data-leaf-group="${CSS.escape(String(id))}"]`);
+    if (!group) return;
+    group.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    // remove + reflow + re-add restarts the flash even on a repeat jump
+    group.classList.remove('jump-highlight');
+    void group.offsetWidth;
+    group.classList.add('jump-highlight');
+  }
+  function onNodeClick(id) {
+    if (drawerOpen && id === currentNode) { closeDrawer(); return; }
+    const stayOnPairs = drawerOpen && drawerTab === 'pairs' && nodeHasPairs(id);
+    openDrawer(stayOnPairs ? 'pairs' : 'samples');
+    selectNode(id);
+    revealSelectedNode();
+    if (stayOnPairs) setTimeout(() => jumpToLeafGroup(id), 0);
+  }
+  tabSamples.addEventListener('click', () => setDrawerTab('samples'));
+  tabPairs.addEventListener('click', () => setDrawerTab('pairs'));
+  document.getElementById('drawerClose').addEventListener('click', closeDrawer);
+  document.addEventListener('keydown', e => { if (e.key === 'Escape' && drawerOpen) closeDrawer(); });
+  let draggingDrawer = false;
+  drawerHandle.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    drawerHandle.setPointerCapture(e.pointerId);
+    draggingDrawer = true;
+    document.body.classList.add('dragging-drawer');
+  });
+  drawerHandle.addEventListener('pointermove', e => {
+    if (!draggingDrawer) return;
+    const rect = treeWrap.getBoundingClientRect();
+    drawerFrac = Math.min(0.9, Math.max(0.15, (rect.bottom - e.clientY) / rect.height));
+    applyDrawerHeight();
+  });
+  const endDrawerDrag = () => {
+    if (!draggingDrawer) return;
+    draggingDrawer = false;
+    document.body.classList.remove('dragging-drawer');
+    try { localStorage.setItem(DRAWER_KEY, String(drawerFrac)); } catch (e) {}
+  };
+  drawerHandle.addEventListener('pointerup', endDrawerDrag);
+  drawerHandle.addEventListener('pointercancel', endDrawerDrag);
 
   buildTreeSelector();
   treeTitle.textContent = T.title;
@@ -2366,13 +3037,10 @@ __V2_TREE_DATA_JS__
   fitToContent();
   markCurrentPath();
   buildInfoPanel();
+  buildTreebankRow();
+  sizeTreeBox();
+  fitToContent();
   buildSampleGrid();
   buildPairsList();
-  // default: trace the Greek tree's first sample row for an immediate
-  // payoff. Feature tables start closed (openLabels is empty until a
-  // group's own toggle is clicked) -- not opened here, so the page's first
-  // paint isn't already showing every row's feature table before the
-  // reader's asked for it.
-  document.querySelectorAll('#sampleGrid tr.sample-row')[0].click();
 })();
 </script>

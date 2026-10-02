@@ -187,16 +187,75 @@ def _category_tab_html(data: dict, group: str, lang_idx: dict, npa_lang_idx: dic
     # Person, at a glance) riding along the picker itself, rather than a
     # separate chart grid competing with the detail view below it.
     max_pairs = max((it["pairs"] for it in items), default=0) or 1
-    picker_html = "\n                    ".join(
-        f'<button class="picker-btn{" active" if i == 0 else ""}" role="radio" '
-        f'aria-checked="{"true" if i == 0 else "false"}" '
-        f'data-cond="{it["id"]}" data-npasub="{"true" if it["isNpaSub"] else "false"}">'
-        f'<span>{it["label"]}</span>'
-        f'<span class="picker-spark"><span class="picker-spark-fill" '
-        f'style="width:{round(100 * it["pairs"] / max_pairs)}%"></span></span>'
-        f'</button>'
-        for i, it in enumerate(items)
-    )
+
+    def picker_button(it, text, active):
+        return (
+            f'<button class="picker-btn{" active" if active else ""}" role="radio" '
+            f'aria-checked="{"true" if active else "false"}" aria-label="{it["label"]}" '
+            f'data-cond="{it["id"]}" data-npasub="{"true" if it["isNpaSub"] else "false"}">'
+            f'<span>{text}</span>'
+            f'<span class="picker-spark"><span class="picker-spark-fill" '
+            f'style="width:{round(100 * it["pairs"] / max_pairs)}%"></span></span>'
+            f'</button>'
+        )
+
+    if group == "Noun Phrase":
+        # Matrix: one row per role pair (ordered by its biggest condition),
+        # one column per feature (Number, Gender, Person, Case, ...); a cell
+        # is the condition's button, or blank where that pair has none.
+        pair_groups: dict[str, dict[str, dict]] = {}
+        for it in items:
+            role_pair, _, rest = it["label"].partition(" (")
+            feature = rest.rstrip(")")
+            pair_groups.setdefault(role_pair, {})[feature or it["label"]] = it
+        columns = sorted({f for cells in pair_groups.values() for f in cells})
+        col_heads = "".join(
+            f'<span class="picker-colhead" data-feature="{f}">{f}</span>' for f in columns
+        )
+        def role_pair_cells(role_pair):
+            # "Head–Determiner" -> right-aligned "Head", the dash, left-aligned
+            # "Determiner": the dashes of all rows line up in one column.
+            first, dash, second = role_pair.partition("–")
+            return (
+                f'<span class="picker-group-label rp-first">{first}</span>'
+                f'<span class="picker-group-label rp-dash">{dash}</span>'
+                f'<span class="picker-group-label rp-second">{second}</span>'
+            )
+
+        rows_html = "".join(
+            f'<div class="picker-group" role="group" aria-label="{role_pair}" data-pair="{role_pair}">'
+            + role_pair_cells(role_pair)
+            + "".join(
+                picker_button(cells[f], f, cells[f] is items[0]).replace(
+                    '<button class="picker-btn', f'<button data-feature="{f}" class="picker-btn', 1)
+                if f in cells else f'<span class="picker-empty-cell" data-feature="{f}"></span>'
+                for f in columns
+            )
+            + "</div>"
+            for role_pair, cells in sorted(pair_groups.items())
+        )
+        picker_html = f'<span class="picker-corner"></span>{col_heads}{rows_html}'
+        matrix_cols = len(columns)
+        roles = list(dict.fromkeys(r for rp in pair_groups for r in rp.split("–")))
+        features = columns
+        picker_filter_html = (
+            f'<div class="picker-filter" data-picker="cat-{slug}-picker">'
+            '<input type="search" class="search picker-filter-search" autocomplete="off" '
+            'placeholder="Search role pairs or features&hellip;" aria-label="Search conditions">'
+            '<select class="picker-filter-role" aria-label="Role"><option value="">Any role</option>'
+            + "".join(f'<option value="{r}">{r}</option>' for r in roles)
+            + '</select><select class="picker-filter-feature" aria-label="Feature">'
+            '<option value="">Any feature</option>'
+            + "".join(f'<option value="{f}">{f}</option>' for f in features)
+            + '</select><span class="picker-filter-count" aria-live="polite"></span></div>'
+        )
+    else:
+        picker_html = "\n                    ".join(
+            picker_button(it, it["label"], i == 0) for i, it in enumerate(items)
+        )
+        picker_filter_html = ""
+    picker_bar_class = "picker-bar picker-matrix" if group == "Noun Phrase" else "picker-bar"
+    picker_bar_style = f' style="--cols: {matrix_cols}"' if group == "Noun Phrase" else ""
     n = totals["conditions"]
 
     return f"""
@@ -225,9 +284,11 @@ def _category_tab_html(data: dict, group: str, lang_idx: dict, npa_lang_idx: dic
                 </details>
 
                 <div class="picker-panel">
-                    <div class="picker-bar" id="cat-{slug}-picker" role="radiogroup" aria-label="Condition within {group}">
+                    {picker_filter_html}
+                    <div class="{picker_bar_class}"{picker_bar_style} id="cat-{slug}-picker" role="radiogroup" aria-label="Condition within {group}">
                         {picker_html}
                     </div>
+                    <p class="picker-empty" id="cat-{slug}-picker-empty" hidden>No conditions match this filter.</p>
                     <div id="cat-{slug}-detail-link"></div>
                 </div>
 
@@ -277,14 +338,36 @@ def render(data: dict) -> str:
     npa_lang_idx = {lang: i for i, lang in enumerate(data["npa_matrix"]["languages"])}
 
     groups_present = [g for g in GROUP_ORDER if _category_items(data, g)]
-    tab_buttons_html = (
+
+    def tab_button(g, text):
+        return (
+            f'<button class="tab-btn" id="tabbtn-{GROUP_SLUGS[g]}" role="tab" aria-selected="false" '
+            f'aria-controls="tab-{GROUP_SLUGS[g]}" aria-label="{g}" data-tab="{GROUP_SLUGS[g]}">{text}</button>'
+        )
+
+    # "Subject–Verb", "Subject–Participle", ... share one compact segmented
+    # group per argument ("Subject", "Object", "Indirect Object"); groups
+    # without an "argument–head" label (Noun Phrase) stay standalone tabs.
+    tab_parts = [
         '<button class="tab-btn active" id="tabbtn-overall" role="tab" aria-selected="true" '
-        'aria-controls="tab-overall" data-tab="overall">Overall</button>\n            '
-    ) + "\n            ".join(
-        f'<button class="tab-btn" id="tabbtn-{GROUP_SLUGS[g]}" role="tab" aria-selected="false" '
-        f'aria-controls="tab-{GROUP_SLUGS[g]}" data-tab="{GROUP_SLUGS[g]}">{g}</button>'
-        for g in groups_present
-    )
+        'aria-controls="tab-overall" data-tab="overall">Overall</button>'
+    ]
+    arg_groups: dict[str, list[str]] = {}
+    for g in groups_present:
+        arg, sep, head = g.partition("–")
+        if not sep:
+            tab_parts.append(tab_button(g, g))
+            continue
+        if arg not in arg_groups:
+            arg_groups[arg] = []
+            tab_parts.append(arg)  # placeholder, replaced below to keep display order
+        arg_groups[arg].append(tab_button(g, head))
+    tab_parts = [
+        (f'<div class="tab-group" role="group" aria-label="{p}"><span class="tab-group-label">{p}</span>'
+         + "".join(arg_groups[p]) + "</div>") if p in arg_groups else p
+        for p in tab_parts
+    ]
+    tab_buttons_html = "\n            ".join(tab_parts)
     category_tabs_html = "".join(_category_tab_html(data, g, lang_idx, npa_lang_idx) for g in groups_present)
 
     return f"""<!DOCTYPE html>
@@ -593,6 +676,32 @@ def render(data: dict) -> str:
         }}
         .tab-btn:hover {{ color: var(--text); border-color: var(--border-hover); }}
         .tab-btn.active {{ border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }}
+        /* One segmented group per argument type (Subject / Object / Indirect
+           Object) holding its Verb / Participle / Auxiliary tabs. */
+        .tab-group {{
+            display: flex;
+            align-items: center;
+            gap: 0.3rem;
+            padding: 0.2rem 0.3rem 0.2rem 0.75rem;
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            background: var(--card);
+        }}
+        .tab-group.has-active {{ border-color: var(--accent); }}
+        .tab-group-label {{
+            font-size: 0.72rem;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            color: var(--text-muted);
+            margin-right: 0.15rem;
+            white-space: nowrap;
+        }}
+        .tab-group .tab-btn {{
+            padding: 0.35rem 0.75rem;
+            font-size: 0.85rem;
+            border-radius: 7px;
+        }}
 
         /* Groups the condition picker with its own "decision tree & entropy
            detail" button (moved here from below the chart, right after this
@@ -613,6 +722,50 @@ def render(data: dict) -> str:
             flex-wrap: wrap;
             margin-bottom: 1.25rem;
         }}
+        /* Noun Phrase picker: a matrix, role pairs down the side, features
+           across the top. Each row is a display:contents wrapper so its
+           cells take part in the one shared grid. */
+        .picker-matrix {{
+            display: grid;
+            grid-template-columns: max-content max-content max-content repeat(var(--cols, 4), minmax(6.5rem, 1fr));
+            gap: 0.4rem 0.5rem;
+            align-items: stretch;
+        }}
+        .picker-matrix .picker-group {{ display: contents; }}
+        .picker-matrix .picker-btn {{ min-width: 0; padding: 0.3rem 0.7rem 0.4rem; }}
+        .picker-colhead, .picker-group-label {{
+            font-size: 0.72rem;
+            font-weight: 700;
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            color: var(--text-muted);
+        }}
+        .picker-colhead {{ padding: 0 0.25rem 0.1rem; align-self: end; }}
+        .picker-group-label {{ align-self: center; }}
+        .picker-group-label.rp-first {{ justify-self: end; padding-left: 0.25rem; }}
+        .picker-group-label.rp-dash {{ padding: 0 0.15rem; }}
+        .picker-group-label.rp-second {{ justify-self: start; padding-right: 0.75rem; }}
+        .picker-corner {{ grid-column: span 3; }}
+        .picker-btn[hidden], .picker-group[hidden], .picker-colhead[hidden],
+        .picker-empty-cell[hidden] {{ display: none; }}
+        .picker-filter {{
+            display: flex;
+            flex-wrap: wrap;
+            align-items: center;
+            gap: 0.6rem;
+            margin-bottom: 0.9rem;
+        }}
+        .picker-filter select {{
+            padding: 0.5rem 0.75rem;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--card);
+            color: var(--text);
+            font-family: inherit;
+            font-size: 0.85rem;
+        }}
+        .picker-filter-count {{ font-size: 0.8rem; color: var(--text-muted); }}
+        .picker-empty {{ margin: 0 0 1rem; font-size: 0.85rem; color: var(--text-muted); }}
         .picker-btn {{
             display: flex;
             flex-direction: column;
@@ -979,9 +1132,9 @@ def render(data: dict) -> str:
         <div id="tab-overall" role="tabpanel" aria-labelledby="tabbtn-overall" tabindex="0">
             <nav class="jump-nav" aria-label="Jump to section">
                 <a href="#sec-kpi">Overview</a>
+                <a href="#sec-languages">Languages</a>
                 <a href="#sec-heatmap">Heatmap</a>
                 <a href="#sec-scatter">Samples vs. pairs</a>
-                <a href="#sec-languages">Languages</a>
                 <a href="#sec-funnel">Diagnostics</a>
                 <a href="#sec-treebank-pairs">Samples by treebank</a>
                 <a href="#sec-treebanks">Treebanks</a>
@@ -1011,6 +1164,37 @@ def render(data: dict) -> str:
                     </div>
                 </div>
                 {_coverage_ladder_html(totals["coverage"], "ladder-overall-chart")}
+            </div>
+
+            <div class="card" id="sec-languages">
+                <h2>Samples &amp; pairs per language</h2>
+                <p class="section-desc">
+                    Totals summed across every condition a language appears in. The chart shows the top 25 languages
+                    by minimal pairs generated; the table below covers all {totals["languages"]}.
+                </p>
+                <div id="language-chart" style="height: 560px;"></div>
+
+                <div class="toolbar" style="margin-top: 1.5rem;">
+                    <label for="lang-search" class="sr-only">Filter languages by name</label>
+                    <input class="search" id="lang-search" type="text" placeholder="Filter languages&hellip;">
+                    <span class="count-note" id="lang-count" aria-live="polite"></span>
+                </div>
+                <div class="table-scroll">
+                    <table id="language-table">
+                        <thead>
+                            <tr>
+                                {_sortable_th("name", "Language")}
+                                {_sortable_th("samples", "Samples", num=True)}
+                                {_sortable_th("pairs", "Pairs", num=True)}
+                                {_sortable_th("ratio", "Pairs/sample", num=True)}
+                                {_sortable_th("acc", "Accuracy", num=True)}
+                                {_sortable_th("n_lemma", "Lemmas", num=True)}
+                                {_sortable_th("n_conditions", "# Conditions", num=True)}
+                            </tr>
+                        </thead>
+                        <tbody id="language-tbody"></tbody>
+                    </table>
+                </div>
             </div>
 
             <div class="card" id="sec-heatmap">
@@ -1062,37 +1246,6 @@ def render(data: dict) -> str:
                 </p>
                 <div class="picker-bar" id="scatter-cond-picker" role="radiogroup" aria-label="Condition"></div>
                 <div id="scatter-chart" style="height: 460px;"></div>
-            </div>
-
-            <div class="card" id="sec-languages">
-                <h2>Samples &amp; pairs per language</h2>
-                <p class="section-desc">
-                    Totals summed across every condition a language appears in. The chart shows the top 25 languages
-                    by minimal pairs generated; the table below covers all {totals["languages"]}.
-                </p>
-                <div id="language-chart" style="height: 560px;"></div>
-
-                <div class="toolbar" style="margin-top: 1.5rem;">
-                    <label for="lang-search" class="sr-only">Filter languages by name</label>
-                    <input class="search" id="lang-search" type="text" placeholder="Filter languages&hellip;">
-                    <span class="count-note" id="lang-count" aria-live="polite"></span>
-                </div>
-                <div class="table-scroll">
-                    <table id="language-table">
-                        <thead>
-                            <tr>
-                                {_sortable_th("name", "Language")}
-                                {_sortable_th("samples", "Samples", num=True)}
-                                {_sortable_th("pairs", "Pairs", num=True)}
-                                {_sortable_th("ratio", "Pairs/sample", num=True)}
-                                {_sortable_th("acc", "Accuracy", num=True)}
-                                {_sortable_th("n_lemma", "Lemmas", num=True)}
-                                {_sortable_th("n_conditions", "# Conditions", num=True)}
-                            </tr>
-                        </thead>
-                        <tbody id="language-tbody"></tbody>
-                    </table>
-                </div>
             </div>
 
             <div class="card" id="sec-funnel">
@@ -1333,7 +1486,7 @@ def render(data: dict) -> str:
         }}
 
         // Condition-first, abbreviated axis/tab labels (e.g. "Subj–Verb
-        // Gender", not "Gender (Subject–Verb)") -- shared by the heatmap's
+        // (Gender)", not "Gender (Subject–Verb)") -- shared by the heatmap's
         // x-axis and the scatter chart's condition tabs, so the same
         // condition always reads the same way in both places. Only the four
         // words the user actually asked to abbreviate are touched; Verb,
@@ -1352,7 +1505,7 @@ def render(data: dict) -> str:
         const COND_LABELS = {{}};
         DATA.conditions.forEach(c => {{
             const abbrevGroup = GROUP_ABBREV[c.group] || c.group;
-            COND_LABELS[c.id] = {{ abbrev: `${{abbrevGroup}} ${{c.label}}`, full: `${{c.group}} ${{c.label}}` }};
+            COND_LABELS[c.id] = {{ abbrev: `${{abbrevGroup}} (${{c.label}})`, full: `${{c.group}} (${{c.label}})` }};
         }});
         function condLabel(id) {{
             return COND_LABELS[id] || {{ abbrev: id, full: id }};
@@ -1382,8 +1535,10 @@ def render(data: dict) -> str:
         // embedded in the page -- matrix (per condition), language_treebanks,
         // and treebank_pairs (the per-sample breakdown, when it covers this
         // language) -- no extra network request.
-        function openLangModal(lang) {{
-            document.getElementById('lang-modal-title').textContent = lang;
+        // scope 'npa': only the language's Noun Phrase conditions (opened from
+        // the heatmap's Noun Phrase column); null: every condition.
+        function openLangModal(lang, scope = null) {{
+            document.getElementById('lang-modal-title').textContent = scope === 'npa' ? `${{lang}} \u2013 Noun Phrase` : lang;
             const body = document.getElementById('lang-modal-body');
             const idx = DATA.matrix.languages.indexOf(lang);
             const treebankEntry = DATA.language_treebanks.find(r => r.name === lang);
@@ -1419,49 +1574,110 @@ def render(data: dict) -> str:
                     const c = DATA.conditions.find(c => c.id === condId);
                     const url = DATA.matrix.urls[idx][j];
                     return {{
-                        label: c ? `${{c.label}} (${{c.group}})` : condId,
+                        id: condId,
+                        label: c ? `${{c.group}} (${{c.label}})` : condId,
                         samples, pairs, ratio: samples ? pairs / samples : null,
                         acc: DATA.matrix.acc[idx][j], url,
                     }};
                 }}).filter(Boolean).sort((a, b) => b.pairs - a.pairs);
 
-                const totalSamples = condRows.reduce((s, r) => s + r.samples, 0);
-                const totalPairs = condRows.reduce((s, r) => s + r.pairs, 0);
+                // Totals stay on the aggregate rows (one "npa" row for all role
+                // pairs); the listed rows below swap that aggregate for one row
+                // per role pair x feature, each linking to its own page.
+                const totalRows = scope === 'npa' ? condRows.filter(r => r.id === 'npa') : condRows;
+                const totalSamples = totalRows.reduce((s, r) => s + r.samples, 0);
+                const totalPairs = totalRows.reduce((s, r) => s + r.pairs, 0);
+                const listRows = condRows.filter(r => r.id !== 'npa');
+                const npaIdx = DATA.npa_matrix.languages.indexOf(lang);
+                if (npaIdx !== -1) {{
+                    DATA.npa_matrix.subgroups.forEach((subId, j) => {{
+                        const samples = DATA.npa_matrix.samples[npaIdx][j];
+                        const pairs = DATA.npa_matrix.pairs[npaIdx][j];
+                        if (!samples && !pairs) return;
+                        const sub = DATA.npa_subgroups.find(x => x.id === subId);
+                        listRows.push({{
+                            id: subId, label: sub ? sub.label : subId, isNpa: true,
+                            samples, pairs, ratio: samples ? pairs / samples : null,
+                            acc: DATA.npa_matrix.acc[npaIdx][j], url: DATA.npa_matrix.urls[npaIdx][j],
+                        }});
+                    }});
+                }}
+                if (scope === 'npa') listRows.splice(0, listRows.length, ...listRows.filter(r => r.isNpa));
+                // Sortable by any column; samples-descending by default.
+                let condSortKey = 'samples', condSortDir = -1;
+                const condSortValue = (r, key) => (key === 'label' ? r.label.toLowerCase() : r[key]);
+                const sortCondRows = rows => rows.slice().sort((a, b) => {{
+                    const x = condSortValue(a, condSortKey), y = condSortValue(b, condSortKey);
+                    if (x === null || x === undefined) return (y === null || y === undefined) ? 0 : 1;
+                    if (y === null || y === undefined) return -1;
+                    return (x < y ? -1 : x > y ? 1 : 0) * condSortDir;
+                }});
+                const condRowHtml = r => `
+                    <tr>
+                        <td>${{r.url
+                            ? `<a class="ext-link" href="${{r.url}}" target="_blank" rel="noopener" title="Open ${{lang}}'s diagnostics page for this condition">${{r.label}} &#8599;</a>`
+                            : r.label}}</td>
+                        <td class="num">${{r.samples.toLocaleString()}}</td>
+                        <td class="num">${{r.pairs.toLocaleString()}}</td>
+                        <td class="num">${{fmtRatio(r.ratio)}}</td>
+                        <td class="num">${{fmtAcc(r.acc)}}</td>
+                    </tr>`;
 
                 body.innerHTML = `
                     <div class="mini-stats">
-                        ${{miniStatHtml(condRows.length, 'Conditions with data')}}
+                        ${{miniStatHtml(listRows.length, 'Conditions with data')}}
                         ${{miniStatHtml(totalSamples.toLocaleString(), 'Samples')}}
                         ${{miniStatHtml(totalPairs.toLocaleString(), 'Minimal pairs')}}
                     </div>
+                    <div class="toolbar" style="margin: 1rem 0 0.75rem;">
+                        <label for="lang-cond-filter" class="sr-only">Filter conditions</label>
+                        <input class="search" id="lang-cond-filter" type="search" autocomplete="off"
+                            placeholder="Filter conditions&hellip;">
+                        <span class="count-note" id="lang-cond-count" aria-live="polite"></span>
+                    </div>
                     <div class="table-scroll">
-                        <table>
+                        <table id="lang-cond-table">
                             <thead>
                                 <tr>
-                                    <th scope="col">Condition</th>
-                                    <th scope="col" class="num">Samples</th>
-                                    <th scope="col" class="num">Pairs</th>
-                                    <th scope="col" class="num">Pairs/sample</th>
-                                    <th scope="col" class="num">Accuracy</th>
+                                    <th scope="col" aria-sort="none"><button type="button" class="th-sort-btn" data-key="label">Condition</button></th>
+                                    <th scope="col" class="num" aria-sort="none"><button type="button" class="th-sort-btn" data-key="samples">Samples</button></th>
+                                    <th scope="col" class="num" aria-sort="none"><button type="button" class="th-sort-btn" data-key="pairs">Pairs</button></th>
+                                    <th scope="col" class="num" aria-sort="none"><button type="button" class="th-sort-btn" data-key="ratio">Pairs/sample</button></th>
+                                    <th scope="col" class="num" aria-sort="none"><button type="button" class="th-sort-btn" data-key="acc">Accuracy</button></th>
                                 </tr>
                             </thead>
-                            <tbody>
-                                ${{condRows.map(r => `
-                                    <tr>
-                                        <td>${{r.url
-                                            ? `<a class="ext-link" href="${{r.url}}" target="_blank" rel="noopener" title="Open ${{lang}}'s diagnostics page for this condition">${{r.label}} &#8599;</a>`
-                                            : r.label}}</td>
-                                        <td class="num">${{r.samples.toLocaleString()}}</td>
-                                        <td class="num">${{r.pairs.toLocaleString()}}</td>
-                                        <td class="num">${{fmtRatio(r.ratio)}}</td>
-                                        <td class="num">${{fmtAcc(r.acc)}}</td>
-                                    </tr>`).join('')}}
-                            </tbody>
+                            <tbody id="lang-cond-rows">${{sortCondRows(listRows).map(condRowHtml).join('')}}</tbody>
                         </table>
                     </div>
+                    ${{scope === 'npa' ? `<p class="section-desc" style="margin-top: 0.5rem;"><button type="button" class="lang-link" data-lang="${{lang.replace(/"/g, '&quot;')}}">Show all conditions</button></p>` : ''}}
+                    <p class="section-desc" style="margin-top: 0.5rem;">Noun Phrase role-pair rows overlap (one noun phrase can
+                        count under several role pairs), so the rows don't add up to the totals above.</p>
                     ${{treebankNote}}
                     ${{sampleNote}}
                 `;
+                const condFilter = document.getElementById('lang-cond-filter');
+                const rowsEl = document.getElementById('lang-cond-rows');
+                const countEl = document.getElementById('lang-cond-count');
+                function renderCondRows() {{
+                    const terms = condFilter.value.toLowerCase().split(/\\s+/).filter(Boolean);
+                    const shown = sortCondRows(listRows.filter(r => terms.every(t => r.label.toLowerCase().includes(t))));
+                    rowsEl.innerHTML = shown.length
+                        ? shown.map(condRowHtml).join('')
+                        : '<tr><td colspan="5" class="section-desc">No conditions match.</td></tr>';
+                    countEl.textContent = shown.length === listRows.length ? '' : `${{shown.length}} of ${{listRows.length}}`;
+                    updateSortIndicators('lang-cond-table', condSortKey, condSortDir);
+                }}
+                condFilter.addEventListener('input', renderCondRows);
+                document.querySelectorAll('#lang-cond-table thead .th-sort-btn').forEach(btn => {{
+                    btn.addEventListener('click', () => {{
+                        const key = btn.dataset.key;
+                        // text column starts ascending, numeric ones descending
+                        condSortDir = condSortKey === key ? -condSortDir : (key === 'label' ? 1 : -1);
+                        condSortKey = key;
+                        renderCondRows();
+                    }});
+                }});
+                updateSortIndicators('lang-cond-table', condSortKey, condSortDir);
             }}
 
             document.getElementById('lang-modal').hidden = false;
@@ -1474,7 +1690,7 @@ def render(data: dict) -> str:
 
         document.addEventListener('click', (e) => {{
             const trigger = e.target.closest('.lang-link');
-            if (trigger) {{ openLangModal(trigger.dataset.lang); return; }}
+            if (trigger) {{ openLangModal(trigger.dataset.lang, trigger.dataset.scope || null); return; }}
             if (e.target.id === 'lang-modal-close' || e.target.id === 'lang-modal') closeLangModal();
         }});
         document.addEventListener('keydown', (e) => {{
@@ -1705,16 +1921,46 @@ def render(data: dict) -> str:
             // unabbreviated name attached as a native tooltip on hover (see
             // annotateAxisTicks below) -- built once here since x-axis tick
             // <text> elements get re-annotated after every redraw.
-            const condMeta = DATA.matrix.conditions.map(condLabel);
-            const conds = condMeta.map(m => m.abbrev);
-            const condFullByAbbrev = Object.fromEntries(condMeta.map(m => [m.abbrev, m.full]));
-            const pairsZ = DATA.matrix.pairs;
-            const samplesZ = DATA.matrix.samples;
-            const accZ = DATA.matrix.acc;
+            // Columns are grouped by agreement category (Subject / Object /
+            // Indirect Object / Noun Phrase), then head (Verb / Participle /
+            // Auxiliary), then feature. Two bands stack above the grid
+            // (category next to it, head above that); only the feature is
+            // written at a slant on top ("all" for the Noun Phrase column).
+            const ARG_ORDER = ['Subject', 'Object', 'Indirect Object', 'Noun Phrase'];
+            const HEAD_ORDER = ['Verb', 'Participle', 'Auxiliary'];
+            const FEAT_ORDER = ['Number', 'Gender', 'Person'];
+            const rank = (list, v) => {{ const i = list.indexOf(v); return i === -1 ? list.length : i; }};
+            const colInfo = DATA.matrix.conditions.map(id => {{
+                const c = DATA.conditions.find(c => c.id === id);
+                if (!c) return {{ id, arg: id, head: '', feat: '', short: id, full: id }};
+                const isNpa = id === 'npa';
+                const [arg, head = ''] = c.group.split('\u2013');
+                const feat = isNpa ? 'All role pairs' : c.label;
+                return {{
+                    id, arg, head, feat,
+                    short: head ? feat : '',
+                    full: condLabel(id).full,
+                }};
+            }});
+            const colPerm = colInfo.map((_, j) => j).sort((a, b) => {{
+                const x = colInfo[a], y = colInfo[b];
+                return rank(ARG_ORDER, x.arg) - rank(ARG_ORDER, y.arg)
+                    || rank(HEAD_ORDER, x.head) - rank(HEAD_ORDER, y.head)
+                    || rank(FEAT_ORDER, x.feat) - rank(FEAT_ORDER, y.feat);
+            }});
+            const cols = colPerm.map(j => colInfo[j]);
+            const permute = m => m.map(row => colPerm.map(j => row[j]));
+            const condMeta = cols.map(c => condLabel(c.id));
+            const conds = cols.map(c => c.full);
+            const shortLabels = cols.map(c => c.short);
+            const pairsZ = permute(DATA.matrix.pairs);
+            const samplesZ = permute(DATA.matrix.samples);
+            const accZ = permute(DATA.matrix.acc);
+            const urlsZ = permute(DATA.matrix.urls);
             // [pairs, samples, acc, url] per cell -- same regardless of
             // which metric is currently coloring the grid, so hover always
             // shows the full picture and the click-through url never changes.
-            const customdata = pairsZ.map((row, i) => row.map((v, j) => [v, samplesZ[i][j], accZ[i][j], DATA.matrix.urls[i][j]]));
+            const customdata = pairsZ.map((row, i) => row.map((v, j) => [v, samplesZ[i][j], accZ[i][j], urlsZ[i][j]]));
 
             const accVals = accZ.flat().filter(v => v !== null);
             const minAcc = Math.min(...accVals), maxAcc = Math.max(...accVals);
@@ -1730,7 +1976,10 @@ def render(data: dict) -> str:
             }};
 
             const rowHeight = 13;
-            const height = Math.max(300, langs.length * rowHeight + 120);
+            // taller than the plain grid: room above it for the category band
+            // and the rotated condition labels
+            const TOP_MARGIN = 130, BAND_GAP = 4, BAND_H = 22, HEAD_GAP = 3, HEAD_H = 20;
+            const height = Math.max(300, langs.length * rowHeight + TOP_MARGIN + 40);
             document.getElementById('matrix-heatmap').style.height = height + 'px';
 
             const hovertemplate = '<b>%{{y}}</b> &times; <b>%{{x}}</b><br>Samples: %{{customdata[1]:,}}<br>Pairs: %{{customdata[0]:,}}' +
@@ -1801,8 +2050,8 @@ def render(data: dict) -> str:
             // away. Re-run after every redraw (Plotly.react can recreate
             // the tick <text> elements) rather than once at load.
             function annotateAxisTicks(gd) {{
-                gd.querySelectorAll('.xaxislayer-above text').forEach(textEl => {{
-                    const full = condFullByAbbrev[textEl.textContent];
+                gd.querySelectorAll('.xaxislayer-above text').forEach((textEl, i) => {{
+                    const full = conds[i];
                     if (!full) return;
                     let titleEl = textEl.querySelector('title');
                     if (!titleEl) {{
@@ -1812,6 +2061,57 @@ def render(data: dict) -> str:
                     titleEl.textContent = full;
                 }});
             }}
+
+            // Two rows of bands above the grid, one band per consecutive run
+            // of columns sharing the value: the category (Subject / Object /
+            // ...) right above the grid, the head (Verb / Part. / Aux) above
+            // that. Paper coordinates: y=1 is the grid's top edge; the plot
+            // area's pixel height converts pixel offsets into paper units.
+            const plotAreaPx = height - TOP_MARGIN - 10;
+            const SHORT_TEXT = {{ 'Noun Phrase': 'NP', 'Participle': 'Part.', 'Auxiliary': 'Aux' }};
+            const bandFill = mixHex(THEME.panelBg, THEME.accent, 0.2);
+            const bands = (() => {{
+                const shapes = [], annotations = [];
+                function addRow(keyOf, textOf, offsetPx, heightPx) {{
+                    let start = 0;
+                    for (let j = 1; j <= cols.length; j++) {{
+                        if (j < cols.length && keyOf(cols[j]) === keyOf(cols[start])) continue;
+                        const label = textOf(cols[start]);
+                        if (label) {{
+                            shapes.push({{
+                                type: 'rect', xref: 'x', yref: 'paper',
+                                x0: start - 0.5 + 0.06, x1: j - 1 + 0.5 - 0.06,
+                                y0: 1 + offsetPx / plotAreaPx, y1: 1 + (offsetPx + heightPx) / plotAreaPx,
+                                fillcolor: bandFill, line: {{ width: 0 }}, layer: 'below',
+                            }});
+                            annotations.push({{
+                                x: (start + j - 1) / 2, xref: 'x', y: 1 + (offsetPx + heightPx / 2) / plotAreaPx, yref: 'paper',
+                                text: `<b>${{SHORT_TEXT[label] || label}}</b>`, showarrow: false,
+                                xanchor: 'center', yanchor: 'middle',
+                                hovertext: SHORT_TEXT[label] ? label : undefined,
+                                bgcolor: bandFill, borderpad: 1,
+                                font: {{ size: 11, color: THEME.text }},
+                            }});
+                        }}
+                        start = j;
+                    }}
+                }}
+                addRow(c => c.arg, c => c.arg, BAND_GAP, BAND_H);
+                // the Noun Phrase column has no head or feature: "all" takes the head row
+                addRow(c => `${{c.arg}}|${{c.head}}`, c => c.head || (c.arg === 'Noun Phrase' ? 'all' : ''),
+                    BAND_GAP + BAND_H + HEAD_GAP, HEAD_H);
+                // A thin leader line from each feature label down to where its
+                // column's cells start, running through both bands.
+                cols.forEach((c, j) => {{
+                    if (!c.head) return;
+                    shapes.push({{
+                        type: 'line', xref: 'x', yref: 'paper', layer: 'above',
+                        x0: j, x1: j, y0: 1, y1: 1 + (BAND_GAP + BAND_H + HEAD_GAP + HEAD_H + 4) / plotAreaPx,
+                        line: {{ color: mixHex(THEME.panelBg, THEME.muted, 0.55), width: 1 }},
+                    }});
+                }});
+                return {{ shapes, annotations }};
+            }})();
 
             function draw(metric, sortMode) {{
                 const spec = metricSpec(metric);
@@ -1848,9 +2148,16 @@ def render(data: dict) -> str:
                     hovertemplate,
                 }}], {{
                     ...BASE_LAYOUT,
-                    margin: {{ t: 90, r: 70, b: 10, l: 140 }},
+                    margin: {{ t: TOP_MARGIN, r: 70, b: 10, l: 140 }},
                     height,
-                    xaxis: {{ side: 'top', tickangle: -45, automargin: true }},
+                    // ticklen (invisible ticks) pushes the labels up past the band
+                    xaxis: {{
+                        side: 'top', type: 'category', tickmode: 'array', tickvals: conds, ticktext: shortLabels,
+                        tickangle: -45, automargin: false,
+                        ticks: 'outside', ticklen: BAND_GAP + BAND_H + HEAD_GAP + HEAD_H + 6, tickcolor: 'rgba(0,0,0,0)',
+                    }},
+                    shapes: bands.shapes,
+                    annotations: bands.annotations,
                     yaxis: {{ autorange: 'reversed', automargin: true, tickfont: {{ size: 9 }} }},
                 }}, CONFIG).then(annotateAxisTicks);
             }}
@@ -1862,7 +2169,21 @@ def render(data: dict) -> str:
             // click would stack duplicates instead of replacing one.
             // customdata (and its url at [3]) is identical regardless of
             // metric/sort, so one wiring covers every combination.
-            wireClickThrough('matrix-heatmap', pt => pt.customdata && pt.customdata[3]);
+            // The Noun Phrase column has no single page to open (its url is
+            // just the top role pair's), so a click there opens the language's
+            // Noun Phrase overview instead; every other cell opens its own page.
+            (function wireHeatmapClick() {{
+                const gd = document.getElementById('matrix-heatmap');
+                gd.removeAllListeners('plotly_click');
+                gd.on('plotly_click', (ev) => {{
+                    const pt = ev.points && ev.points[0];
+                    if (!pt) return;
+                    const col = cols[pt.pointNumber[1]];
+                    if (col && col.id === 'npa') {{ openLangModal(pt.y, 'npa'); return; }}
+                    const url = pt.customdata && pt.customdata[3];
+                    if (url) window.open(url, '_blank', 'noopener');
+                }});
+            }})();
 
             // Two independent toggle groups (color metric, row order) share
             // the .metric-toggle-btn look but must clear/set "active" only
@@ -2059,24 +2380,57 @@ def render(data: dict) -> str:
 
             // Condition tabs: "Total" (the view above, always visible)
             // plus one per condition this page's own matrix already tracks
-            // (same set as the heatmap's columns, sorted by pairs
-            // descending like every other condition picker on this page) --
-            // collapsed behind a "see conditions" disclosure by default so
-            // 17 buttons aren't the first thing shown.
+            // (same set as the heatmap's columns) -- collapsed behind a "see
+            // conditions" disclosure by default so 27 buttons aren't the
+            // first thing shown. Inside that disclosure, conditions are
+            // clustered by argument (Subject/Object/Indirect Object) into
+            // .tab-group boxes, same classes/look as the page's own top-nav
+            // category tabs (see render()'s tab_parts) -- one visual
+            // grouping convention for "which argument does this condition
+            // agree on", not a second, differently-organized one just for
+            // this picker. A condition whose group has no "arg–head" split
+            // (Noun Phrase) has nothing to cluster under, so it renders as
+            // its own standalone button, exactly like Noun Phrase's own
+            // top-nav tab.
             const picker = document.getElementById('scatter-cond-picker');
-            const condButtons = [...DATA.conditions].sort((a, b) => b.pairs - a.pairs).map(c => {{
-                const {{ abbrev, full }} = condLabel(c.id);
-                return {{ id: c.id, label: abbrev, full }};
+            const ARG_ORDER = ['Subject', 'Object', 'Indirect Object'];
+            const condButtons = [...DATA.conditions].map(c => {{
+                const {{ full }} = condLabel(c.id);
+                const sepIdx = c.group.indexOf('–');
+                const arg = sepIdx < 0 ? null : c.group.slice(0, sepIdx);
+                const head = sepIdx < 0 ? c.group : c.group.slice(sepIdx + 1);
+                const label = arg ? `${{head}} (${{c.label}})` : `${{c.group}} (${{c.label}})`;
+                return {{ id: c.id, label, full, arg, pairs: c.pairs }};
             }});
+            const groups = new Map(); // arg, or a unique per-item key for standalone conditions
+            condButtons.forEach(b => {{
+                const key = b.arg || `\u0000${{b.id}}`;
+                if (!groups.has(key)) groups.set(key, {{ arg: b.arg, items: [] }});
+                groups.get(key).items.push(b);
+            }});
+            const orderedKeys = [
+                ...ARG_ORDER.filter(a => groups.has(a)),
+                ...[...groups.keys()].filter(k => !ARG_ORDER.includes(groups.get(k).arg)),
+            ];
+            const btnHtml = b => `
+                <button type="button" class="picker-btn" role="radio" aria-checked="false"
+                    data-cond="${{b.id}}" ${{b.full ? `title="${{b.full}}"` : ''}}>${{b.label}}</button>`;
+            const groupsHtml = orderedKeys.map(key => {{
+                const g = groups.get(key);
+                g.items.sort((a, b) => b.pairs - a.pairs); // same ordering as before, now per-group
+                return g.arg
+                    ? `<div class="tab-group" role="group" aria-label="${{g.arg}}">
+                        <span class="tab-group-label">${{g.arg}}</span>
+                        ${{g.items.map(btnHtml).join('')}}
+                    </div>`
+                    : g.items.map(btnHtml).join('');
+            }}).join('');
             picker.innerHTML = `
                 <button type="button" class="picker-btn active" role="radio" aria-checked="true" data-cond="">Total</button>
                 <details class="cond-picker-details">
                     <summary><span class="chevron"></span></summary>
                     <div class="picker-bar-inner">
-                        ${{condButtons.map(b => `
-                            <button type="button" class="picker-btn" role="radio" aria-checked="false"
-                                data-cond="${{b.id}}" ${{b.full ? `title="${{b.full}}"` : ''}}>${{b.label}}</button>
-                        `).join('')}}
+                        ${{groupsHtml}}
                     </div>
                 </details>
             `;
@@ -2412,7 +2766,7 @@ def render(data: dict) -> str:
             }});
 
             const picker = document.getElementById(`cat-${{slug}}-picker`);
-            const firstBtn = picker.querySelector('.picker-btn');
+            const firstBtn = picker.querySelector('.picker-btn.active') || picker.querySelector('.picker-btn');
             CAT_STATE[slug] = {{
                 condId: firstBtn.dataset.cond, isNpaSub: firstBtn.dataset.npasub === 'true',
                 sortKey: 'pairs', sortDir: -1, filterText: '', rows: [],
@@ -2484,6 +2838,9 @@ def render(data: dict) -> str:
                 b.classList.toggle('active', active);
                 b.setAttribute('aria-selected', active ? 'true' : 'false');
             }});
+            document.querySelectorAll('.tab-group').forEach(g => {{
+                g.classList.toggle('has-active', !!g.querySelector('.tab-btn.active'));
+            }});
 
             if (name === 'overall') {{
                 ['language-chart', 'matrix-heatmap', 'funnel-chart'].forEach(id => {{
@@ -2504,6 +2861,56 @@ def render(data: dict) -> str:
         }}
         document.querySelectorAll('.tab-btn').forEach(b => {{
             b.addEventListener('click', () => showTab(b.dataset.tab));
+        }});
+
+        // Search / role / feature mask over a grouped picker (Noun Phrase):
+        // hides the buttons (and groups left empty) that don't match; the
+        // active selection is left alone. Enter picks the first match.
+        document.querySelectorAll('.picker-filter').forEach(filter => {{
+            const picker = document.getElementById(filter.dataset.picker);
+            const empty = document.getElementById(filter.dataset.picker + '-empty');
+            const search = filter.querySelector('.picker-filter-search');
+            const roleSel = filter.querySelector('.picker-filter-role');
+            const featSel = filter.querySelector('.picker-filter-feature');
+            const count = filter.querySelector('.picker-filter-count');
+            const total = picker.querySelectorAll('.picker-btn').length;
+            function apply() {{
+                const terms = search.value.toLowerCase().split(/\\s+/).filter(Boolean);
+                let shown = 0;
+                const shownFeatures = new Set();
+                picker.querySelectorAll('.picker-group').forEach(group => {{
+                    const pair = group.dataset.pair;
+                    const roleOk = !roleSel.value || pair.split('–').includes(roleSel.value);
+                    let any = false;
+                    group.querySelectorAll('.picker-btn').forEach(btn => {{
+                        const feature = btn.dataset.feature;
+                        const hay = (pair + ' ' + feature).toLowerCase();
+                        const ok = roleOk && (!featSel.value || feature === featSel.value)
+                            && terms.every(t => hay.includes(t));
+                        btn.hidden = !ok;
+                        if (ok) {{ any = true; shown++; shownFeatures.add(feature); }}
+                    }});
+                    group.hidden = !any;
+                }});
+                // a feature column with no visible cell goes away entirely
+                picker.querySelectorAll('.picker-colhead, .picker-empty-cell').forEach(el => {{
+                    el.hidden = !shownFeatures.has(el.dataset.feature);
+                }});
+                picker.style.setProperty('--cols', Math.max(shownFeatures.size, 1));
+                count.textContent = shown === total ? '' : `${{shown}} of ${{total}}`;
+                empty.hidden = shown > 0;
+            }}
+            search.addEventListener('input', apply);
+            roleSel.addEventListener('change', apply);
+            featSel.addEventListener('change', apply);
+            search.addEventListener('keydown', e => {{
+                if (e.key === 'Enter') {{
+                    const first = picker.querySelector('.picker-btn:not([hidden])');
+                    if (first) first.click();
+                }} else if (e.key === 'Escape') {{
+                    search.value = ''; apply();
+                }}
+            }});
         }});
 
         // ---------- Deep-linking: #slug or #slug/condId shares the exact

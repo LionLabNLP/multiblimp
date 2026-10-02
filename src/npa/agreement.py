@@ -10,14 +10,17 @@ from tqdm import tqdm
 
 sys.path.append("../")
 
-from word_order.decision_tree import fit_pipeline, set_dt_features_in_df
+from word_order.decision_tree import fit_pipeline, set_dt_features_in_df, fit_excluded_for_display
 from word_order.process_treebank import META_FEATURES
 from word_order.viz_tree import tree2html
+from word_order.per_treebank import fit_treebank_trees, render_treebank_pages, build_nav, split_excluded
 from word_order.viz_deprel import generate_html_deprel_index
-from multiblimp.languages import gblang2udlang, lang2langcode
+from multiblimp.languages import gblang2udlang, lang2langcode, treebank_row_exclusion_reason
 from multiblimp.unimorph import load_inflector
+from multiblimp.agreement_pipeline_utils import match_casing, write_label_distribution
 from sva_trees.pipeline import get_impurity
-from sva_trees.create_pairs import bucket_examples_html
+from sva_trees.create_pairs import bucket_examples_html, bucket_frame
+from sva_trees.second_chance import second_chance_decision
 from sva_trees.diagnostics import (
     generate_diagnostics_table, write_diagnostics_csv, diagnostics_row_to_json,
 )
@@ -82,6 +85,34 @@ def npa_id(target_col: str) -> str:
     return f"{role1}-{role2}_{FEATURE_ABBREV.get(feat, feat)}"
 
 
+_PAIRWISE_COL_RE = re.compile(r"[A-Za-z]+-[A-Za-z]+_[A-Za-z]+(?:\[[^\]]+\])?")
+
+
+def npa_fit_omit_feats(columns, target_col: str, omit_extra: set | None = None) -> set:
+    """Columns kept out of an NPA tree fit for target_col (see fit_npa_tree's
+    docstring for the reasoning behind each rule)."""
+    _, _, feat = _split_target_col(target_col)
+    omit_feats = set(META_FEATURES) | {"np_type"}
+    omit_feats.update(c for c in columns if "idx" in c)
+    omit_feats.update(c for c in columns if c.endswith("_dir"))
+    # every OTHER pairwise agreement column ("HEAD-ADJ_Case"): derived from the
+    # same kind of values as the label. Child/sibling relational columns
+    # ("HEAD_sibling-deprel_aux") also contain a hyphen but are ordinary
+    # predictors -- only those ending in the target feature are dropped, by the
+    # rule below.
+    omit_feats.update(c for c in columns if _PAIRWISE_COL_RE.fullmatch(c) and c != target_col)
+    omit_feats.update(
+        c for c in columns
+        if c.endswith(f"_{feat}") and not c.startswith("swap_")
+    )
+    # xpos of every role is blocked for now: in some tagsets it spells out the
+    # agreement feature the label is computed from (e.g. Czech positional tags).
+    omit_feats.update(c for c in columns if c.endswith("_xpos"))
+    if omit_extra:
+        omit_feats.update(omit_extra)
+    return omit_feats
+
+
 def fit_npa_tree(df: pd.DataFrame, target_col: str, drop_unk: bool = True,
                   max_depth: int = 12, min_samples_leaf: int = 25,
                   min_impurity_decrease: float = 0.005, test_size: float = 0.1,
@@ -100,7 +131,7 @@ def fit_npa_tree(df: pd.DataFrame, target_col: str, drop_unk: bool = True,
     list-valued, which nunique()/OneHotEncoder can't handle, so these must
     stay excluded once np_instance's meta dict carries them), any *_idx or
     *_dir column (matches fit_dt's own omissions), np_type, every OTHER
-    pairwise agreement column (anything else containing "-") -- those are
+    pairwise agreement column ("role1-role2_feat" names only) -- those are
     similarly-derived signal for a different role pair, not organic
     predictors -- and, critically, every raw column ending in "_{feat}"
     (e.g. HEAD_Case, DET_Case, ADJ_Case, and their sibling-feat/child-feat
@@ -112,7 +143,7 @@ def fit_npa_tree(df: pd.DataFrame, target_col: str, drop_unk: bool = True,
     agree, which is exactly the failure mode observed empirically (a real
     fitted HEAD-DET_Case tree whose first two splits were literally
     "DET.Case = Nom" / "HEAD.Case = Nom"). This mirrors
-    sva_trees.pipeline.Pipeline/subj_aux.pipeline.SubjAuxPipeline's own
+    sva_trees.pipeline.Pipeline/subj_aux.pipeline.AuxPipeline's own
     fit_dt calls exactly (both pass `omit_feats=set(col for col in full_df
     if col.endswith(f"_{{feat}}") and not col.startswith("swap_"))`) --
     fit_npa_tree previously lacked this parallel, which is what this
@@ -145,17 +176,7 @@ def fit_npa_tree(df: pd.DataFrame, target_col: str, drop_unk: bool = True,
     if len(sub_df) < 10 or sub_df[target_col].nunique() < 2:
         return None, None, None, sub_df
 
-    _, _, feat = _split_target_col(target_col)
-    omit_feats = set(META_FEATURES) | {"np_type"}
-    omit_feats.update(c for c in sub_df.columns if "idx" in c)
-    omit_feats.update(c for c in sub_df.columns if c.endswith("_dir"))
-    omit_feats.update(c for c in sub_df.columns if "-" in c and c != target_col)
-    omit_feats.update(
-        c for c in sub_df.columns
-        if c.endswith(f"_{feat}") and not c.startswith("swap_")
-    )
-    if omit_extra:
-        omit_feats.update(omit_extra)
+    omit_feats = npa_fit_omit_feats(sub_df.columns, target_col, omit_extra)
 
     predictor_cols = [c for c in sub_df.columns if c not in omit_feats and c != target_col]
     X = sub_df[predictor_cols].copy()
@@ -187,6 +208,22 @@ def _split_target_col(target_col: str) -> tuple[str, str, str]:
     return role1, role2, feat
 
 
+def canonical_target_col(target_col: str) -> str:
+    """The role pair is symmetric, but np_instance only ever writes it in
+    ROLE_PRIORITY order ("DET-ADJ_Gender", never "ADJ-DET_Gender"), so a
+    target_col naming the pair backwards is flipped to the order that
+    exists. Unchanged if already canonical, either role is unknown, or it
+    doesn't parse as "{role1}-{role2}_{feature}"."""
+    try:
+        role1, role2, feat = _split_target_col(target_col)
+    except ValueError:
+        return target_col
+    if role1 in ROLE_PRIORITY and role2 in ROLE_PRIORITY \
+            and ROLE_PRIORITY[role1] > ROLE_PRIORITY[role2]:
+        return f"{role2}-{role1}_{feat}"
+    return target_col
+
+
 def _drop_irrelevant_roles(df: pd.DataFrame, keep_roles) -> pd.DataFrame:
     """Drop single-role "{role}_*" columns for every NPA role not in
     `keep_roles` -- e.g. for target_col "HEAD-DET_Number", drops ADJ_*/
@@ -209,14 +246,27 @@ def _drop_irrelevant_roles(df: pd.DataFrame, keep_roles) -> pd.DataFrame:
     return df.drop(columns=drop_cols)
 
 
+def _row_threshold(dt_df: pd.DataFrame, leaf_threshold):
+    """leaf_threshold as one cutoff per row: a plain number stays as is, a
+    {leaf_id: cutoff} map (second_chance retry) is mapped onto dt_df's leaf_id."""
+    if isinstance(leaf_threshold, dict):
+        return dt_df["leaf_id"].map(leaf_threshold)
+    return leaf_threshold
+
+
 def create_npa_pairs(dt_df: pd.DataFrame, target_col: str, inflector,
                       swap_role: str | None = None, context_inflector=None,
-                      leaf_threshold: float = 0.1,
+                      leaf_threshold: float | dict = 0.1,
+                      second_chance_threshold: float | None = None,
                       verbose: bool = True) -> tuple[dict[str, pd.DataFrame], int]:
     """Minimal re-inflected pairs from a fit_npa_tree dt_df, for rows where
     the tree confidently predicts target_col == "yes" (leaf_top1_entropy <
     leaf_threshold and leaf_decision True -- same convention as sva_trees.
-    create_pairs).
+    create_pairs). leaf_threshold may also be a {leaf_id: cutoff} map (a
+    sva_trees.second_chance depth-aware retry); second_chance_threshold, the
+    strict bar, is passed only on that retry call and tags every kept row
+    with "second_chance"/"second_chance_lax_threshold" columns, exactly as
+    in sva_trees.create_pairs.
 
     Reinflects `swap_role`'s own token via inflector.inflect on that role's
     own feature columns ("{swap_role}_{Feat}"), keeping the OTHER role
@@ -264,11 +314,18 @@ def create_npa_pairs(dt_df: pd.DataFrame, target_col: str, inflector,
         swap_role = role2
     fixed_role = role2 if swap_role == role1 else role1
 
+    row_threshold = _row_threshold(dt_df, leaf_threshold)
     if "leaf_top1_entropy" in dt_df.columns and "leaf_decision" in dt_df.columns:
-        keep = (dt_df["leaf_top1_entropy"] < leaf_threshold) & dt_df["leaf_decision"]
+        keep = (dt_df["leaf_top1_entropy"] < row_threshold) & dt_df["leaf_decision"]
     else:
         keep = pd.Series(True, index=dt_df.index)
     swap_df = dt_df[keep & (dt_df[target_col] == "yes")]
+    if second_chance_threshold is not None:
+        swap_df = swap_df.copy()
+        swap_df["second_chance"] = swap_df["leaf_top1_entropy"] >= second_chance_threshold
+        swap_df["second_chance_lax_threshold"] = (
+            row_threshold.loc[swap_df.index] if isinstance(row_threshold, pd.Series) else row_threshold
+        )
 
     ufeat, _ = inflector.inflection_map
     feat_cols = [
@@ -288,16 +345,24 @@ def create_npa_pairs(dt_df: pd.DataFrame, target_col: str, inflector,
     feature_distribution = Counter()
     items_seen = 0
 
+    # The loop below only ever reads the swap/fixed roles' own feature and
+    # form columns, so it iterates just those (this df is thousands of
+    # columns wide). Each bucket entry records the row's position in
+    # swap_df plus the columns that item adds; the full-width bucket frames
+    # are then built columnar from swap_df (see sva_trees.create_pairs.bucket_frame).
+    #
     # itertuples(index=False) defaults to name="Pandas" -- a namedtuple,
     # which silently renames any column that isn't a valid Python
-    # identifier (e.g. "HEAD_under_obl:agent", "HEAD_Number[psor]" -- most
-    # of this df's columns) to a positional placeholder ("_12", "_13", ...)
-    # in ._asdict(). name=None + zip(columns, row_tuple) (same pattern
+    # identifier (e.g. "HEAD_under_obl:agent", "HEAD_Number[psor]") to a
+    # positional placeholder ("_12", "_13", ...) in ._asdict().
+    # name=None + zip(columns, row_tuple) (same pattern
     # sva_trees.create_pairs.create_pairs uses) keeps the real column names
     # regardless of identifier-safety.
-    columns = list(swap_df.columns)
-    row_iter = swap_df.itertuples(index=False, name=None)
-    for row_tuple in (tqdm(row_iter, total=len(swap_df)) if verbose else row_iter):
+    needed = [col for col, _ in feat_cols] + [col for col, _ in fixed_feat_cols]
+    needed += [c for c in (f"{swap_role}_form", f"{fixed_role}_form") if c in swap_df.columns]
+    columns = list(dict.fromkeys(needed))
+    row_iter = enumerate(swap_df[columns].itertuples(index=False, name=None))
+    for pos, row_tuple in (tqdm(row_iter, total=len(swap_df)) if verbose else row_iter):
         row_dict = dict(zip(columns, row_tuple))
         og_feats = {feat: row_dict.get(col) for col, feat in feat_cols}
         form = row_dict.get(f"{swap_role}_form")
@@ -311,20 +376,24 @@ def create_npa_pairs(dt_df: pd.DataFrame, target_col: str, inflector,
         items_seen += 1
 
         if swap_forms is None:
-            diagnostics["no_candidates"].append(row_dict)
+            diagnostics["no_candidates"].append((pos, {}))
             continue
         if len(swap_forms) == 0:
-            diagnostics["no_inflections"].append(row_dict)
+            diagnostics["no_inflections"].append((pos, {}))
             continue
 
         for swap_form in swap_forms:
-            item = dict(row_dict)
-            item[f"swap_{swap_role}"] = swap_form
+            item = {}
+            # match_casing, not swap_form itself -- swap_form stays the raw
+            # lexicon-cased string used for every lookup below
+            # (get_form_features is a case-sensitive lexicon lookup); only
+            # what lands in item is recased for display.
+            item[f"swap_{swap_role}"] = match_casing(form, swap_form)
             for feat, vals in swap_feats.get(swap_form, {}).items():
                 item[f"after_{swap_role}_{feat}"] = "/".join(sorted(vals))
 
             if swap_form == form:
-                diagnostics["same_forms"].append(item)
+                diagnostics["same_forms"].append((pos, item))
                 continue
 
             swap_feature_vals = inflector.get_form_features(swap_form, og_feats, ufeat)
@@ -335,7 +404,7 @@ def create_npa_pairs(dt_df: pd.DataFrame, target_col: str, inflector,
 
             if len(feature_vals & swap_feature_vals) == 0 and UNDEFINED not in swap_feature_vals:
                 if len(swap_feature_vals) == 0:
-                    diagnostics["undefined_features"].append(item)
+                    diagnostics["undefined_features"].append((pos, item))
                     continue
 
                 if context_inflector is None or fixed_form is None or pd.isna(fixed_form):
@@ -348,12 +417,12 @@ def create_npa_pairs(dt_df: pd.DataFrame, target_col: str, inflector,
                         fixed_form, fixed_og_feats, ufeat, only_try_ud_if_no_um=True,
                     )
                 if len(fixed_features & swap_feature_vals) > 0:
-                    diagnostics["ambiguous_subjects"].append(item)
+                    diagnostics["ambiguous_subjects"].append((pos, item))
                 else:
                     feature_distribution[feature_key] += 1
-                    diagnostics["correct_swaps"].append(item)
+                    diagnostics["correct_swaps"].append((pos, item))
             else:
-                diagnostics["same_features"].append(item)
+                diagnostics["same_features"].append((pos, item))
 
     if verbose:
         coverage = len(diagnostics["correct_swaps"]) / max(items_seen, 1) * 100
@@ -361,7 +430,7 @@ def create_npa_pairs(dt_df: pd.DataFrame, target_col: str, inflector,
               f"correct_swaps={len(diagnostics['correct_swaps'])} coverage={coverage:.1f}%")
         print("feature_vals distribution:", dict(feature_distribution))
 
-    return {k: pd.DataFrame(v) for k, v in diagnostics.items()}, items_seen
+    return {k: bucket_frame(swap_df, v) for k, v in diagnostics.items()}, items_seen
 
 
 def swap_roles_for_target_col(target_col: str) -> list[str]:
@@ -499,9 +568,10 @@ _NPA_BUCKET_NAMES = [
 
 def create_npa_pairs_for_target_col(
     dt_df: pd.DataFrame, target_col: str, inflectors: dict,
-    leaf_threshold: float = 0.1, save_to: str | None = None,
+    leaf_threshold: float | dict = 0.1, save_to: str | None = None,
     full_df: pd.DataFrame | None = None, label_distribution: dict | None = None,
     num_lemma=None, num_form=None, max_examples: int = 5, verbose: bool = True,
+    extra_meta: dict | None = None, second_chance_threshold: float | None = None,
 ) -> tuple[dict[str, pd.DataFrame], dict]:
     """The production entry point for NPA minimal pairs: wraps
     create_npa_pairs with the head-vs-non-head swap-direction rule
@@ -539,6 +609,11 @@ def create_npa_pairs_for_target_col(
     consistent pick between the two symmetric directions when there are two
     (there's no single "the" fixed role in that case either way).
 
+    leaf_threshold / second_chance_threshold / extra_meta: as in
+    sva_trees.create_pairs.create_pairs -- a second_chance retry passes the
+    lax {leaf_id: cutoff} map as leaf_threshold, the strict bar as
+    second_chance_threshold, and {"second_pass": True, ...} as extra_meta.
+
     Returns (diagnostic_dfs, meta) -- meta additionally carries
     "swap_role"/"fixed_role" (the pick described above, for a caller to
     build head_role_label/subject_label/nsubj_label from) beyond the keys
@@ -552,8 +627,10 @@ def create_npa_pairs_for_target_col(
     collected = defaultdict(list)
     total_items_seen = 0
     total_n_keep = 0
+    total_n_keep_second = 0
+    row_threshold = _row_threshold(dt_df, leaf_threshold)
     if "leaf_top1_entropy" in dt_df.columns and "leaf_decision" in dt_df.columns:
-        keep = (dt_df["leaf_top1_entropy"] < leaf_threshold) & dt_df["leaf_decision"]
+        keep = (dt_df["leaf_top1_entropy"] < row_threshold) & dt_df["leaf_decision"]
     else:
         keep = pd.Series(True, index=dt_df.index)
     n_raw = int((dt_df[target_col] == "yes").sum())
@@ -563,10 +640,15 @@ def create_npa_pairs_for_target_col(
         buckets, items_seen = create_npa_pairs(
             dt_df, target_col, inflector=inflectors[swap_role],
             swap_role=swap_role, context_inflector=inflectors.get(fixed_role),
-            leaf_threshold=leaf_threshold, verbose=verbose,
+            leaf_threshold=leaf_threshold,
+            second_chance_threshold=second_chance_threshold, verbose=verbose,
         )
         total_items_seen += items_seen
         total_n_keep += int((keep & (dt_df[target_col] == "yes")).sum())
+        if second_chance_threshold is not None:
+            total_n_keep_second += int(
+                (keep & (dt_df[target_col] == "yes")
+                 & (dt_df["leaf_top1_entropy"] >= second_chance_threshold)).sum())
         for name, bdf in buckets.items():
             if len(bdf):
                 collected[name].append(bdf)
@@ -588,6 +670,7 @@ def create_npa_pairs_for_target_col(
         "leaf_threshold": leaf_threshold,
         "num_ud_candidates_raw": n_raw,
         "num_ud_candidates_keep": total_n_keep,
+        "num_ud_candidates_keep_second_chance": total_n_keep_second,
         "items_seen": total_items_seen,
         "num_lemma": num_lemma,
         "num_form": num_form,
@@ -598,6 +681,8 @@ def create_npa_pairs_for_target_col(
     }
     if label_distribution is not None:
         meta["label_distribution"] = label_distribution
+    if extra_meta:
+        meta.update(extra_meta)
 
     # Trimmed to just (role1, role2) for the EXAMPLES rendering only -- the
     # reinflection logic above (create_npa_pairs) already ignored every
@@ -636,7 +721,8 @@ def refresh_deprel_index(target_col: str,
                           html_decision_trees_root: str = HTML_DECISION_TREES_DIR,
                           pairs_dir: str | None = None,
                           diagnostics_csv: str | None = None,
-                          leaf_threshold: float = 0.1) -> None:
+                          leaf_threshold: float = 0.1,
+                          has_pairs: bool = True) -> None:
     """Rebuild one NPA target_col's diagnostics CSV + deprel index.html,
     purely from on-disk output/decision_trees + output/minimal_pairs
     artifacts -- the tail of run_agreement_pipeline (everything from
@@ -657,6 +743,13 @@ def refresh_deprel_index(target_col: str,
     save_dir/html_dir/pairs_dir/diagnostics_csv default the same way
     run_agreement_pipeline's own do (npa_id(target_col)-derived paths under
     decision_trees_root's/html_decision_trees_root's own "npa/" subtree).
+
+    has_pairs=False (the data-debugging mode, see run_agreement_pipeline's
+    own build_pairs) skips the diagnostics table/CSV entirely and passes
+    pairs_dir=None to generate_html_deprel_index -- that still renders the
+    entropy-scatter index page (word_order.viz_deprel's classic, non-
+    diagnostics-panel layout), just without the pairs-derived N KEEP/N
+    PAIRS columns and per-language diagnostics panel, since neither exists.
     """
     npa_identifier = npa_id(target_col)
     save_dir = save_dir or os.path.join(decision_trees_root, "npa", npa_identifier)
@@ -668,15 +761,17 @@ def refresh_deprel_index(target_col: str,
     swap_role = swap_roles[0]
     fixed_role = role2 if swap_role == role1 else role1
 
-    print("Generating diagnostics table")
-    diagnostics_df = generate_diagnostics_table(pairs_dir)
-    write_diagnostics_csv(diagnostics_df, diagnostics_csv)
-    diagnostics_by_lang = {
-        row["Language"]: diagnostics_row_to_json(
-            row, lang_dir=os.path.join(pairs_dir, row["Language"])
-        )
-        for _, row in diagnostics_df.iterrows()
-    }
+    diagnostics_by_lang = None
+    if has_pairs:
+        print("Generating diagnostics table")
+        diagnostics_df = generate_diagnostics_table(pairs_dir)
+        write_diagnostics_csv(diagnostics_df, diagnostics_csv)
+        diagnostics_by_lang = {
+            row["Language"]: diagnostics_row_to_json(
+                row, lang_dir=os.path.join(pairs_dir, row["Language"])
+            )
+            for _, row in diagnostics_df.iterrows()
+        }
 
     print("Generating deprel index")
     generate_html_deprel_index(
@@ -684,22 +779,13 @@ def refresh_deprel_index(target_col: str,
         html_directory=html_dir,
         target_col=target_col,
         leaf_threshold=leaf_threshold,
-        pairs_dir=pairs_dir,
+        pairs_dir=pairs_dir if has_pairs else None,
         diagnostics_by_lang=diagnostics_by_lang,
-        # A language with no fitted tree (100% one label, or too little
-        # variance to fit at all) still gets real pairs/diagnostics
-        # computed -- see run_agreement_pipeline's unconditional
-        # create_npa_pairs_for_target_col call -- so it's worth showing
-        # rather than only naming in the omitted-languages note, as long as
-        # its "yes" count is more than noise. Entropy/accuracy render blank
-        # for these rows (see generate_html_deprel_index's own NaN
-        # handling) since there's no tree to report them from.
-        include_trivial_labels={"yes"},
-        include_trivial_min_count=10,
         agreement_label=f"NP {role1}–{role2} ({feat})",
         head_role_label=swap_role,
         subject_label=fixed_role,
         nsubj_label=fixed_role,
+        debug_view=not has_pairs,
     )
 
 
@@ -717,13 +803,18 @@ def run_agreement_pipeline(target_col: str, langs: list[str], instances_dir: str
                             leaf_threshold: float = 0.1,
                             palette_map: dict | None = None,
                             unimorph_args: dict | None = None,
-                            build_pairs: bool = True, verbose: bool = True) -> None:
+                            build_pairs: bool = True, verbose: bool = True,
+                            per_treebank: bool = True,
+                            include_excluded: bool = False,
+                            detailed_unk: bool = False,
+                            incl_unk: bool = False,
+                            second_chance=None) -> None:
     """Per-language: fit_npa_tree + word_order.viz_tree.tree2html, then (when
     build_pairs, the default) create_npa_pairs_for_target_col, for one NPA
     pairwise agreement column, e.g. "HEAD-DET_Number" -- then, once every
     language is done, a diagnostics table + the SAME diagnostics-enabled
     deprel index page sva_trees.pipeline.Pipeline/subj_aux.pipeline.
-    SubjAuxPipeline produce (word_order.viz_deprel.generate_html_deprel_index
+    AuxPipeline produce (word_order.viz_deprel.generate_html_deprel_index
     with diagnostics_by_lang populated -- never the plain "classic" table
     page). Does NOT rebuild the cross-target_col overview index itself
     (word_order.viz_overview.generate_html_overview_index, which groups
@@ -781,6 +872,26 @@ def run_agreement_pipeline(target_col: str, langs: list[str], instances_dir: str
     build_role_inflector's own default ({"combine_um_ud": True,
     "remove_multiword_forms": True}).
 
+    per_treebank: also fit/render one analysis-only tree per treebank
+    (word_order.per_treebank) for languages with several, linked from the
+    pooled page, cached under {save_dir}/treebanks. include_excluded adds
+    the language's excluded treebanks, split off the unified np_instances
+    parquet at read time (word_order.per_treebank.split_excluded; never used
+    for the pooled tree or pairs); a language without any just has none.
+
+    second_chance: a sva_trees.second_chance.SecondChanceConfig to retry a
+    language whose strict pass under-filled at a laxer, depth-aware per-leaf
+    entropy bar (same rule and meta.json bookkeeping as sva_trees.pipeline.
+    Pipeline); None (default) never retries. Needs build_pairs.
+
+    incl_unk (default False, as in sva_trees.pipeline.Pipeline): also fit the
+    per-treebank/pooled incl.-unk variant ({lang}__unk) of each tree
+    (word_order.per_treebank) alongside the normal drop-unk one. detailed_unk (default False) picks
+    its label granularity: one plain merged "unk" class, or (True) the
+    role1_unknown/role2_unknown/both_unknown breakdown built below -- same
+    mode-1/mode-2 split as sva_trees.pipeline.Pipeline's incl_unk/
+    detailed_unk, kept parallel for cross-pipeline comparability.
+
     Also unlike sva_trees.pipeline.Pipeline: no ProcessPoolExecutor/memory
     capping. Reading an already-built np_instances parquet and fitting one
     decision tree per language is far cheaper than SVA's treebank-parsing +
@@ -806,7 +917,7 @@ def run_agreement_pipeline(target_col: str, langs: list[str], instances_dir: str
             print(f"{lang}: skip, no np_instances parquet at {instances_path}")
             continue
 
-        raw_df = pd.read_parquet(instances_path)
+        raw_df, excluded_raw_df = split_excluded(pd.read_parquet(instances_path))
         if target_col not in raw_df.columns:
             print(f"{lang}: skip, missing column {target_col}")
             continue
@@ -830,6 +941,11 @@ def run_agreement_pipeline(target_col: str, langs: list[str], instances_dir: str
         # showing an unrelated ADP_form value would misleadingly suggest
         # it's part of this agreement condition.
         print(lang)
+
+        write_label_distribution(
+            save_dir, cached_lang,
+            {str(k): int(v) for k, v in full_df[target_col].value_counts().items()},
+        )
 
         joblib_path = os.path.join(save_dir, f"{cached_lang}.joblib")
         dt_parquet_path = os.path.join(save_dir, f"{cached_lang}.parquet")
@@ -865,6 +981,7 @@ def run_agreement_pipeline(target_col: str, langs: list[str], instances_dir: str
         # same reason).
         lang_pairs_dir = os.path.join(pairs_dir, cached_lang)
         correct_swaps_df = None
+        lang_leaf_threshold = leaf_threshold
         if build_pairs:
             if never_skip or not os.path.isdir(lang_pairs_dir):
                 inflectors = {}
@@ -879,12 +996,35 @@ def run_agreement_pipeline(target_col: str, langs: list[str], instances_dir: str
                 label_distribution = {
                     str(k): int(v) for k, v in full_df[target_col].value_counts().items()
                 }
-                diagnostic_dfs, _ = create_npa_pairs_for_target_col(
-                    dt_df, target_col, inflectors, leaf_threshold=leaf_threshold,
+                pairs_kwargs = dict(
                     save_to=lang_pairs_dir, full_df=full_df,
                     label_distribution=label_distribution,
                     num_lemma=swap_num_lemma, num_form=swap_num_form, verbose=verbose,
                 )
+                diagnostic_dfs, _ = create_npa_pairs_for_target_col(
+                    dt_df, target_col, inflectors, leaf_threshold=leaf_threshold,
+                    **pairs_kwargs,
+                )
+                if second_chance is not None:
+                    retry, lax, info = second_chance_decision(
+                        dt_df, target_col, label_distribution,
+                        strict_threshold=leaf_threshold,
+                        min_samples_leaf=min_samples_leaf, cfg=second_chance)
+                    print(f"{lang} {target_col}: second chance: {info['reason']}")
+                    if retry:
+                        # Adopted even with zero correct_swaps, as in
+                        # sva_trees.pipeline.Pipeline: the lax pass's keep
+                        # count and bucket breakdown are the ones worth
+                        # keeping on record once a retry was attempted.
+                        diagnostic_dfs, _ = create_npa_pairs_for_target_col(
+                            dt_df, target_col, inflectors, leaf_threshold=lax,
+                            extra_meta={"second_pass": True, "second_chance_info": info},
+                            second_chance_threshold=leaf_threshold,
+                            **pairs_kwargs,
+                        )
+                        lang_leaf_threshold = lax
+                        if not len(diagnostic_dfs["correct_swaps"]):
+                            print(f"{lang} {target_col}: retry attempted, yielded no pairs")
                 correct_swaps_df = diagnostic_dfs.get("correct_swaps")
             else:
                 # Pairs already built by an earlier run -- read the cached
@@ -895,43 +1035,105 @@ def run_agreement_pipeline(target_col: str, langs: list[str], instances_dir: str
                 correct_swaps_path = os.path.join(lang_pairs_dir, "correct_swaps.parquet")
                 if os.path.exists(correct_swaps_path):
                     correct_swaps_df = pd.read_parquet(correct_swaps_path)
+                # a retried language's tree page must show the (lax) cutoffs
+                # its pairs were actually built with
+                meta_path = os.path.join(lang_pairs_dir, "meta.json")
+                if os.path.exists(meta_path):
+                    with open(meta_path) as f:
+                        cached_threshold = json.load(f).get("leaf_threshold")
+                    if isinstance(cached_threshold, dict):
+                        lang_leaf_threshold = {int(k): v for k, v in cached_threshold.items()}
 
-        if never_skip or not os.path.exists(html_path):
+        shown_df = _drop_irrelevant_roles(full_df, (role1, role2))
+        tree_html_kwargs = dict(
+            predictor_var=target_col,
+            target=None,
+            max_rows=15,
+            only_show_real_orders=True,
+            correlate_features=True,
+            show_features=True,
+            full_tree_html=learn_dt,
+            palette_map=palette_map or {"yes": "#31cb9f", "no": "#f16393", "unk": "#b893de"},
+            leaf_threshold=lang_leaf_threshold,
+            strict_leaf_threshold=leaf_threshold,
+            head_label="NP head",
+            fit_excluded=fit_excluded_for_display(npa_fit_omit_feats(full_df.columns, target_col)),
+        )
+
+        treebank_nav, treebanks_fresh = None, False
+        if per_treebank and learn_dt and "treebank" in full_df.columns:
+            extra_df = None
+            if include_excluded and excluded_raw_df is not None and target_col in excluded_raw_df.columns:
+                extra_df = excluded_raw_df[excluded_raw_df[target_col].notna()].copy()
+                if not len(extra_df):
+                    extra_df = None
+            if full_df["treebank"].nunique() > 1 or extra_df is not None:
+                tb_cache_dir = os.path.join(save_dir, "treebanks")
+                # Same idea as sva_trees.pipeline.Pipeline's own unk_split: an
+                # incl.-unk tree predicts *why* (role1_unknown/role2_unknown/
+                # both_unknown), not one merged "unk" -- NPA's own lowercase,
+                # role-named vocabulary (e.g. "det_unknown"/"adj_unknown"),
+                # matching its yes/no/unk label convention.
+                label_a, label_b = f"{role1.lower()}_unknown", f"{role2.lower()}_unknown"
+                grey = "#94a1b2"
+                unk_split = {
+                    "col_a": f"{role1}_{feat}", "label_a": label_a,
+                    "col_b": f"{role2}_{feat}", "label_b": label_b,
+                    "both_label": "both_unknown", "other_label": "unknown_other",
+                    # "unknown_other" itself (an ambiguous/multi-valued-overlap
+                    # unk, per decision_tree.split_unk_reasons -- expected-
+                    # empty) is deliberately left out of the palette:
+                    # _finalize_tree_html forces the legend's class list to
+                    # exactly palette_map's keys, so a permanent 0-count
+                    # "unknown_other" swatch would otherwise show on literally
+                    # every incl.-unk page. Still labeled that string if it
+                    # ever genuinely occurs (other_label above), just without
+                    # its own legend entry/color -- falls back to the default
+                    # unk color (see sva_trees.pipeline's identical fix).
+                    "palette": {
+                        "yes": "#31cb9f", "no": "#f16393",
+                        label_a: "#f6c453", label_b: "#5aa9e6",
+                        "both_unknown": grey,
+                    },
+                }
+                effective_unk_split = unk_split if detailed_unk else None
+                tb_summary, treebanks_fresh = fit_treebank_trees(
+                    full_df, cached_lang, model, target_col, None, tb_cache_dir,
+                    fit_kwargs=dict(min_samples_leaf=min_samples_leaf, max_depth=max_depth),
+                    omit_feats_fn=lambda d: npa_fit_omit_feats(d.columns, target_col),
+                    impurity_fn=get_impurity, pooled_impurity=get_impurity(len(full_df)),
+                    drop_unk=drop_unk, never_skip=never_skip,
+                    extra_df=extra_df, include_excluded=include_excluded,
+                    reason_fn=treebank_row_exclusion_reason,
+                    unk_split=effective_unk_split, incl_unk=incl_unk)
+                if treebanks_fresh or never_skip or not os.path.isdir(os.path.join(html_dir, cached_lang)):
+                    render_treebank_pages(
+                        tb_summary, cached_lang, shown_df, tb_cache_dir, html_dir, tree_html_kwargs,
+                        extra_df=(_drop_irrelevant_roles(extra_df, (role1, role2))
+                                  if extra_df is not None else None),
+                        unk_split=effective_unk_split)
+                treebank_nav = build_nav(tb_summary, cached_lang)
+
+        if never_skip or treebanks_fresh or not os.path.exists(html_path):
             tree2html(
                 pipeline_model=model,
                 dt_df=dt_df,
-                full_df=_drop_irrelevant_roles(full_df, (role1, role2)),
-                predictor_var=target_col,
-                target=None,
+                full_df=shown_df,
                 out_file=html_path,
-                max_rows=15,
                 meta={"Language": lang},
-                only_show_real_orders=True,
-                correlate_features=True,
-                show_features=True,
-                full_tree_html=learn_dt,
-                palette_map=palette_map or {"yes": "#31cb9f", "no": "#f16393", "unk": "#b893de"},
-                leaf_threshold=leaf_threshold,
-                head_label="NP head",
-                # Same trim as full_df above, and for the same reason:
-                # correct_swaps_df still carries every role np_instances
-                # ever saw (ADJ/ADP/NUM/PRON/...), not just role1/role2.
-                # Left untrimmed, html_tree.py's _v2_raw_pair_role_prefixes
-                # (which only sees this dataframe's own columns, not
-                # target_col) picks up a bystander role instead of the real
-                # swap role -- its swap_{role} column is then always empty,
-                # so every row silently fails _v2_pair_swap_role and the
-                # pairs section renders 0 pairs despite a real, nonzero
-                # leaf count (which comes from a separate, already-correct
-                # tally).
+                treebank_nav=treebank_nav,
+                # correct_swaps_df gets the same role trim as full_df, and for
+                # the same reason: it still carries every role np_instances
+                # ever saw (ADJ/ADP/NUM/PRON/...), not just role1/role2. Left
+                # untrimmed, html_tree.py's _v2_raw_pair_role_prefixes picks up
+                # a bystander role instead of the real swap role, so the pairs
+                # section renders 0 pairs despite a real, nonzero leaf count.
                 correct_swaps_df=(
                     _drop_irrelevant_roles(correct_swaps_df, (role1, role2))
                     if correct_swaps_df is not None else None
                 ),
+                **tree_html_kwargs,
             )
-
-    if not build_pairs:
-        return
 
     refresh_deprel_index(
         target_col,
@@ -940,6 +1142,7 @@ def run_agreement_pipeline(target_col: str, langs: list[str], instances_dir: str
         pairs_dir=pairs_dir,
         diagnostics_csv=diagnostics_csv,
         leaf_threshold=leaf_threshold,
+        has_pairs=build_pairs,
     )
 
     # Cross-pipeline overview index is no longer rebuilt here -- see

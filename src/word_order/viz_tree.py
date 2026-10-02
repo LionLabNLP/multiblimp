@@ -171,7 +171,19 @@ def _agreement_context(predictor_var, target):
     if not predictor_var:
         return None, ()
 
-    pair_match = split_pairwise_predictor(predictor_var)
+    # An incl.-unk "why" tree (per_treebank.fit_treebank_trees/
+    # render_treebank_pages's own unk_split) fits a SEPARATE predictor_var,
+    # "{predictor_var}__unk_split" (per_treebank._unk_split_col) -- same
+    # underlying rows/role columns, just a different derived label column --
+    # so the pairwise match below needs the suffix stripped first, or it
+    # never matches "{Role1}-{Role2}_{Feature}__unk_split" (the trailing
+    # "$" anchor requires an exact end-of-string match) and the sample
+    # sentences on that page silently lose their DET/ADJ-style highlighting.
+    # SVA's own "..._agreement" branch below doesn't need this: its "agreement"
+    # substring check and its regex both still match fine with the suffix on.
+    base_predictor_var = predictor_var.removesuffix("__unk_split")
+
+    pair_match = split_pairwise_predictor(base_predictor_var)
     if pair_match:
         role1, role2, feat = pair_match
         return feat, (role1, role2)
@@ -292,20 +304,21 @@ def _build_feat_columns(full_df, swap_feature=None, highlight_prefixes=(), targe
     whenever its features all happened to be null would misalign every
     row after it.
     """
-    # Trailing (?:\[[a-z]+\])? admits UD's layered-feature suffix (e.g.
-    # "Number[psor]", "Gender[subj]"). Prefix is [A-Za-z]+, not just [a-z]+:
+    # Trailing (?:\[[^\]]+\])? admits UD's layered-feature suffix (e.g.
+    # "Number[psor]", "Gender[subj]"), whatever characters the tag holds. Prefix is [A-Za-z]+, not just [a-z]+:
     # SVA's own prefixes ("head", "nsubj", ...) are always lowercase, but
     # e.g. npa_trees' role-based prefixes ("HEAD", "DET", ...) are uppercase
     # by design (pools NOUN/PROPN/PRON-headed NPs under one "HEAD" role) --
     # this widens the match without narrowing it for any lowercase-prefixed
     # caller.
-    morph_df = full_df.filter(regex=r"^[A-Za-z]+_[A-Z][a-zA-Z]+(?:\[[a-z]+\])?$", axis=1)
+    morph_df = full_df.filter(regex=r"^[A-Za-z]+_[A-Z][a-zA-Z]+(?:\[[^\]]+\])?$", axis=1)
     extra_cols = []
-    for suffix in ("pos", "deprel", "lemma"):
+    for suffix in ("pos", "deprel", "lemma", "xpos"):
         extra_cols += [c for c in full_df.columns if re.match(rf"^[A-Za-z]+_{suffix}$", c)]
     feat_df = pd.concat([full_df[extra_cols], morph_df], axis=1) if extra_cols else morph_df
     feat_cols = list(feat_df.columns)
-    prefixes = {label.split("_")[0] for label in feat_cols}
+    # in column order, not set order (which changes with every process)
+    prefixes = list(dict.fromkeys(label.split("_")[0] for label in feat_cols))
     feat_collect = {f"{p}_features": [] for p in prefixes}
 
     # obj/iobj (and ergative-marked subj) agreement never folds a bracketed
@@ -330,7 +343,7 @@ def _build_feat_columns(full_df, swap_feature=None, highlight_prefixes=(), targe
         for label, val in zip(feat_cols, row_tuple):
             if pd.isna(val) or val == "_":
                 continue
-            prefix, feature = label.split("_")
+            prefix, feature = label.split("_", 1)
             val_str = str(val)[:-2] if str(val).endswith(".0") else str(val)
             row_vals[label] = val_str
             if resolve_bracket_feats and prefix == "head" and feature in _LAYERED_DISPLAY_FEATS:
@@ -357,7 +370,69 @@ def _build_feat_columns(full_df, swap_feature=None, highlight_prefixes=(), targe
 
         for k, v in mf.items():
             feat_collect[k].append(v)
+
+    # The child role's own deprel is constant (always the target deprel), so
+    # the data build drops that column; put it back for display.
+    if target_deprel and target_deprel in prefixes and f"{target_deprel}_deprel" not in full_df.columns:
+        feat_collect[f"{target_deprel}_features"] = [
+            v + [f"deprel={target_deprel}"] for v in feat_collect[f"{target_deprel}_features"]
+        ]
     return feat_collect
+
+
+def _feature_sources(prep):
+    """{output feature index: (raw column, category or None)} for the
+    preprocessor's one-hot ("cat") and passthrough ("num") outputs, in
+    output order. {} if the layout isn't what's expected."""
+    src, idx = {}, 0
+    for name, trans, cols in prep.transformers_:
+        if name == "cat" and hasattr(trans, "categories_"):
+            drops = trans.drop_idx_ if trans.drop_idx_ is not None else [None] * len(cols)
+            for col, cats, drop in zip(cols, trans.categories_, drops):
+                for j, cat in enumerate(cats):
+                    if drop is not None and j == drop:
+                        continue
+                    src[idx] = (col, cat)
+                    idx += 1
+        elif name == "num":
+            for col in cols:
+                src[idx] = (col, None)
+                idx += 1
+    return src if idx == len(prep.get_feature_names_out()) else {}
+
+
+def _fmt_route_value(v):
+    if v is None or (not isinstance(v, str) and pd.isna(v)) or v in ("None", "_missing", "nan", ""):
+        return "(not set)"
+    if isinstance(v, (bool, np.bool_)):
+        return str(bool(v))
+    if isinstance(v, (float, np.floating)) and float(v).is_integer():
+        return str(int(v))
+    return str(v)
+
+
+def _sample_routes(prep, clf, full_df, dt_df, ids):
+    """{row id: {split node id (str): the row's raw value of the column that
+    node splits on}} along each row's path through the tree."""
+    src = _feature_sources(prep)
+    ids = list(dict.fromkeys(ids))
+    if not src or not ids:
+        return {}
+    X = prep.transform(dt_df.loc[ids])
+    indicator = clf.decision_path(X)
+    feature = clf.tree_.feature
+    routes = {}
+    for pos, sid in enumerate(ids):
+        steps = {}
+        for node in indicator[pos].indices:
+            f = feature[node]
+            if f < 0 or f not in src:
+                continue
+            col = src[f][0]
+            source = full_df if col in full_df.columns else dt_df
+            steps[str(int(node))] = _fmt_route_value(source.at[sid, col])
+        routes[sid] = steps
+    return routes
 
 
 def get_samples(
@@ -405,13 +480,22 @@ def get_samples(
             ]
         )
 
+    routes = _sample_routes(
+        prep, clf, full_df, dt_df,
+        [sid for node_map in sample_ids.values() for ids in node_map.values() for sid in ids],
+    )
+
+    def _rows_with_routes(ids):
+        records = _relabel_head_columns(full_df.loc[ids][keep_columns].to_dict("records"), head_label)
+        for rec, sid in zip(records, ids):
+            rec["route"] = routes.get(sid, {})
+        return records
+
     predictor_samples = {}
     for predictor, node_sample_ids in sample_ids.items():
         predictor_samples[predictor] = {
             int(node_idx): {
-                "rows": _relabel_head_columns(
-                    full_df.loc[sample_ids][keep_columns].to_dict("records"), head_label
-                ),
+                "rows": _rows_with_routes(sample_ids),
                 "count": len(sample_ids),
                 "total_count": label_distribution[node_idx][class2idx[predictor]],
             }
@@ -503,9 +587,14 @@ def interpolate_color(hex1, hex2, t):
 
 
 def build_treebank_links(full_df: pd.DataFrame) -> list[str]:
-    """Build grew.fr query links for each row in full_df."""
+    """Build grew.fr query links for each row in full_df.
 
-    form_cols = [x for x in full_df.columns if x.endswith("_form")]
+    Prefers the untouched-casing "*_form_orig" columns over the lowercased
+    "*_form" ones -- see build_grew_link.
+    """
+
+    orig_cols = [x for x in full_df.columns if x.endswith("_form_orig")]
+    form_cols = orig_cols or [x for x in full_df.columns if x.endswith("_form")]
     treebanks = full_df["treebank"] if "treebank" in full_df.columns else [None] * len(full_df)
     sent_ids = full_df["sent_id"] if "sent_id" in full_df.columns else [None] * len(full_df)
     form_rows = zip(*(full_df[c] for c in form_cols)) if form_cols else [()] * len(full_df)
@@ -584,6 +673,7 @@ def _finalize_tree_html(
     palette_map=None,
     head_label="head",
     leaf_threshold=None,
+    strict_leaf_threshold=None,
     correct_swaps_df=None,
 ):
     """
@@ -946,6 +1036,7 @@ def _finalize_tree_html(
         label_distribution[0],
         dict(meta),
         leaf_threshold=leaf_threshold,
+        strict_leaf_threshold=strict_leaf_threshold,
         head_label=head_label,
         correct_swaps_df=correct_swaps_df,
     )
@@ -967,9 +1058,12 @@ def tree2html(
     full_tree_html=True,
     palette_map=None,
     leaf_threshold=None,
+    strict_leaf_threshold=None,
     full_label_distribution=None,
     head_label="head",
     correct_swaps_df=None,
+    treebank_nav=None,
+    fit_excluded=None,
 ):
     """
     pipeline_model:
@@ -1016,8 +1110,14 @@ def tree2html(
         this same language/deprel's tree -- joined by leaf_id into the v2
         page's generated-pairs section. None (default) leaves that section
         empty, same as before this existed; has no effect on the v1 page.
+    strict_leaf_threshold: the pipeline's own strict leaf_threshold, passed
+        regardless of whether a sva_trees.second_chance retry happened.
+        leaf_threshold is the lax bar on a successful retry, so any kept leaf
+        with entropy above this value only passed because of the retry --
+        the v2 page tags those leaves and shows the strict bar next to the
+        lax one. None (default, or equal to leaf_threshold) tags nothing.
     """
-    if leaf_threshold is not None:
+    if leaf_threshold is not None and not isinstance(leaf_threshold, dict):
         meta = dict(meta or {})
         meta["Keep threshold"] = f"entropy &lt; {leaf_threshold:g}"
 
@@ -1029,6 +1129,7 @@ def tree2html(
                 dt_df, full_df, predictor_var, meta, show_features=show_features, target=target,
                 head_label=head_label,
             ),
+            nav=treebank_nav,
         )
         return
 
@@ -1106,8 +1207,21 @@ def tree2html(
     if meta is None:
         meta = {}
 
+    # Classes with rows in the data that the fit dropped (unk, when the run
+    # drops it): shown greyed in the info-panel legend, for context only.
+    excluded = [c for c in classes if c not in class2idx_model and label_distribution[0][class2idx[c]] > 0]
+    if excluded:
+        meta["excludedClasses"] = excluded
+
     accuracy = pipeline_model.score(dt_df, dt_df[predictor_var])
     meta["accuracy"] = f"{accuracy * 100:.1f}%"
+    # Held-out accuracy of this same tree, from the test split it was fit with
+    # (fit_dt attaches test_eval_ to the model); absent for older cached models.
+    test_eval = getattr(pipeline_model, "test_eval_", None)
+    if test_eval is not None and len(test_eval):
+        test_acc = float((test_eval["y"] == test_eval["pred"]).mean())
+        meta["testAccuracy"] = f"{test_acc * 100:.1f}%"
+        meta["testN"] = int(len(test_eval))
 
     base_ent = calculate_base_entropy(dt_df, predictor_var, binary=True)
     reduced_ent = calculate_tree_entropy(
@@ -1128,6 +1242,12 @@ def tree2html(
         meta["Training samples"] = f"{root_samples:,}"
     if "Predictor" not in meta:
         meta["Predictor"] = _display_predictor_var(predictor_var, head_label)
+    if treebank_nav:
+        meta["treebankNav"] = treebank_nav
+    if fit_excluded:
+        # column names (e.g. "head_xpos") kept out of the tree fit but still
+        # shown in the feature tables, where they get an "x" marker
+        meta["fitExcluded"] = list(fit_excluded)
 
     predictor_samples = get_samples(
         prep,
@@ -1158,6 +1278,7 @@ def tree2html(
         palette_map=palette_map,
         head_label=head_label,
         leaf_threshold=leaf_threshold,
+        strict_leaf_threshold=strict_leaf_threshold,
         correct_swaps_df=correct_swaps_df,
     )
 

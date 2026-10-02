@@ -72,6 +72,7 @@ BUCKET_LABELS = {
     "same_features": "Same feature",
     "undefined_features": "Undefined feature",
     "ambiguous_subjects": "Ambiguous subject",
+    "conflicting_features": "Conflicting features",
 }
 
 # (group, label) per condition this page covers -- the flat
@@ -95,6 +96,7 @@ PUBLISHED_BUCKET_KEYS = {
     "same_feature": "same_features",
     "undefined_feature": "undefined_features",
     "ambiguous_subject": "ambiguous_subjects",
+    "conflicting_features": "conflicting_features",
 }
 
 LANGUAGES_RE = re.compile(r"const LANGUAGES = \{\s*six:\s*(\[.*?\]),\s*binary:\s*(\[.*?\])\s*\};", re.S)
@@ -185,6 +187,7 @@ def _tried_languages(dir_path: str) -> set[str]:
             fn[:-len(".html")].replace("_", " ")
             for fn in os.listdir(dir_path)
             if fn.endswith(".html") and fn != "index.html"
+            and not fn.endswith("__unk.html")  # per-treebank incl.-unk view of a language
         )
     }
 
@@ -293,7 +296,7 @@ def treebank_samples() -> list[dict]:
             )
             counts = pd.read_parquet(path, columns=["treebank"])["treebank"].value_counts()
             out.append({
-                "language": lang, "condition_id": cond, "condition_label": f"{label} ({group})",
+                "language": lang, "condition_id": cond, "condition_label": f"{group} ({label})",
                 "group": group, "samples_by_treebank": counts.to_dict(), "total_samples": int(counts.sum()),
             })
     for sub in npa_subgroups:

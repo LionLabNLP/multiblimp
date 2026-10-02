@@ -12,11 +12,12 @@ from tqdm import tqdm
 sys.path.append("../")
 from multiblimp.swap_features import *
 from word_order.prediction_target import PredictionTarget, nsubj_target
-from word_order.process_treebank import resolve_layered_head_key
+from word_order.process_treebank import resolve_layered_head_key, slot_suffixes
 from word_order.utils import build_grew_link
 from word_order.decision_tree import UNK_LABELS
 from word_order.entropy import default_leaf_threshold
 from multiblimp.unimorph import load_inflector
+from multiblimp.agreement_pipeline_utils import match_casing
 
 
 UNDEFINED="UNDEFINED"
@@ -26,7 +27,7 @@ def _coverage_stats(df, child_deprel, inflector):
     """(# forms of interest, # covered by UM alone, # covered by UM+UD combined).
 
     Forms of interest: every distinct head_form / <child_deprel>_form value across
-    ALL of df (not just the "Yes"-labeled swap candidates) -- i.e. every word that
+    ALL of df (not just the "yes"-labeled swap candidates) -- i.e. every word that
     plays the head or child role for this prediction target, regardless of whether
     it ends up eligible for a swap. "Covered" means the form string appears at all
     in the relevant UniMorph data, independent of whether it carries the right
@@ -122,18 +123,30 @@ def _feats_summary(row, prefix, highlight_feat=None) -> str:
     {prefix}_-prefixed columns (form, idx, sibling-*, child-*, ...) since those
     never look like a bare CamelCase feature name.
 
-    Also includes the node's upos/deprel/lemma (extract_node_features's
-    "{prefix}_pos"/"{prefix}_deprel"/"{prefix}_lemma" columns -- "pos" is
-    displayed as "upos=..." rather than the column's own "pos" label; deprel/
-    lemma keep their column names as-is, e.g. "deprel=cop", useful for telling
-    a redirect_nsubj_to_aux cop-redirected row apart from an aux/aux:pass one
-    at a glance), in that order, first in the list, ahead of the morphological
-    feats -- same convention word_order/viz_tree.py's _build_feat_columns uses
-    for the tree page's own per-token feature list, so the two stay consistent.
+    Also includes the node's upos/xpos/deprel/lemma (extract_node_features's
+    "{prefix}_pos"/"{prefix}_xpos"/"{prefix}_deprel"/"{prefix}_lemma" columns
+    -- "pos" is displayed as "upos=..." rather than the column's own "pos"
+    label; xpos/deprel/lemma keep their column names as-is, e.g.
+    "deprel=cop", useful for telling a redirect_nsubj_to_aux cop-redirected
+    row apart from an aux/aux:pass one at a glance), in that order, first in
+    the list, ahead of the morphological feats -- same convention
+    word_order/viz_tree.py's _build_feat_columns and word_order/html/
+    html_tree.py's _v2_pair_feat_list use for the tree page's own per-token
+    feature list, so this quick-view stays consistent with the full page.
+
+    Matches bracketed argument-indexing feats too (Number[obj], Person[erg],
+    Gender[abs], ...) -- UD's convention for polypersonal/ergative-split
+    agreement (see _LAYERED_DISPLAY_FEATS in viz_tree.py/html_tree.py). An
+    earlier, plain-only version of this regex silently dropped every one of
+    these from the deprel index's quick-view examples while the full tree/
+    pairs page kept showing them, so the two pages disagreed on what
+    features a sample row even has.
 
     highlight_feat: the feature actually being swapped/compared (e.g. "Number"),
-    bolded in the list so it's easy to spot among the node's other features."""
-    pat = re.compile(rf"^{re.escape(prefix)}_([A-Z][a-zA-Z]*)$")
+    bolded in the list so it's easy to spot among the node's other features --
+    matched by BASE feature name, so a bracketed entry (e.g. "Number[subj]")
+    for that same dimension is bolded too."""
+    pat = re.compile(rf"^{re.escape(prefix)}_([A-Z][a-zA-Z]*(?:\[[^\]]+\])?)$")
     pairs = []
     highlight_val = None
     for col in row.index:
@@ -146,14 +159,14 @@ def _feats_summary(row, prefix, highlight_feat=None) -> str:
         feat = match.group(1)
         val_str = html_lib.escape(str(val))
         line = f"{feat}={val_str}"
-        if highlight_feat and feat == highlight_feat:
+        if highlight_feat and feat.partition("[")[0] == highlight_feat:
             line = f'<strong class="swap-feat">{line}</strong>'
             highlight_val = val_str
-        pairs.append((feat, line))
+        pairs.append((feat.partition("[")[0], line))
 
     pairs.sort(key=lambda p: p[0])
 
-    for extra_feat, col_suffix in (("lemma", "lemma"), ("deprel", "deprel"), ("upos", "pos")):
+    for extra_feat, col_suffix in (("lemma", "lemma"), ("deprel", "deprel"), ("upos", "pos"), ("xpos", "xpos")):
         val = row.get(f"{prefix}_{col_suffix}")
         if pd.notna(val) and val not in (None, "None", "", "_missing", "_"):
             pairs.insert(0, (extra_feat, f"{extra_feat}={html_lib.escape(str(val))}"))
@@ -171,8 +184,12 @@ def _feats_summary(row, prefix, highlight_feat=None) -> str:
 
 def _treebank_link(row) -> str:
     """grew.fr query-link for a single example row — shared with word_order/
-    viz_tree.py's build_treebank_links via word_order.utils.build_grew_link."""
-    form_cols = [c for c in row.index if c.endswith("_form") and pd.notna(row.get(c))]
+    viz_tree.py's build_treebank_links via word_order.utils.build_grew_link.
+    Prefers the untouched-casing "*_form_orig" columns over "*_form"."""
+    orig_cols = [c for c in row.index if c.endswith("_form_orig") and pd.notna(row.get(c))]
+    form_cols = orig_cols or [
+        c for c in row.index if c.endswith("_form") and pd.notna(row.get(c))
+    ]
     form_values = [row[c] for c in form_cols]
     link = build_grew_link(row.get("treebank"), row.get("sent_id"), form_values)
     return link if link is not None else "&mdash;"
@@ -373,7 +390,7 @@ def _examples_table_html(item_df: pd.DataFrame, max_examples: int, treebank=None
             return "default"
         return "other"
 
-    preferred = [c for c in item_df.columns if c.endswith("_form") or c in ("feature_vals", "alternatives")]
+    preferred = [c for c in item_df.columns if c.endswith("_form") or c in ("feature_vals", "alternatives", "conflicting_features")]
     forms = [c for c in preferred if c.endswith("_form")]
     other = [c for c in preferred if c not in forms]
     kind_rank = {"child": 0, "default": 1, "other": 2}
@@ -385,7 +402,9 @@ def _examples_table_html(item_df: pd.DataFrame, max_examples: int, treebank=None
 
     has_sentence = "sen" in item_df.columns
     has_treebank = "treebank" in item_df.columns and "sent_id" in item_df.columns
-    sample = _diverse_sample(item_df, max_examples)
+    sample = _diverse_sample(
+        item_df, max_examples,
+        by="conflicting_features" if "conflicting_features" in item_df.columns else "feature_vals")
 
     has_child_after = bool(child_deprel) and any(
         col.startswith(f"after_{child_deprel}_") for col in item_df.columns
@@ -423,7 +442,10 @@ def _examples_table_html(item_df: pd.DataFrame, max_examples: int, treebank=None
     )
     if has_treebank:
         header_cols.append("treebank")
-    header = "".join(f"<th>{html_lib.escape(c)}</th>" for c in header_cols)
+    # A conflict list can be long; wrap it rather than widen the table.
+    wrap = ' style="min-width:9rem;max-width:11rem;white-space:normal;overflow-wrap:break-word"'
+    header = "".join(
+        f"<th{wrap if c == 'conflicting_features' else ''}>{html_lib.escape(c)}</th>" for c in header_cols)
     body_rows = ""
     for _, row in sample.iterrows():
         cells = ""
@@ -442,7 +464,9 @@ def _examples_table_html(item_df: pd.DataFrame, max_examples: int, treebank=None
             cells += f'<td class="feats">{_feats_summary(row, default_kind, highlight_feat=swap_feature)}</td>'
             cells += f'<td>{_swap_form_after(row, default_kind)}</td>'
             cells += f'<td class="feats">{_feats_summary(row, f"after_{default_kind}", highlight_feat=swap_feature)}</td>'
-        cells += "".join(f"<td>{_fmt_cell(row[c])}</td>" for c in other_cols)
+        cells += "".join(
+            f"<td{wrap}>{_fmt_cell(row[c], max_len=200)}</td>" if c == "conflicting_features"
+            else f"<td>{_fmt_cell(row[c])}</td>" for c in other_cols)
         if has_treebank:
             cells += f'<td class="treebank">{_treebank_link(row)}</td>'
         body_rows += f"<tr>{cells}</tr>"
@@ -474,6 +498,156 @@ def bucket_examples_html(diagnostic_dfs: dict, item_types, max_examples: int = 5
     }
 
 
+_SWAP_DIMS = ("Person", "Number", "Gender")
+_NO_VALUE = (None, "None", "", "_missing", "nan", "UNDEFINED")
+_PERSON_VALUES = {"0", "1", "2", "3", "4"}
+
+
+def _conflicting_features(item, kind, ufeat, slot_aliases):
+    """Features on `kind` whose original value is not among the values the
+    reinflected candidate carries -- everything except the swapped slot
+    itself (`ufeat` and its slot-alias spellings; for nsubj also the plain
+    feature, where [subj] is folded into it). A non-person value in a
+    Person field (Abkhaz "Person[obj]=Rel": the relativiser filling the
+    object prefix) counts as missing."""
+    base = (ufeat or "").partition("[")[0]
+    exempt = {ufeat}
+    if "[" in (ufeat or ""):
+        exempt.update(f"{base}[{s}]" for s in slot_aliases)
+    if {"subj", "nsubj"} & set(slot_aliases):
+        exempt.add(base)
+    conflicts = []
+    prefix = f"after_{kind}_"
+    for col, after in item.items():
+        if not col.startswith(prefix) or pd.isna(after) or after in _NO_VALUE:
+            continue
+        feat = col[len(prefix):]
+        if feat in exempt:
+            continue
+        orig = item.get(f"{kind}_{feat}")
+        if pd.isna(orig) or orig in _NO_VALUE:
+            continue
+        if feat.partition("[")[0] == "Person" and str(orig) not in _PERSON_VALUES:
+            continue
+        # a multi-valued original (UD "Gender=Masc,Neut": the form is
+        # ambiguous) is compatible with a candidate carrying any of its values
+        if not set(str(orig).split(",")) & set(str(after).split("/")):
+            conflicts.append(f"{feat}:{orig}->{after}")
+    return conflicts
+
+
+def _added_slots(item, kind, slot_aliases):
+    """[description] if the reinflected candidate marks more distinct bracketed
+    argument slots (Person/Number/Gender brackets, counted by bracket suffix
+    across all three dimensions) than the original does -- e.g. a candidate
+    with an extra [io] indirect-object slot: `da` -> `natzaion`. Slots are
+    counted, not matched by name, so spellings ([io] vs [dat]) can't cause
+    false hits, and a slot the original annotates in only one dimension
+    (Georgian marks Person[obj] but almost never Number[obj]) still counts as
+    present. The swapped slot's own spellings (`slot_aliases`) and the
+    subject ([subj] is folded into the plain feature, often left unannotated
+    when unmarked) are not counted. Sound where the treebank annotates every
+    slot a form carries -- checked for Basque (lexicon and treebank agree on
+    every slot of every finite form)."""
+    def slots(prefix):
+        out = set()
+        for col, val in item.items():
+            if not col.startswith(prefix) or "[" not in col or pd.isna(val) or val in _NO_VALUE:
+                continue
+            if col[len(prefix):].partition("[")[0] not in _SWAP_DIMS:
+                continue
+            suffix = col[col.index("[") + 1:-1]
+            if suffix not in slot_aliases and suffix not in ("subj", "nsubj"):
+                out.add(suffix)
+        return out
+    before, after = slots(f"{kind}_"), slots(f"after_{kind}_")
+    if len(after) <= len(before):
+        return []
+    return ['/'.join(sorted(after - before)) or '?']
+
+
+def _added_dims(item, kind):
+    """Feature dimensions beyond Person/Number (Polite, Gender, ...) that the
+    reinflected candidate marks on an argument bracket while the original
+    carries that dimension nowhere UNDER THE SAME BRACKET SLOT (plain or
+    bracketed) -- e.g. Basque allocutive forms (`daki` -> `dakik`), which add
+    an informal-addressee reading via Polite[io]/Gender[io]. Slot-aware: a
+    dimension already present under a DIFFERENT slot (e.g. the subject's own
+    plain Gender, folded in unbracketed) does not exempt a brand-new bracket
+    on this dimension for another argument -- caught on Abkhaz svNa, where a
+    Number[subj]-only swap candidate for "акуанеи" also introduced a
+    Gender[obj]=Com that didn't exist anywhere on the original form (only its
+    own subject's plain Gender=Neut did); the old dimension-only check
+    treated "Gender" as already present and let it through uncaught."""
+    def dim_slots(prefix, bracketed_only):
+        out = set()
+        for col, val in item.items():
+            if not col.startswith(prefix) or pd.isna(val) or val in _NO_VALUE:
+                continue
+            feat = col[len(prefix):]
+            if not re.fullmatch(r"[A-Z][A-Za-z]*(\[[^\]]+\])?", feat):
+                continue
+            base, _, suffix = feat.partition("[")
+            suffix = suffix[:-1] if suffix else ""
+            if bracketed_only and (not suffix or suffix in ("subj", "nsubj")):
+                continue  # the subject's reading is folded into the plain feature
+            out.add((base, suffix))
+        return out
+    before = dim_slots(f"{kind}_", False)
+    after = dim_slots(f"after_{kind}_", True)
+    return sorted(
+        f"{d}[{s}]" if s else d
+        for d, s in after - before
+        if d not in ("Person", "Number")
+    )
+
+
+def _misaligned_slot(item, kind, ufeat, resolved_key):
+    """True if the swap was generated under a different bracket than the slot
+    this row was resolved to (resolve_layered_head_key, from the dependent's
+    Case/deprel) AND the candidate leaves that resolved slot unchanged --
+    e.g. a subject noun tagged Case=Abs on a verb whose ergative agreement
+    got swapped, so the pair would be labelled with the wrong slot. A
+    resolved slot the candidate doesn't report at all (Georgian: UniMorph
+    spells the object slot [acc], the treebank [obj]/[dat]) is not
+    evidence of misalignment."""
+    if not resolved_key or not ufeat or ufeat == resolved_key:
+        return False
+    orig = item.get(f"{kind}_{resolved_key}")
+    after = item.get(f"after_{kind}_{resolved_key}")
+    if pd.isna(orig) or orig in _NO_VALUE or pd.isna(after) or after in _NO_VALUE:
+        return False
+    return str(orig) in str(after).split("/")
+
+
+def bucket_frame(swap_df: pd.DataFrame, entries: list) -> pd.DataFrame:
+    """One bucket's DataFrame: swap_df's full-width rows for each
+    (position, added columns) entry, plus the added columns in order of first
+    appearance (NaN where an entry doesn't set one). An added column that
+    already exists in swap_df overwrites it on the rows that set it."""
+    if not entries:
+        return pd.DataFrame()
+    frame = swap_df.iloc[[pos for pos, _ in entries]].reset_index(drop=True)
+    added = {}
+    for i, (_, extra) in enumerate(entries):
+        for col, val in extra.items():
+            added.setdefault(col, {})[i] = val
+    if not added:
+        return frame
+    new_cols = {}
+    for col, by_row in added.items():
+        if col in frame.columns:
+            values = frame[col].astype(object)
+            for i, val in by_row.items():
+                values[i] = val
+            frame[col] = values
+        else:
+            new_cols[col] = pd.Series(by_row, index=range(len(frame)))
+    if new_cols:
+        frame = pd.concat([frame, pd.DataFrame(new_cols)], axis=1)
+    return frame
+
+
 def process_item(
         item,
         form,
@@ -487,14 +661,21 @@ def process_item(
         take_features_from,
         max_num_of_pairs=None,
         swap_bundle=None,
+        slot_aliases=(),
+        resolved_key=None,
     ) -> Tuple[str, Dict[str, str]]:
-        item[f"swap_{take_features_from}"] = swap_form
+        # match_casing, not swap_form itself -- swap_form stays the raw
+        # lexicon-cased string used for every lookup below (get_form_features
+        # is a case-sensitive lexicon lookup); only what lands in item/
+        # wrong_item is recased for display.
+        item[f"swap_{take_features_from}"] = match_casing(form, swap_form)
+        item["swap_ufeat"] = ufeat
 
         if swap_form == form:
             return "same_forms", item
         else:
             swap_feature_vals = inflector.get_form_features(
-                swap_form, form_features, ufeat
+                swap_form, form_features, ufeat, slot_aliases=slot_aliases
             )
             feature_key = (
                 "|".join(sorted(feature_vals))
@@ -530,10 +711,23 @@ def process_item(
                             {"Case": "Nom"},  # ergative?
                             ufeat,
                             only_try_ud_if_no_um=True,
+                            slot_aliases=slot_aliases,
                         )
                     if len(child_features & swap_feature_vals) > 0:
                         return "ambiguous_subjects", item
                     else:
+                        # Not a minimal pair if the candidate directly opposes
+                        # the original on any feature other than the swapped
+                        # slot: both sides must have a value (a missing one is
+                        # no conflict).
+                        conflicts = _conflicting_features(item, take_features_from, ufeat, slot_aliases)
+                        conflicts += [f"added_slot:{d}" for d in _added_slots(item, take_features_from, slot_aliases)]
+                        conflicts += [f"added_dim:{d}" for d in _added_dims(item, take_features_from)]
+                        if _misaligned_slot(item, take_features_from, ufeat, resolved_key):
+                            conflicts.append(f"misaligned_slot:{resolved_key}->{ufeat}")
+                        if conflicts:
+                            item["conflicting_features"] = ";".join(conflicts)
+                            return "conflicting_features", item
                         item["feature_vals"] = feature_key
                         num_combinations = len(feature_vals) * len(swap_feature_vals)
                         for feat1 in feature_vals:
@@ -550,13 +744,13 @@ def process_item(
                     return "undefined_features", item
             elif len(feature_vals & swap_feature_vals) > 0:
                 wrong_item = dict(item)
-                wrong_item[f"swap_{take_features_from}"] = swap_form
+                wrong_item[f"swap_{take_features_from}"] = match_casing(form, swap_form)
                 wrong_item["feature_vals"] = feature_key
 
                 return "same_features", wrong_item
             else:
                 wrong_item = dict(item)
-                wrong_item[f"swap_{take_features_from}"] = swap_form
+                wrong_item[f"swap_{take_features_from}"] = match_casing(form, swap_form)
                 wrong_item["feature_vals"] = feature_key
 
                 return "undefined_features", wrong_item
@@ -566,7 +760,8 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
                   swap_target=["head",], context_inflector=None, max_num_of_pairs=None,
                   leaf_threshold=default_leaf_threshold(10), save_to=None,
                   max_examples=5, num_lemma=None, num_form=None, full_df=None,
-                  unk_counts=None, label_distribution=None, head_label=None):
+                  unk_counts=None, label_distribution=None, head_label=None,
+                  extra_meta=None, second_chance_threshold=None):
     """
     Create re-inflected minimal sentence pairs for each row in the decision tree dataframe.
 
@@ -575,6 +770,8 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
         leaf_threshold: entropy cutoff below which a leaf's prediction counts as "keep".
             Recomputed here from leaf_top1_entropy/leaf_decision rather than trusting the
             df's precomputed `keep` column, so it can be tuned without re-running fit_dt.
+            Either one cutoff for every row, or (sva_trees.second_chance's depth-aware
+            retry) a {leaf_id: that leaf's own cutoff} map.
         save_to: if given, a directory to write every diagnostics bucket to, as
             "<item_type>.parquet", plus a single "meta.json" holding the scalar stats,
             the unk-drop counts, and up to max_examples sample rows per bucket
@@ -595,7 +792,7 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
             word_order.decision_tree.fit_dt, folded into meta.json as-is. None (default)
             omits those keys -- e.g. trivial languages that never called fit_dt.
         label_distribution: {label: count} across the language's full predictor_var
-            column (e.g. {"Yes": 15414, "No": 62, "unk": 6488}), BEFORE fit_dt drops
+            column (e.g. {"yes": 15414, "no": 62, "unk": 6488}), BEFORE fit_dt drops
             unk rows -- so it stays meaningful even though dt_df itself never has unk
             rows when drop_unk=True. Folded into meta.json under "label_distribution".
             None (default) omits the key.
@@ -604,22 +801,52 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
             bucket_examples_html/_examples_table_html/_display_kind. Header text
             only; underlying lookups are unaffected. None (default) leaves headers
             reading "head_form"/"head_feats" etc, unchanged from before this existed.
+        second_chance_threshold: the strict leaf_threshold this pass's rows would
+            have needed to clear without a second_chance retry. Pass this only on
+            a lax retry call (leaf_threshold itself is the lax value then); every
+            output bucket gets a "second_chance" bool column (True where the row's
+            leaf_top1_entropy is above this strict bar, i.e. only kept because of
+            the retry) and a "second_chance_lax_threshold" column recording the
+            lax bar it cleared instead. None (default) omits both columns.
     Returns:
         dict[str, pd.DataFrame]: one DataFrame per diagnostics bucket (e.g. "correct_swaps").
     """
     if full_df is None:
         full_df = df
+    # leaf_threshold is a single cutoff for every row, or (sva_trees.second_chance's
+    # depth-aware retry) a {leaf_id: this leaf's own cutoff} map -- either way,
+    # resolve it to one value per row before comparing.
+    row_threshold = (
+        df["leaf_id"].map(leaf_threshold) if isinstance(leaf_threshold, dict) else leaf_threshold
+    )
     if "leaf_top1_entropy" in df.columns and "leaf_decision" in df.columns:
-        keep = (df["leaf_top1_entropy"] < leaf_threshold) & df["leaf_decision"]
+        keep = (df["leaf_top1_entropy"] < row_threshold) & df["leaf_decision"]
     else:
         # Trivial languages/deprels (single-class predictor, no tree fit) have no
         # leaf_top1_entropy/leaf_decision columns and are kept in full — same
         # convention as viz_deprel.py's _agreement_row_stats.
         keep = pd.Series(True, index=df.index)
-    is_yes = df[swap_feat] == "Yes"
+    is_yes = df[swap_feat] == "yes"
     n_raw = int(is_yes.sum())
     swap_df = df[keep & is_yes]
     n_keep = len(swap_df)
+    n_keep_second_chance = 0
+    if second_chance_threshold is not None:
+        # This call's leaf_threshold is the lax one (only meaningful to pass
+        # second_chance_threshold -- the strict bar -- on a second_chance
+        # retry pass); rows above the strict bar only cleared the strict
+        # part of `keep` because it was relaxed to leaf_threshold for this
+        # call, so they only exist in swap_df because of the retry.
+        swap_df = swap_df.copy()
+        swap_df["second_chance"] = swap_df["leaf_top1_entropy"] >= second_chance_threshold
+        swap_df["second_chance_lax_threshold"] = (
+            row_threshold.loc[swap_df.index] if isinstance(row_threshold, pd.Series) else row_threshold
+        )
+        # Row-level count (unlike diagnostics["..."] item counts below, which
+        # can exceed swap_df's own row count -- a single row can fan out into
+        # several diagnostic items, one per inflection candidate tried), so
+        # this is the number to compare against n_keep specifically.
+        n_keep_second_chance = int(swap_df["second_chance"].sum())
 
     child_deprel = target.child_deprels[0]
     ufeat, _ = inflector.inflection_map
@@ -649,13 +876,14 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
     items_seen = 0
     feature_distribution = Counter()
     diagnostics = {
-                "head_unk": head_unk_df.to_dict("records"),
-                "nsubj_unk": nsubj_unk_df.to_dict("records"),
-                "both_unk": both_unk_df.to_dict("records"),
+                "head_unk": [],
+                "nsubj_unk": [],
+                "both_unk": [],
                 "correct_swaps": [],
                 "same_forms": [],
                 "same_features": [],
                 "undefined_features": [],
+                "conflicting_features": [],
                 "no_inflections": [],
                 "no_candidates": [],
                 "multi_now_valid": [],
@@ -667,7 +895,7 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
         # Still fall through to the save_to/verbose blocks below with empty
         # buckets, so a zero-candidate language gets a diagnostics entry
         with open("error_log.txt", "a") as f:
-            f.write(f"No rows to process for {swap_feat} (keep={len(df[keep])}, swap={len(df[df[swap_feat]=='Yes'])})\n")
+            f.write(f"No rows to process for {swap_feat} (keep={len(df[keep])}, swap={len(df[df[swap_feat]=='yes'])})\n")
     else:
         columns = list(swap_df.columns)
         # Precompute, once, which columns hold each swap kind's morphological
@@ -681,17 +909,38 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
             kind: [
                 (col, m.group(1))
                 for col in columns
-                if (m := re.match(rf"^{kind}_([A-Z][a-zA-Z]*(?:\[[a-z]+\])?)$", col))
+                if (m := re.match(rf"^{kind}_([A-Z][a-zA-Z]*(?:\[[^\]]+\])?)$", col))
             ]
             for kind in swap_target
         }
 
         target_feature = feat_match_unk.group(1) if feat_match_unk else None
 
-        for row_tuple in tqdm(swap_df.itertuples(index=False, name=None), total=swap_df.shape[0]):
+        # The loop only reads each swap role's form/feature columns and the
+        # child's form/Case (process_item's slot/dimension checks look at
+        # "<kind>_<Feature>" and "<kind>_<Feature>[slot]" names only), so it
+        # iterates just those; the full-width bucket frames are built
+        # columnar from swap_df afterwards (bucket_frame).
+        feature_col = re.compile(r"[A-Z][A-Za-z]*(\[[^\]]+\])?")
+        loop_cols = [
+            col for col in columns
+            if col in (f"{child_deprel}_form", f"{child_deprel}_Case")
+            or any(
+                col == f"{kind}_form"
+                or (col.startswith(f"{kind}_") and feature_col.fullmatch(col[len(kind) + 1:]))
+                for kind in swap_target
+            )
+        ]
+        loop_col_set = set(loop_cols)
+
+        def added_cols(item):
+            return {k: v for k, v in item.items() if k not in loop_col_set}
+
+        loop_rows = enumerate(swap_df[loop_cols].itertuples(index=False, name=None))
+        for pos, row_tuple in tqdm(loop_rows, total=swap_df.shape[0]):
             # get nsubj and head; extract their features; swap the features; re-inflect the words;
             # create a new sentence with the re-inflected words; add the new sentence to the dataframe
-            base_item = dict(zip(columns, row_tuple))
+            base_item = dict(zip(loop_cols, row_tuple))
             base_item["child"] = base_item.get(f"{child_deprel}_form")
 
             for kind in swap_target:
@@ -706,8 +955,12 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
                     og_feats["VerbForm"] = "Fin"
                 form = base_item[f"{kind}_form"]
 
+                slot_aliases = (
+                    slot_suffixes(child_deprel, base_item.get(f"{child_deprel}_Case"))
+                    if kind == "head" else ()
+                )
                 swap_forms, feature_vals, swap_feats = inflector.inflect(
-                    form, og_feats, return_swap_feats=True
+                    form, og_feats, return_swap_feats=True, slot_aliases=slot_aliases,
                 )
                 row_ufeat = ufeat
 
@@ -763,6 +1016,7 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
                 # Georgian case above) -- the original result is kept as-is
                 # in both of those cases, only ever replaced by a strictly
                 # better (per-row-correct) one.
+                layered_key = None
                 if kind == "head" and target_feature:
                     layered_key = resolve_layered_head_key(
                         base_item, base_item, target_feature, child_deprel
@@ -770,7 +1024,7 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
                     if layered_key is not None and (not swap_forms or layered_key != ufeat):
                         retry_forms, retry_vals, retry_swap_feats = inflector.inflect(
                             form, og_feats, return_swap_feats=True,
-                            swap_ufeat_override=layered_key,
+                            swap_ufeat_override=layered_key, slot_aliases=slot_aliases,
                         )
                         if retry_forms:
                             swap_forms, feature_vals, swap_feats = (
@@ -795,24 +1049,32 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
                                 take_features_from=kind,
                                 max_num_of_pairs=max_num_of_pairs,
                                 swap_bundle=swap_feats.get(swap_form, {}),
+                                slot_aliases=slot_aliases,
+                                resolved_key=layered_key,
                             )
-                            diagnostics[item_type].append(item)
+                            diagnostics[item_type].append((pos, added_cols(item)))
 
                             if (item_type == "correct_swaps") and (len(swap_forms) > 1):
-                                multi_item = dict(item)
+                                multi_item = added_cols(item)
                                 multi_item["alternatives"] = swap_forms
-                                diagnostics["multi_now_valid"].append(multi_item)
+                                diagnostics["multi_now_valid"].append((pos, multi_item))
                     else:
                         items_seen += 1
-                        diagnostics["no_inflections"].append(dict(base_item))
+                        diagnostics["no_inflections"].append((pos, added_cols(base_item)))
                 else:
                     items_seen += 1
-                    diagnostics["no_candidates"].append(dict(base_item))
+                    diagnostics["no_candidates"].append((pos, added_cols(base_item)))
 
     coverage = f"{len(diagnostics['correct_swaps'])/max(items_seen,1)*100:.1f}"
     print(f"items_seen={items_seen} correct_swaps={len(diagnostics['correct_swaps'])} coverage={coverage}%")
 
-    diagnostic_dfs = {item_type: pd.DataFrame(items) for item_type, items in diagnostics.items()}
+    diagnostic_dfs = {item_type: bucket_frame(swap_df, items) for item_type, items in diagnostics.items()}
+    # The unk rows are never modified, so they skip the records round trip
+    # (slow on these wide frames) and keep their original dtypes.
+    for item_type, unk_df in (("head_unk", head_unk_df), ("nsubj_unk", nsubj_unk_df),
+                              ("both_unk", both_unk_df)):
+        if len(unk_df):
+            diagnostic_dfs[item_type] = unk_df.reset_index(drop=True)
 
     feat_match = re.match(r".*_([A-Z][a-z]+)_.*", swap_feat)
     swap_feature = feat_match.group(1) if feat_match else None
@@ -828,6 +1090,7 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
             "leaf_threshold": leaf_threshold,
             "num_ud_candidates_raw": n_raw,
             "num_ud_candidates_keep": n_keep,
+            "num_ud_candidates_keep_second_chance": n_keep_second_chance,
             "items_seen": items_seen,
             "num_lemma": num_lemma,
             "num_form": num_form,
@@ -839,6 +1102,8 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
             meta.update(unk_counts)
         if label_distribution is not None:
             meta["label_distribution"] = label_distribution
+        if extra_meta:
+            meta.update(extra_meta)
 
         meta["examples"] = bucket_examples_html(
             diagnostic_dfs, list(diagnostic_dfs), max_examples=max_examples,

@@ -133,13 +133,30 @@ def calculate_tree_entropy(
     # Transform features through preprocessor and get leaf assignments
     leaf_ids = tree_model.apply(dt.named_steps["preprocessor"].transform(X))
 
+    return leaf_weighted_entropy(
+        leaf_ids, df, target_col, binary=binary, smoothing=smoothing
+    )
+
+
+def leaf_weighted_entropy(
+    leaf_ids: np.ndarray,
+    df: pd.DataFrame,
+    target_col: str,
+    binary: bool = False,
+    smoothing: float = 0.5,
+) -> float:
+    """Weighted average entropy of target_col over the leaves in `leaf_ids`
+    (one leaf id per row of `df`, e.g. from the tree's .apply()). Only
+    target_col is read per leaf -- df itself can be thousands of columns wide."""
+    labels = df[[target_col]]
+
     # Calculate entropy for each leaf
     weighted_entropy = 0.0
     total_samples = len(df)
 
     for leaf_id in np.unique(leaf_ids):
         leaf_mask = leaf_ids == leaf_id
-        leaf_df = df[leaf_mask]
+        leaf_df = labels[leaf_mask]
         leaf_weight = len(leaf_df) / total_samples
         leaf_entropy = calculate_base_entropy(
             leaf_df, target_col, binary=binary, smoothing=smoothing

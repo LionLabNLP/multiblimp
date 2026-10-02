@@ -16,14 +16,62 @@ import pandas as pd
 
 from .entropy import order_entropy
 from .prediction_target import PredictionTarget
-from .process_treebank import META_FEATURES
+from .process_treebank import META_FEATURES, is_feature_col
 from .utils import get_all_orders
 
 
 RND = 42
 
+# Tokens whose xpos is kept out of the tree fit for agreement conditions: the
+# head (verb / participle / aux) carries the agreement marking, and in some
+# tagsets its xpos spells that marking out, which would leak the label. The
+# dependent's xpos (e.g. the subject's) stays available. Still shown in the
+# feature tables, marked as excluded.
+FIT_EXCLUDED_FEATS = ("head_xpos",)
+
+
+def fit_excluded_for_display(omit_cols):
+    """The token-level columns among a fit's omitted ones (e.g. head_Number,
+    head_xpos) -- the ones a feature table cell can be marked for. The many
+    relational (child/sibling) columns are left out."""
+    return sorted(c for c in omit_cols
+                  if re.fullmatch(r"[A-Za-z]+_(?:[A-Z][A-Za-z]*|xpos)(?:\[[^\]]+\])?", c))
+
 #OMIT_FEATURES = []#["subject_idx", "object_idx", "verb_idx"]
 UNK_LABELS = {"unk", "+-", "--"}
+
+
+def split_unk_reasons(
+    df: pd.DataFrame,
+    predictor_var: str,
+    col_a: str,
+    label_a: str,
+    col_b: str,
+    label_b: str,
+    both_label: str = "Both unknown",
+    other_label: str = "unknown (other)",
+) -> pd.Series:
+    """df[predictor_var] with every UNK_LABELS row replaced by *why* it's
+    unknown -- label_a/label_b when only col_a/col_b (the two raw feature
+    columns the agreement label itself is computed from, e.g. head_Person/
+    nsubj_Person, or NPA's HEAD_Number/DET_Number) is null, both_label when
+    both are, other_label for the (expected-empty) case where a row is
+    labeled unk despite neither being missing -- e.g. an ambiguous/multi-
+    valued overlap. Same NaN check read_unk_counts already uses to report
+    head_unk/nsubj_unk/both_unk as side counts; this promotes it to a real
+    class an incl.-unk diagnostic tree can split on, instead of merging
+    every unk-reason row into one opaque "unknown" bucket. Yes/No rows are
+    untouched.
+    """
+    s = df[predictor_var].astype(str).copy()
+    unk_mask = s.isin(UNK_LABELS)
+    a_missing = df[col_a].isna()
+    b_missing = df[col_b].isna()
+    s = s.mask(unk_mask & a_missing & b_missing, both_label)
+    s = s.mask(unk_mask & a_missing & ~b_missing, label_a)
+    s = s.mask(unk_mask & ~a_missing & b_missing, label_b)
+    s = s.mask(unk_mask & ~a_missing & ~b_missing, other_label)
+    return s
 
 
 def _infer_column_types(cols: list[str]) -> tuple[list[str], list[str]]:
@@ -227,11 +275,14 @@ def fit_pipeline(
     min_impurity_decrease: float = 0.005,
     test_size: float | None = None,
     random_state: int = RND,
+    test_index=None,
 ) -> tuple[Pipeline, pd.DataFrame, pd.DataFrame | None, pd.Series, pd.Series | None]:
     """
     Infer column types, fill missing values, optionally split, build and fit a DT Pipeline.
     Returns (model, X_train, X_test, y_train, y_test).
     X_test and y_test are None when test_size is None (no train/test split).
+    test_index (row labels of X) overrides test_size/random_state with an
+    explicit held-out set.
     """
     categorical_cols, numeric_cols = _infer_column_types(X.columns.tolist())
     min_support = max(min_samples_leaf, int(0.01 * len(X)))
@@ -244,7 +295,11 @@ def fit_pipeline(
         elif X[col].dtype == "bool":
             X[col] = X[col].astype(int)
 
-    if test_size is not None:
+    if test_index is not None:
+        test_mask = X.index.isin(test_index)
+        X_train, X_test = X[~test_mask], X[test_mask]
+        y_train, y_test = y[~test_mask], y[test_mask]
+    elif test_size is not None:
         X_train, X_test, y_train, y_test = train_test_split(
             X, y, test_size=test_size, random_state=random_state
         )
@@ -282,6 +337,7 @@ def fit_dt(
     leaf_threshold=0.1,
     predictor_var="deprel_order",
     drop_unk=True,
+    test_index=None,
 ):
     sub_df = full_df.copy()
     if deprel_kwargs is not None:
@@ -289,26 +345,25 @@ def fit_dt(
             sub_df = sub_df[sub_df[k] == v]
 
     unk_counts = {"head_unk": 0, "nsubj_unk": 0, "both_unk": 0}
-    if "agreement" in predictor_var:
-        unk_mask = sub_df[predictor_var].isin(UNK_LABELS)
-        if unk_mask.any():
-            feat_match = re.match(r".*_([A-Z][a-z]+)_.*", predictor_var)
-            child_deprel = target.child_deprels[0] if target is not None else None
-            head_col = f"head_{feat_match.group(1)}" if feat_match else None
-            child_col = (
-                f"{child_deprel}_{feat_match.group(1)}"
-                if feat_match and child_deprel else None
-            )
-            if head_col in sub_df.columns and child_col in sub_df.columns:
-                head_missing = sub_df[head_col].isna()
-                child_missing = sub_df[child_col].isna()
-                unk_counts["both_unk"] = int((unk_mask & head_missing & child_missing).sum())
-                unk_counts["head_unk"] = int((unk_mask & head_missing & ~child_missing).sum())
-                unk_counts["nsubj_unk"] = int((unk_mask & ~head_missing & child_missing).sum())
-            # drop_unk=False keeps unk rows in the fit (counts above still
-            # report what WOULD be dropped)
-            if drop_unk:
-                sub_df = sub_df[~unk_mask]
+    unk_mask = sub_df[predictor_var].isin(UNK_LABELS)
+    if unk_mask.any():
+        feat_match = re.match(r".*_([A-Z][a-z]+)_.*", predictor_var)
+        child_deprel = target.child_deprels[0] if target is not None else None
+        head_col = f"head_{feat_match.group(1)}" if feat_match else None
+        child_col = (
+            f"{child_deprel}_{feat_match.group(1)}"
+            if feat_match and child_deprel else None
+        )
+        if head_col in sub_df.columns and child_col in sub_df.columns:
+            head_missing = sub_df[head_col].isna()
+            child_missing = sub_df[child_col].isna()
+            unk_counts["both_unk"] = int((unk_mask & head_missing & child_missing).sum())
+            unk_counts["head_unk"] = int((unk_mask & head_missing & ~child_missing).sum())
+            unk_counts["nsubj_unk"] = int((unk_mask & ~head_missing & child_missing).sum())
+        # drop_unk=False keeps unk rows in the fit (counts above still
+        # report what WOULD be dropped)
+        if drop_unk:
+            sub_df = sub_df[~unk_mask]
 
     if len(sub_df) < min_df_len:
         return None, None, None, unk_counts
@@ -318,6 +373,9 @@ def fit_dt(
     omit_feats = (omit_feats or set()).union(set(META_FEATURES) - {"treebank"})
     omit_feats.update({col for col in full_df.columns if "idx" in col})
     omit_feats.update({col for col in full_df.columns if "_dir" in col})
+    # Untouched-casing display column for grew.fr links, not a modeling
+    # feature -- see process_treebank.extract_node_features.
+    omit_feats.update({col for col in full_df.columns if col.endswith("_form_orig")})
     omit_feats.update(
         {
             col
@@ -330,7 +388,12 @@ def fit_dt(
     if target is not None and target.head_feats:
         omit_feats.update({f"head_{feat}" for feat in target.head_feats})
 
-    sub_condition_on = list(set(full_df.columns) - omit_feats - {predictor_var})
+    # DataFrame column order, not set order: a set's iteration order changes
+    # with every process (string hashing), which reorders X and can change
+    # the tree's tie-breaking between splits.
+    sub_condition_on = [
+        col for col in full_df.columns if col not in omit_feats and col != predictor_var
+    ]
 
     X = sub_df[sub_condition_on].copy()
     X = X.loc[:, X.nunique() > 1].copy()
@@ -339,6 +402,25 @@ def fit_dt(
         col for col in sub_condition_on if col.endswith("_form") and col not in X.columns
     }
     omit_feats.update(dropped_form_cols)
+    # constant feature columns are useless to the tree but create_pairs needs
+    # them (slot resolution, og_feats) -- restored into dt_df like the
+    # columns above
+    omit_feats.update(
+        col for col in sub_condition_on
+        if is_feature_col(col) and col not in X.columns and full_df[col].notna().any()
+    )
+    # upos columns (head_pos/nsubj_pos/...) are constant by construction for
+    # most targets (e.g. head_pos is always "VERB") and so get dropped the
+    # same way, but process_treebank.drop_singleton_cols already treats
+    # "_pos" columns as always-keep display info upstream of this function --
+    # restore them here too, or the tree/pairs feature table silently loses
+    # the head role's own upos entirely (caught on Abkhaz svNa: head_pos
+    # never made it into dt_df, so the verb's UPOS was missing from every
+    # sample/pair feature list even though nsubj_pos was fine).
+    omit_feats.update(
+        col for col in sub_condition_on
+        if col.endswith("_pos") and col not in X.columns and full_df[col].notna().any()
+    )
 
     y = sub_df[predictor_var].copy()
     y[pd.isna(y)] = "None"
@@ -351,7 +433,14 @@ def fit_dt(
         min_samples_leaf=min_samples_leaf,
         min_impurity_decrease=min_impurity_decrease,
         test_size=test_size,
+        test_index=test_index,
     )
+
+    if X_test is not None and len(X_test):
+        # per-row held-out results, so callers can compare models on shared rows
+        model.test_eval_ = pd.DataFrame(
+            {"y": y_test, "pred": model.predict(X_test)}, index=X_test.index
+        )
 
     if model_type == "decision_tree":
         X_train = set_dt_features_in_df(
@@ -378,6 +467,22 @@ def fit_dt(
             print("Test acc ", model.score(X_test, y_test))
 
     return model, X_train, y_train, unk_counts
+
+
+def _node_depths(children_left, children_right):
+    """Root-is-0 depth for every node id in a fitted tree's arrays (same
+    convention as sklearn's own tree_.max_depth/get_depth())."""
+    depths = np.zeros(len(children_left), dtype=int)
+    stack = [(0, 0)]
+    while stack:
+        node_id, depth = stack.pop()
+        depths[node_id] = depth
+        left, right = children_left[node_id], children_right[node_id]
+        if left != -1:
+            stack.append((left, depth + 1))
+        if right != -1:
+            stack.append((right, depth + 1))
+    return depths
 
 
 def set_dt_features_in_df(
@@ -427,11 +532,16 @@ def set_dt_features_in_df(
     # duplicate the column name.
     new_cols = {
         col: full_df[col]
-        for col in additional_vars
-        if col in full_df.columns and col not in df.columns
+        for col in full_df.columns
+        if col in additional_vars and col not in df.columns
     }
     new_cols["leaf_id"] = pd.Series(leaf_ids, index=df.index)
     new_cols["leaf_full_entropy"] = pd.Series(leaf_full_entropy, index=df.index)
+    # Root-is-0 split count -- sva_trees.second_chance scales its retry
+    # entropy bar by this (a leaf reached only after several splits gets
+    # less benefit of the doubt than one the tree never got to split).
+    node_depths = _node_depths(children_left, children_right)
+    new_cols["leaf_depth"] = pd.Series(node_depths[leaf_ids], index=df.index)
 
     classes_list = list(model.classes_)
     class_to_idx = {c: i for i, c in enumerate(classes_list)}
@@ -468,8 +578,12 @@ def set_dt_features_in_df(
 
     if target is not None:
         # Word-order-specific columns: per-class entropies and swap candidates.
-        all_orders = set(get_all_orders(predictor_var, target))
-        unseen_classes = list(all_orders - set(model.classes_))
+        # canonical order (get_all_orders' own), not set order, so the
+        # per-class entropy columns and each row's candidate list come out
+        # the same in every process
+        canonical_orders = list(dict.fromkeys(get_all_orders(predictor_var, target)))
+        seen_classes = set(model.classes_)
+        unseen_classes = [o for o in canonical_orders if o not in seen_classes]
 
         for swapped_idx, swapped_class in enumerate(classes_list + unseen_classes):
             class_entropies = []
@@ -491,7 +605,7 @@ def set_dt_features_in_df(
         for i, (deprel_order, decision) in enumerate(
             zip(predictor_series, leaf_decision)
         ):
-            swap_orders = all_orders - {deprel_order}
+            swap_orders = [o for o in canonical_orders if o != deprel_order]
             swap_order_candidates = [
                 arg_order
                 for arg_order in swap_orders

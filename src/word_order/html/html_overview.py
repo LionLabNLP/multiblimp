@@ -1,4 +1,17 @@
-def create_html(sections_html, all_data_json):
+_BACK_ARROW = (
+    '<svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">'
+    '<path d="M10 12L6 8L10 4" stroke="currentColor" stroke-width="1.75" '
+    'stroke-linecap="round" stroke-linejoin="round"/></svg>'
+)
+
+
+def create_html(sections_html, all_data_json, back_links=(("../index.html", "Main Page"),)):
+    """back_links: (href, label) pairs rendered as back buttons above the
+    title, relative to where the page is written (default: the site's main
+    page one directory up, for decision_trees/index.html)."""
+    back_links_html = "".join(
+        f'<a href="{href}" class="back-btn">{_BACK_ARROW}{label}</a>' for href, label in back_links
+    )
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -94,6 +107,28 @@ def create_html(sections_html, all_data_json):
             flex-shrink: 0;
             padding-top: 0.25rem;
         }}
+        .back-links {{
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.6rem;
+            margin-bottom: 1rem;
+        }}
+        .back-btn {{
+            display: inline-flex;
+            align-items: center;
+            gap: 0.4rem;
+            padding: 0.4rem 0.8rem;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--card);
+            color: var(--text-muted);
+            font-size: 0.85rem;
+            font-weight: 500;
+            text-decoration: none;
+            transition: border-color .15s, color .15s;
+        }}
+        .back-btn:hover {{ border-color: var(--accent); color: var(--accent); }}
+        .back-btn svg {{ flex-shrink: 0; }}
         .theme-toggle {{
             width: 2.1rem; height: 2.1rem;
             border: 1px solid var(--border); border-radius: 6px;
@@ -257,6 +292,7 @@ def create_html(sections_html, all_data_json):
     <div class="container">
         <div class="header">
             <div class="title-section">
+                <div class="back-links">{back_links_html}</div>
                 <h1>MultiBLiMP 2.0 &mdash; Agreement Overview</h1>
                 <p class="description">
                     This page gives an overview of agreement predictability across dependency relations and languages,
@@ -318,9 +354,13 @@ def create_html(sections_html, all_data_json):
 
         function renderMiniPlot(el, points) {{
             const url = el.dataset.url;
+            // Some languages' entropy is NaN (too few items to compute it);
+            // Math.min/max propagate NaN from a single such point, so filter
+            // before reducing.
+            const finite = (vals) => vals.filter(v => Number.isFinite(v));
 
             const baseLine = (() => {{
-                const vals = points.map(d => d.base);
+                const vals = finite(points.map(d => d.base));
                 const mn = Math.min(...vals), mx = Math.max(...vals);
                 return {{ x: [mn, mx], y: [mn, mx] }};
             }})();
@@ -360,17 +400,37 @@ def create_html(sections_html, all_data_json):
 
             const layout = {{
                 margin: {{ t: 12, r: 12, b: 40, l: 44 }},
+                // Both axes fixed to [0, 1] (binary entropy's own natural bound,
+                // and where six-class entropy also lands for most conditions)
+                // rather than autoscaled -- so 0 (perfect predictability) and
+                // 1 both stay meaningful, fixed reference points a viewer can
+                // compare across panels, instead of every single-point or
+                // tightly-clustered panel silently rescaling to its own tiny
+                // range. Six-class entropy's true ceiling is log2(n classes)
+                // (>1 whenever a condition's label distribution spans 3+
+                // classes fairly evenly), so the upper end extends past 1
+                // rather than clipping a real point out of view. Lower bound
+                // is -0.1, not 0: a marker sitting exactly at 0 has real
+                // radius (bigger still for a high-n_items point, since size
+                // is area-scaled), so anchoring the axis line itself at 0
+                // clips the marker's bottom/left edge against the plot
+                // border -- -0.1 gives it breathing room while 0 stays
+                // clearly marked by a gridline/tick.
                 xaxis: {{
                     title: {{ text: 'Base entropy', font: {{ size: 10 }} }},
                     gridcolor: THEME.grid,
                     zeroline: false,
                     tickfont: {{ size: 9 }},
+                    range: [-0.1, Math.max(1, ...finite(points.map(d => d.base))) * 1.05],
+                    autorange: false,
                 }},
                 yaxis: {{
                     title: {{ text: 'Reduced entropy', font: {{ size: 10 }} }},
                     gridcolor: THEME.grid,
                     zeroline: false,
                     tickfont: {{ size: 9 }},
+                    range: [-0.1, Math.max(1, ...finite(points.map(d => d.reduced))) * 1.05],
+                    autorange: false,
                 }},
                 // Transparent, not a fixed white/panel color: .panel paints its
                 // own var(--panel-bg) behind the chart, light or dark.

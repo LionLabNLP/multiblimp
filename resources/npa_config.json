@@ -1,43 +1,5 @@
 {
   "ADJ-ADP_Case": {
-    "Arabic": {
-      "ADJ_only": {
-        "abs": 4689,
-        "rel": 87.63
-      },
-      "ADP_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 659,
-        "rel": 12.32
-      },
-      "neither": {
-        "abs": 3,
-        "rel": 0.06
-      },
-      "total": 5351
-    },
-    "Bhojpuri": {
-      "ADJ_only": {
-        "abs": 13,
-        "rel": 44.83
-      },
-      "ADP_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 14,
-        "rel": 48.28
-      },
-      "neither": {
-        "abs": 2,
-        "rel": 6.9
-      },
-      "total": 29
-    },
     "Croatian": {
       "ADJ_only": {
         "abs": 0,
@@ -75,25 +37,6 @@
         "rel": 0.0
       },
       "total": 4994
-    },
-    "Egyptian": {
-      "ADJ_only": {
-        "abs": 8,
-        "rel": 2.29
-      },
-      "ADP_only": {
-        "abs": 125,
-        "rel": 35.82
-      },
-      "both": {
-        "abs": 213,
-        "rel": 61.03
-      },
-      "neither": {
-        "abs": 3,
-        "rel": 0.86
-      },
-      "total": 349
     },
     "Georgian": {
       "ADJ_only": {
@@ -171,25 +114,6 @@
       },
       "total": 2499
     },
-    "Komi_Zyrian": {
-      "ADJ_only": {
-        "abs": 9,
-        "rel": 29.03
-      },
-      "ADP_only": {
-        "abs": 1,
-        "rel": 3.23
-      },
-      "both": {
-        "abs": 21,
-        "rel": 67.74
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 31
-    },
     "Lithuanian": {
       "ADJ_only": {
         "abs": 22,
@@ -246,25 +170,6 @@
         "rel": 18.63
       },
       "total": 102
-    },
-    "Romanian": {
-      "ADJ_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "ADP_only": {
-        "abs": 3827,
-        "rel": 60.49
-      },
-      "both": {
-        "abs": 2500,
-        "rel": 39.51
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 6327
     },
     "Serbian": {
       "ADJ_only": {
@@ -379,27 +284,6 @@
         "rel": 8.77
       },
       "total": 3388
-    }
-  },
-  "ADJ-ADP_ExtPos": {
-    "Scottish_Gaelic": {
-      "ADJ_only": {
-        "abs": 63,
-        "rel": 10.4
-      },
-      "ADP_only": {
-        "abs": 67,
-        "rel": 11.06
-      },
-      "both": {
-        "abs": 14,
-        "rel": 2.31
-      },
-      "neither": {
-        "abs": 462,
-        "rel": 76.24
-      },
-      "total": 606
     }
   },
   "ADJ-ADP_Gender": {
@@ -577,47 +461,7 @@
       "total": 3388
     }
   },
-  "ADJ-ADP_Polite": {
-    "Javanese": {
-      "ADJ_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "ADP_only": {
-        "abs": 13,
-        "rel": 44.83
-      },
-      "both": {
-        "abs": 11,
-        "rel": 37.93
-      },
-      "neither": {
-        "abs": 5,
-        "rel": 17.24
-      },
-      "total": 29
-    }
-  },
   "ADJ-PRON_Case": {
-    "Ancient_Greek": {
-      "ADJ_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 19,
-        "rel": 100.0
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 19
-    },
     "Esperanto": {
       "ADJ_only": {
         "abs": 0,
@@ -637,25 +481,6 @@
       },
       "total": 18
     },
-    "Finnish": {
-      "ADJ_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 37,
-        "rel": 100.0
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 37
-    },
     "Icelandic": {
       "ADJ_only": {
         "abs": 0,
@@ -674,44 +499,6 @@
         "rel": 0.0
       },
       "total": 124
-    },
-    "Polish": {
-      "ADJ_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 1,
-        "rel": 3.57
-      },
-      "both": {
-        "abs": 27,
-        "rel": 96.43
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 28
-    },
-    "Swedish": {
-      "ADJ_only": {
-        "abs": 163,
-        "rel": 42.34
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 220,
-        "rel": 57.14
-      },
-      "neither": {
-        "abs": 2,
-        "rel": 0.52
-      },
-      "total": 385
     }
   },
   "ADJ-PRON_Definite": {
@@ -736,25 +523,6 @@
     }
   },
   "ADJ-PRON_Gender": {
-    "Ancient_Greek": {
-      "ADJ_only": {
-        "abs": 6,
-        "rel": 31.58
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 13,
-        "rel": 68.42
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 19
-    },
     "Ancient_Hebrew": {
       "ADJ_only": {
         "abs": 3,
@@ -852,25 +620,6 @@
     }
   },
   "ADJ-PRON_Number": {
-    "Ancient_Greek": {
-      "ADJ_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 19,
-        "rel": 100.0
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 19
-    },
     "Ancient_Hebrew": {
       "ADJ_only": {
         "abs": 0,
@@ -1060,65 +809,6 @@
         "rel": 26.75
       },
       "total": 385
-    },
-    "Welsh": {
-      "ADJ_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 86,
-        "rel": 83.5
-      },
-      "both": {
-        "abs": 17,
-        "rel": 16.5
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 103
-    }
-  },
-  "ADP-PRON_Case": {
-    "Hindi": {
-      "ADP_only": {
-        "abs": 2,
-        "rel": 2.38
-      },
-      "PRON_only": {
-        "abs": 12,
-        "rel": 14.29
-      },
-      "both": {
-        "abs": 69,
-        "rel": 82.14
-      },
-      "neither": {
-        "abs": 1,
-        "rel": 1.19
-      },
-      "total": 84
-    },
-    "Icelandic": {
-      "ADP_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 296,
-        "rel": 69.32
-      },
-      "both": {
-        "abs": 131,
-        "rel": 30.68
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 427
     }
   },
   "ADP-PRON_Gender": {
@@ -1140,25 +830,6 @@
         "rel": 19.05
       },
       "total": 84
-    },
-    "Northern_Kurdish": {
-      "ADP_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 85,
-        "rel": 85.0
-      },
-      "both": {
-        "abs": 15,
-        "rel": 15.0
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 100
     }
   },
   "ADP-PRON_Number": {
@@ -1180,44 +851,6 @@
         "rel": 1.19
       },
       "total": 84
-    },
-    "Northern_Kurdish": {
-      "ADP_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 85,
-        "rel": 85.0
-      },
-      "both": {
-        "abs": 15,
-        "rel": 15.0
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 100
-    },
-    "Zazaki": {
-      "ADP_only": {
-        "abs": 13,
-        "rel": 33.33
-      },
-      "PRON_only": {
-        "abs": 8,
-        "rel": 20.51
-      },
-      "both": {
-        "abs": 14,
-        "rel": 35.9
-      },
-      "neither": {
-        "abs": 4,
-        "rel": 10.26
-      },
-      "total": 39
     }
   },
   "ADP-PRON_Polite": {
@@ -1239,27 +872,6 @@
         "rel": 0.0
       },
       "total": 15
-    }
-  },
-  "ADP-PRON_Variant": {
-    "Polish": {
-      "ADP_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 24,
-        "rel": 52.17
-      },
-      "both": {
-        "abs": 22,
-        "rel": 47.83
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 46
     }
   },
   "DET-ADJ_Animacy": {
@@ -2159,25 +1771,6 @@
         "rel": 0.28
       },
       "total": 355
-    },
-    "Hausa": {
-      "ADJ_only": {
-        "abs": 11,
-        "rel": 30.56
-      },
-      "DET_only": {
-        "abs": 1,
-        "rel": 2.78
-      },
-      "both": {
-        "abs": 19,
-        "rel": 52.78
-      },
-      "neither": {
-        "abs": 5,
-        "rel": 13.89
-      },
-      "total": 36
     },
     "Latvian": {
       "ADJ_only": {
@@ -3153,27 +2746,6 @@
       "total": 40
     }
   },
-  "DET-ADJ_InflClass": {
-    "Latin": {
-      "ADJ_only": {
-        "abs": 9,
-        "rel": 2.13
-      },
-      "DET_only": {
-        "abs": 3,
-        "rel": 0.71
-      },
-      "both": {
-        "abs": 236,
-        "rel": 55.79
-      },
-      "neither": {
-        "abs": 175,
-        "rel": 41.37
-      },
-      "total": 423
-    }
-  },
   "DET-ADJ_Number": {
     "Ancient_Greek": {
       "ADJ_only": {
@@ -4124,25 +3696,6 @@
         "rel": 0.0
       },
       "total": 40
-    },
-    "Urdu": {
-      "ADJ_only": {
-        "abs": 12,
-        "rel": 5.33
-      },
-      "DET_only": {
-        "abs": 114,
-        "rel": 50.67
-      },
-      "both": {
-        "abs": 10,
-        "rel": 4.44
-      },
-      "neither": {
-        "abs": 89,
-        "rel": 39.56
-      },
-      "total": 225
     }
   },
   "DET-ADJ_PronType": {
@@ -4164,25 +3717,6 @@
         "rel": 41.5
       },
       "total": 1612
-    },
-    "Old_French": {
-      "ADJ_only": {
-        "abs": 17,
-        "rel": 1.56
-      },
-      "DET_only": {
-        "abs": 830,
-        "rel": 76.15
-      },
-      "both": {
-        "abs": 93,
-        "rel": 8.53
-      },
-      "neither": {
-        "abs": 150,
-        "rel": 13.76
-      },
-      "total": 1090
     }
   },
   "DET-ADJ_SubGender": {
@@ -4380,25 +3914,6 @@
       },
       "total": 65
     },
-    "Romanian": {
-      "ADP_only": {
-        "abs": 336,
-        "rel": 11.76
-      },
-      "DET_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 2522,
-        "rel": 88.24
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 2858
-    },
     "Serbian": {
       "ADP_only": {
         "abs": 1,
@@ -4575,27 +4090,6 @@
       "total": 669
     }
   },
-  "DET-ADP_NounClass": {
-    "Ruuli": {
-      "ADP_only": {
-        "abs": 1,
-        "rel": 6.67
-      },
-      "DET_only": {
-        "abs": 4,
-        "rel": 26.67
-      },
-      "both": {
-        "abs": 10,
-        "rel": 66.67
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 15
-    }
-  },
   "DET-ADP_Number": {
     "Bororo": {
       "ADP_only": {
@@ -4733,27 +4227,6 @@
         "rel": 0.0
       },
       "total": 66
-    }
-  },
-  "DET-ADP_PronType": {
-    "Irish": {
-      "ADP_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "DET_only": {
-        "abs": 2121,
-        "rel": 73.75
-      },
-      "both": {
-        "abs": 191,
-        "rel": 6.64
-      },
-      "neither": {
-        "abs": 564,
-        "rel": 19.61
-      },
-      "total": 2876
     }
   },
   "DET-NUM_Animacy": {
@@ -5676,27 +5149,6 @@
       "total": 717
     }
   },
-  "DET-NUM_PronType": {
-    "Indonesian": {
-      "DET_only": {
-        "abs": 69,
-        "rel": 75.0
-      },
-      "NUM_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 23,
-        "rel": 25.0
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 92
-    }
-  },
   "DET-PRON_Case": {
     "Ancient_Greek": {
       "DET_only": {
@@ -5719,25 +5171,6 @@
     }
   },
   "DET-PRON_Gender": {
-    "Ancient_Greek": {
-      "DET_only": {
-        "abs": 180,
-        "rel": 44.33
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 226,
-        "rel": 55.67
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 406
-    },
     "Norwegian_Bokm\u00e5l": {
       "DET_only": {
         "abs": 1,
@@ -5815,44 +5248,6 @@
         "rel": 1.89
       },
       "total": 159
-    },
-    "Indonesian": {
-      "DET_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 66,
-        "rel": 78.57
-      },
-      "both": {
-        "abs": 18,
-        "rel": 21.43
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 84
-    },
-    "Naija": {
-      "DET_only": {
-        "abs": 1,
-        "rel": 2.5
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 39,
-        "rel": 97.5
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 40
     },
     "Nheengatu": {
       "DET_only": {
@@ -5953,139 +5348,6 @@
     }
   },
   "DET-PRON_PronType": {
-    "Ancient_Greek": {
-      "DET_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 406,
-        "rel": 100.0
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 406
-    },
-    "Bambara": {
-      "DET_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 13,
-        "rel": 48.15
-      },
-      "both": {
-        "abs": 10,
-        "rel": 37.04
-      },
-      "neither": {
-        "abs": 4,
-        "rel": 14.81
-      },
-      "total": 27
-    },
-    "Hausa": {
-      "DET_only": {
-        "abs": 1,
-        "rel": 5.88
-      },
-      "PRON_only": {
-        "abs": 1,
-        "rel": 5.88
-      },
-      "both": {
-        "abs": 15,
-        "rel": 88.24
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 17
-    },
-    "Hebrew": {
-      "DET_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 27,
-        "rel": 27.55
-      },
-      "both": {
-        "abs": 71,
-        "rel": 72.45
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 98
-    },
-    "Indonesian": {
-      "DET_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 84,
-        "rel": 100.0
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 84
-    },
-    "Javanese": {
-      "DET_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 19,
-        "rel": 100.0
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 19
-    },
-    "Nheengatu": {
-      "DET_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 33,
-        "rel": 100.0
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 33
-    },
     "Norwegian_Bokm\u00e5l": {
       "DET_only": {
         "abs": 0,
@@ -6123,25 +5385,6 @@
         "rel": 0.0
       },
       "total": 129
-    },
-    "Swedish": {
-      "DET_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 17,
-        "rel": 100.0
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 17
     }
   },
   "HEAD-ADJ_Animacy": {
@@ -6393,25 +5636,6 @@
         "rel": 0.01
       },
       "total": 14768
-    },
-    "Basque": {
-      "ADJ_only": {
-        "abs": 2420,
-        "rel": 56.04
-      },
-      "HEAD_only": {
-        "abs": 1208,
-        "rel": 27.98
-      },
-      "both": {
-        "abs": 127,
-        "rel": 2.94
-      },
-      "neither": {
-        "abs": 563,
-        "rel": 13.04
-      },
-      "total": 4318
     },
     "Belarusian": {
       "ADJ_only": {
@@ -7538,25 +6762,6 @@
       },
       "total": 14768
     },
-    "Basque": {
-      "ADJ_only": {
-        "abs": 2397,
-        "rel": 55.51
-      },
-      "HEAD_only": {
-        "abs": 1186,
-        "rel": 27.47
-      },
-      "both": {
-        "abs": 127,
-        "rel": 2.94
-      },
-      "neither": {
-        "abs": 608,
-        "rel": 14.08
-      },
-      "total": 4318
-    },
     "Bulgarian": {
       "ADJ_only": {
         "abs": 139,
@@ -7671,25 +6876,6 @@
       },
       "total": 6638
     },
-    "Macedonian": {
-      "ADJ_only": {
-        "abs": 1,
-        "rel": 4.17
-      },
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 23,
-        "rel": 95.83
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 24
-    },
     "Moksha": {
       "ADJ_only": {
         "abs": 21,
@@ -7803,27 +6989,6 @@
         "rel": 0.64
       },
       "total": 8655
-    }
-  },
-  "HEAD-ADJ_Derivation": {
-    "Finnish": {
-      "ADJ_only": {
-        "abs": 1361,
-        "rel": 28.74
-      },
-      "HEAD_only": {
-        "abs": 152,
-        "rel": 3.21
-      },
-      "both": {
-        "abs": 217,
-        "rel": 4.58
-      },
-      "neither": {
-        "abs": 3006,
-        "rel": 63.47
-      },
-      "total": 4736
     }
   },
   "HEAD-ADJ_Form": {
@@ -8303,25 +7468,6 @@
         "rel": 0.05
       },
       "total": 6036
-    },
-    "Highland_Puebla_Nahuatl": {
-      "ADJ_only": {
-        "abs": 2,
-        "rel": 5.56
-      },
-      "HEAD_only": {
-        "abs": 2,
-        "rel": 5.56
-      },
-      "both": {
-        "abs": 11,
-        "rel": 30.56
-      },
-      "neither": {
-        "abs": 21,
-        "rel": 58.33
-      },
-      "total": 36
     },
     "Hindi": {
       "ADJ_only": {
@@ -10927,63 +10073,6 @@
     }
   },
   "HEAD-ADP_Case": {
-    "Arabic": {
-      "ADP_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "HEAD_only": {
-        "abs": 22519,
-        "rel": 88.13
-      },
-      "both": {
-        "abs": 2783,
-        "rel": 10.89
-      },
-      "neither": {
-        "abs": 250,
-        "rel": 0.98
-      },
-      "total": 25552
-    },
-    "Aromanian": {
-      "ADP_only": {
-        "abs": 7,
-        "rel": 25.0
-      },
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 21,
-        "rel": 75.0
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 28
-    },
-    "Basque": {
-      "ADP_only": {
-        "abs": 140,
-        "rel": 10.44
-      },
-      "HEAD_only": {
-        "abs": 363,
-        "rel": 27.07
-      },
-      "both": {
-        "abs": 790,
-        "rel": 58.91
-      },
-      "neither": {
-        "abs": 48,
-        "rel": 3.58
-      },
-      "total": 1341
-    },
     "Bhojpuri": {
       "ADP_only": {
         "abs": 19,
@@ -11040,25 +10129,6 @@
         "rel": 0.0
       },
       "total": 15438
-    },
-    "Erzya": {
-      "ADP_only": {
-        "abs": 1,
-        "rel": 0.31
-      },
-      "HEAD_only": {
-        "abs": 182,
-        "rel": 56.35
-      },
-      "both": {
-        "abs": 136,
-        "rel": 42.11
-      },
-      "neither": {
-        "abs": 4,
-        "rel": 1.24
-      },
-      "total": 323
     },
     "Georgian": {
       "ADP_only": {
@@ -11136,44 +10206,6 @@
       },
       "total": 19595
     },
-    "Komi_Permyak": {
-      "ADP_only": {
-        "abs": 4,
-        "rel": 20.0
-      },
-      "HEAD_only": {
-        "abs": 3,
-        "rel": 15.0
-      },
-      "both": {
-        "abs": 13,
-        "rel": 65.0
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 20
-    },
-    "Komi_Zyrian": {
-      "ADP_only": {
-        "abs": 8,
-        "rel": 2.72
-      },
-      "HEAD_only": {
-        "abs": 65,
-        "rel": 22.11
-      },
-      "both": {
-        "abs": 217,
-        "rel": 73.81
-      },
-      "neither": {
-        "abs": 4,
-        "rel": 1.36
-      },
-      "total": 294
-    },
     "Lithuanian": {
       "ADP_only": {
         "abs": 23,
@@ -11212,25 +10244,6 @@
       },
       "total": 1355
     },
-    "Moksha": {
-      "ADP_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "HEAD_only": {
-        "abs": 33,
-        "rel": 38.82
-      },
-      "both": {
-        "abs": 52,
-        "rel": 61.18
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 85
-    },
     "Old_Georgian": {
       "ADP_only": {
         "abs": 0,
@@ -11268,25 +10281,6 @@
         "rel": 19.68
       },
       "total": 564
-    },
-    "Romanian": {
-      "ADP_only": {
-        "abs": 11695,
-        "rel": 39.48
-      },
-      "HEAD_only": {
-        "abs": 1,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 17929,
-        "rel": 60.52
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 29625
     },
     "Serbian": {
       "ADP_only": {
@@ -11363,25 +10357,6 @@
         "rel": 0.0
       },
       "total": 16279
-    },
-    "Turkish": {
-      "ADP_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "HEAD_only": {
-        "abs": 1125,
-        "rel": 95.42
-      },
-      "both": {
-        "abs": 22,
-        "rel": 1.87
-      },
-      "neither": {
-        "abs": 32,
-        "rel": 2.71
-      },
-      "total": 1179
     },
     "Ukrainian": {
       "ADP_only": {
@@ -11518,25 +10493,6 @@
       },
       "total": 1080
     },
-    "Punjabi": {
-      "ADP_only": {
-        "abs": 2,
-        "rel": 0.58
-      },
-      "HEAD_only": {
-        "abs": 195,
-        "rel": 56.2
-      },
-      "both": {
-        "abs": 15,
-        "rel": 4.32
-      },
-      "neither": {
-        "abs": 135,
-        "rel": 38.9
-      },
-      "total": 347
-    },
     "Sindhi": {
       "ADP_only": {
         "abs": 156,
@@ -11593,27 +10549,6 @@
         "rel": 39.84
       },
       "total": 128
-    }
-  },
-  "HEAD-ADP_NounClass": {
-    "Ruuli": {
-      "ADP_only": {
-        "abs": 3,
-        "rel": 1.49
-      },
-      "HEAD_only": {
-        "abs": 39,
-        "rel": 19.4
-      },
-      "both": {
-        "abs": 155,
-        "rel": 77.11
-      },
-      "neither": {
-        "abs": 4,
-        "rel": 1.99
-      },
-      "total": 201
     }
   },
   "HEAD-ADP_Number": {
@@ -12040,27 +10975,6 @@
         "rel": 29.53
       },
       "total": 193
-    }
-  },
-  "HEAD-ADP_Variant": {
-    "Polish": {
-      "ADP_only": {
-        "abs": 5978,
-        "rel": 50.58
-      },
-      "HEAD_only": {
-        "abs": 256,
-        "rel": 2.17
-      },
-      "both": {
-        "abs": 156,
-        "rel": 1.32
-      },
-      "neither": {
-        "abs": 5430,
-        "rel": 45.94
-      },
-      "total": 11820
     }
   },
   "HEAD-DET_Abbr": {
@@ -12885,25 +11799,6 @@
       },
       "total": 1065
     },
-    "Moksha": {
-      "DET_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "HEAD_only": {
-        "abs": 9,
-        "rel": 26.47
-      },
-      "both": {
-        "abs": 25,
-        "rel": 73.53
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 34
-    },
     "Northern_Kurdish": {
       "DET_only": {
         "abs": 0,
@@ -13362,25 +12257,6 @@
       },
       "total": 1760
     },
-    "Central_Kurdish": {
-      "DET_only": {
-        "abs": 1,
-        "rel": 6.67
-      },
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 14,
-        "rel": 93.33
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 15
-    },
     "Erzya": {
       "DET_only": {
         "abs": 5,
@@ -13400,25 +12276,6 @@
       },
       "total": 181
     },
-    "Faroese": {
-      "DET_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "HEAD_only": {
-        "abs": 167,
-        "rel": 90.76
-      },
-      "both": {
-        "abs": 17,
-        "rel": 9.24
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 184
-    },
     "Gheg": {
       "DET_only": {
         "abs": 1,
@@ -13437,25 +12294,6 @@
         "rel": 16.11
       },
       "total": 447
-    },
-    "Hausa": {
-      "DET_only": {
-        "abs": 143,
-        "rel": 17.08
-      },
-      "HEAD_only": {
-        "abs": 406,
-        "rel": 48.51
-      },
-      "both": {
-        "abs": 150,
-        "rel": 17.92
-      },
-      "neither": {
-        "abs": 138,
-        "rel": 16.49
-      },
-      "total": 837
     },
     "Irish": {
       "DET_only": {
@@ -14085,25 +12923,6 @@
         "rel": 0.0
       },
       "total": 32
-    },
-    "Kangri": {
-      "DET_only": {
-        "abs": 3,
-        "rel": 6.52
-      },
-      "HEAD_only": {
-        "abs": 33,
-        "rel": 71.74
-      },
-      "both": {
-        "abs": 10,
-        "rel": 21.74
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 46
     },
     "Khoekhoe": {
       "DET_only": {
@@ -14750,27 +13569,6 @@
         "rel": 0.34
       },
       "total": 2369
-    }
-  },
-  "HEAD-DET_InflClass": {
-    "Latin": {
-      "DET_only": {
-        "abs": 192,
-        "rel": 2.87
-      },
-      "HEAD_only": {
-        "abs": 51,
-        "rel": 0.76
-      },
-      "both": {
-        "abs": 2528,
-        "rel": 37.73
-      },
-      "neither": {
-        "abs": 3929,
-        "rel": 58.64
-      },
-      "total": 6700
     }
   },
   "HEAD-DET_NounClass": {
@@ -15517,25 +14315,6 @@
       },
       "total": 1308
     },
-    "Indonesian": {
-      "DET_only": {
-        "abs": 63,
-        "rel": 1.52
-      },
-      "HEAD_only": {
-        "abs": 2997,
-        "rel": 72.25
-      },
-      "both": {
-        "abs": 499,
-        "rel": 12.03
-      },
-      "neither": {
-        "abs": 589,
-        "rel": 14.2
-      },
-      "total": 4148
-    },
     "Irish": {
       "DET_only": {
         "abs": 76,
@@ -15573,25 +14352,6 @@
         "rel": 0.13
       },
       "total": 32663
-    },
-    "Javanese": {
-      "DET_only": {
-        "abs": 1,
-        "rel": 0.19
-      },
-      "HEAD_only": {
-        "abs": 434,
-        "rel": 84.44
-      },
-      "both": {
-        "abs": 55,
-        "rel": 10.7
-      },
-      "neither": {
-        "abs": 24,
-        "rel": 4.67
-      },
-      "total": 514
     },
     "Kadiweu": {
       "DET_only": {
@@ -16811,25 +15571,6 @@
       },
       "total": 5709
     },
-    "Polish": {
-      "DET_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "HEAD_only": {
-        "abs": 7,
-        "rel": 0.4
-      },
-      "both": {
-        "abs": 99,
-        "rel": 5.64
-      },
-      "neither": {
-        "abs": 1648,
-        "rel": 93.96
-      },
-      "total": 1754
-    },
     "Pomak": {
       "DET_only": {
         "abs": 0,
@@ -17019,25 +15760,6 @@
         "rel": 0.08
       },
       "total": 2369
-    },
-    "Wolof": {
-      "DET_only": {
-        "abs": 2,
-        "rel": 0.07
-      },
-      "HEAD_only": {
-        "abs": 28,
-        "rel": 0.94
-      },
-      "both": {
-        "abs": 245,
-        "rel": 8.2
-      },
-      "neither": {
-        "abs": 2712,
-        "rel": 90.79
-      },
-      "total": 2987
     }
   },
   "HEAD-DET_Polite": {
@@ -17062,405 +15784,6 @@
     }
   },
   "HEAD-DET_PronType": {
-    "Ancient_Hebrew": {
-      "DET_only": {
-        "abs": 7658,
-        "rel": 93.83
-      },
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 504,
-        "rel": 6.17
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 8162
-    },
-    "Arabic": {
-      "DET_only": {
-        "abs": 1345,
-        "rel": 98.18
-      },
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 25,
-        "rel": 1.82
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 1370
-    },
-    "Armenian": {
-      "DET_only": {
-        "abs": 781,
-        "rel": 97.87
-      },
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 17,
-        "rel": 2.13
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 798
-    },
-    "Belarusian": {
-      "DET_only": {
-        "abs": 1982,
-        "rel": 97.35
-      },
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 48,
-        "rel": 2.36
-      },
-      "neither": {
-        "abs": 6,
-        "rel": 0.29
-      },
-      "total": 2036
-    },
-    "Cappadocian": {
-      "DET_only": {
-        "abs": 559,
-        "rel": 93.79
-      },
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 11,
-        "rel": 1.85
-      },
-      "neither": {
-        "abs": 26,
-        "rel": 4.36
-      },
-      "total": 596
-    },
-    "Catalan": {
-      "DET_only": {
-        "abs": 46300,
-        "rel": 98.86
-      },
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 534,
-        "rel": 1.14
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 46834
-    },
-    "Classical_Armenian": {
-      "DET_only": {
-        "abs": 5030,
-        "rel": 92.92
-      },
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 383,
-        "rel": 7.08
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 5413
-    },
-    "Estonian": {
-      "DET_only": {
-        "abs": 2177,
-        "rel": 97.62
-      },
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 53,
-        "rel": 2.38
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 2230
-    },
-    "Finnish": {
-      "DET_only": {
-        "abs": 681,
-        "rel": 97.56
-      },
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 17,
-        "rel": 2.44
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 698
-    },
-    "Galician": {
-      "DET_only": {
-        "abs": 6543,
-        "rel": 94.24
-      },
-      "HEAD_only": {
-        "abs": 1,
-        "rel": 0.01
-      },
-      "both": {
-        "abs": 170,
-        "rel": 2.45
-      },
-      "neither": {
-        "abs": 229,
-        "rel": 3.3
-      },
-      "total": 6943
-    },
-    "Greek": {
-      "DET_only": {
-        "abs": 13405,
-        "rel": 97.67
-      },
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 317,
-        "rel": 2.31
-      },
-      "neither": {
-        "abs": 3,
-        "rel": 0.02
-      },
-      "total": 13725
-    },
-    "Haitian_Creole": {
-      "DET_only": {
-        "abs": 3396,
-        "rel": 77.8
-      },
-      "HEAD_only": {
-        "abs": 75,
-        "rel": 1.72
-      },
-      "both": {
-        "abs": 93,
-        "rel": 2.13
-      },
-      "neither": {
-        "abs": 801,
-        "rel": 18.35
-      },
-      "total": 4365
-    },
-    "Hausa": {
-      "DET_only": {
-        "abs": 749,
-        "rel": 89.49
-      },
-      "HEAD_only": {
-        "abs": 1,
-        "rel": 0.12
-      },
-      "both": {
-        "abs": 15,
-        "rel": 1.79
-      },
-      "neither": {
-        "abs": 72,
-        "rel": 8.6
-      },
-      "total": 837
-    },
-    "Hebrew": {
-      "DET_only": {
-        "abs": 12574,
-        "rel": 94.85
-      },
-      "HEAD_only": {
-        "abs": 12,
-        "rel": 0.09
-      },
-      "both": {
-        "abs": 171,
-        "rel": 1.29
-      },
-      "neither": {
-        "abs": 500,
-        "rel": 3.77
-      },
-      "total": 13257
-    },
-    "Indonesian": {
-      "DET_only": {
-        "abs": 4077,
-        "rel": 98.29
-      },
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 71,
-        "rel": 1.71
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 4148
-    },
-    "Italian": {
-      "DET_only": {
-        "abs": 31978,
-        "rel": 97.9
-      },
-      "HEAD_only": {
-        "abs": 4,
-        "rel": 0.01
-      },
-      "both": {
-        "abs": 426,
-        "rel": 1.3
-      },
-      "neither": {
-        "abs": 255,
-        "rel": 0.78
-      },
-      "total": 32663
-    },
-    "Javanese": {
-      "DET_only": {
-        "abs": 503,
-        "rel": 97.86
-      },
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 11,
-        "rel": 2.14
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 514
-    },
-    "Ligurian": {
-      "DET_only": {
-        "abs": 673,
-        "rel": 96.7
-      },
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 22,
-        "rel": 3.16
-      },
-      "neither": {
-        "abs": 1,
-        "rel": 0.14
-      },
-      "total": 696
-    },
-    "Lithuanian": {
-      "DET_only": {
-        "abs": 833,
-        "rel": 84.31
-      },
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 21,
-        "rel": 2.13
-      },
-      "neither": {
-        "abs": 134,
-        "rel": 13.56
-      },
-      "total": 988
-    },
-    "Middle_French": {
-      "DET_only": {
-        "abs": 8296,
-        "rel": 60.78
-      },
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 500,
-        "rel": 3.66
-      },
-      "neither": {
-        "abs": 4853,
-        "rel": 35.56
-      },
-      "total": 13649
-    },
-    "Nheengatu": {
-      "DET_only": {
-        "abs": 643,
-        "rel": 94.42
-      },
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 38,
-        "rel": 5.58
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 681
-    },
     "Northern_Kurdish": {
       "DET_only": {
         "abs": 121,
@@ -17517,158 +15840,6 @@
         "rel": 0.85
       },
       "total": 7189
-    },
-    "Old_East_Slavic": {
-      "DET_only": {
-        "abs": 3380,
-        "rel": 59.2
-      },
-      "HEAD_only": {
-        "abs": 16,
-        "rel": 0.28
-      },
-      "both": {
-        "abs": 74,
-        "rel": 1.3
-      },
-      "neither": {
-        "abs": 2239,
-        "rel": 39.22
-      },
-      "total": 5709
-    },
-    "Old_French": {
-      "DET_only": {
-        "abs": 7994,
-        "rel": 71.25
-      },
-      "HEAD_only": {
-        "abs": 32,
-        "rel": 0.29
-      },
-      "both": {
-        "abs": 433,
-        "rel": 3.86
-      },
-      "neither": {
-        "abs": 2760,
-        "rel": 24.6
-      },
-      "total": 11219
-    },
-    "Polish": {
-      "DET_only": {
-        "abs": 1725,
-        "rel": 98.35
-      },
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 29,
-        "rel": 1.65
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 1754
-    },
-    "Russian": {
-      "DET_only": {
-        "abs": 3734,
-        "rel": 94.72
-      },
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 119,
-        "rel": 3.02
-      },
-      "neither": {
-        "abs": 89,
-        "rel": 2.26
-      },
-      "total": 3942
-    },
-    "Sicilian": {
-      "DET_only": {
-        "abs": 1164,
-        "rel": 97.82
-      },
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 26,
-        "rel": 2.18
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 1190
-    },
-    "Spanish": {
-      "DET_only": {
-        "abs": 39481,
-        "rel": 98.42
-      },
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 635,
-        "rel": 1.58
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 40116
-    },
-    "Ukrainian": {
-      "DET_only": {
-        "abs": 4109,
-        "rel": 97.53
-      },
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 104,
-        "rel": 2.47
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 4213
-    },
-    "Western_Armenian": {
-      "DET_only": {
-        "abs": 2295,
-        "rel": 97.29
-      },
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 64,
-        "rel": 2.71
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 2359
     }
   },
   "HEAD-DET_SubGender": {
@@ -18246,25 +16417,6 @@
       },
       "total": 31
     },
-    "Karelian": {
-      "HEAD_only": {
-        "abs": 2,
-        "rel": 6.06
-      },
-      "NUM_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 31,
-        "rel": 93.94
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 33
-    },
     "Komi_Zyrian": {
       "HEAD_only": {
         "abs": 11,
@@ -18283,25 +16435,6 @@
         "rel": 0.0
       },
       "total": 97
-    },
-    "Kyrgyz": {
-      "HEAD_only": {
-        "abs": 832,
-        "rel": 91.93
-      },
-      "NUM_only": {
-        "abs": 2,
-        "rel": 0.22
-      },
-      "both": {
-        "abs": 32,
-        "rel": 3.54
-      },
-      "neither": {
-        "abs": 39,
-        "rel": 4.31
-      },
-      "total": 905
     },
     "Latin": {
       "HEAD_only": {
@@ -18360,25 +16493,6 @@
       },
       "total": 676
     },
-    "Livvi": {
-      "HEAD_only": {
-        "abs": 4,
-        "rel": 25.0
-      },
-      "NUM_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 12,
-        "rel": 75.0
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 16
-    },
     "Low_Saxon": {
       "HEAD_only": {
         "abs": 59,
@@ -18397,25 +16511,6 @@
         "rel": 2.7
       },
       "total": 74
-    },
-    "Malayalam": {
-      "HEAD_only": {
-        "abs": 13,
-        "rel": 56.52
-      },
-      "NUM_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 10,
-        "rel": 43.48
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 23
     },
     "Marathi": {
       "HEAD_only": {
@@ -18473,25 +16568,6 @@
         "rel": 0.0
       },
       "total": 235
-    },
-    "Northern_Kurdish": {
-      "HEAD_only": {
-        "abs": 31,
-        "rel": 46.27
-      },
-      "NUM_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 32,
-        "rel": 47.76
-      },
-      "neither": {
-        "abs": 4,
-        "rel": 5.97
-      },
-      "total": 67
     },
     "Old_Church_Slavonic": {
       "HEAD_only": {
@@ -18702,25 +16778,6 @@
       },
       "total": 1021
     },
-    "Skolt_Sami": {
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "NUM_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 14,
-        "rel": 100.0
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 14
-    },
     "Slovak": {
       "HEAD_only": {
         "abs": 517,
@@ -18872,25 +16929,6 @@
         "rel": 0.24
       },
       "total": 2042
-    },
-    "Veps": {
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "NUM_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 11,
-        "rel": 100.0
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 11
     }
   },
   "HEAD-NUM_Compound": {
@@ -19184,25 +17222,6 @@
         "rel": 0.19
       },
       "total": 1598
-    },
-    "Arabic": {
-      "HEAD_only": {
-        "abs": 76,
-        "rel": 5.8
-      },
-      "NUM_only": {
-        "abs": 115,
-        "rel": 8.78
-      },
-      "both": {
-        "abs": 49,
-        "rel": 3.74
-      },
-      "neither": {
-        "abs": 1070,
-        "rel": 81.68
-      },
-      "total": 1310
     },
     "Belarusian": {
       "HEAD_only": {
@@ -19507,25 +17526,6 @@
         "rel": 10.19
       },
       "total": 1511
-    },
-    "Kangri": {
-      "HEAD_only": {
-        "abs": 18,
-        "rel": 58.06
-      },
-      "NUM_only": {
-        "abs": 1,
-        "rel": 3.23
-      },
-      "both": {
-        "abs": 11,
-        "rel": 35.48
-      },
-      "neither": {
-        "abs": 1,
-        "rel": 3.23
-      },
-      "total": 31
     },
     "Latin": {
       "HEAD_only": {
@@ -20067,25 +18067,6 @@
     }
   },
   "HEAD-NUM_Number": {
-    "Akkadian": {
-      "HEAD_only": {
-        "abs": 301,
-        "rel": 92.9
-      },
-      "NUM_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 15,
-        "rel": 4.63
-      },
-      "neither": {
-        "abs": 8,
-        "rel": 2.47
-      },
-      "total": 324
-    },
     "Ancient_Greek": {
       "HEAD_only": {
         "abs": 268,
@@ -20180,25 +18161,6 @@
         "rel": 2.04
       },
       "total": 49
-    },
-    "Breton": {
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "NUM_only": {
-        "abs": 1,
-        "rel": 1.09
-      },
-      "both": {
-        "abs": 91,
-        "rel": 98.91
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 92
     },
     "Bulgarian": {
       "HEAD_only": {
@@ -20732,25 +18694,6 @@
       },
       "total": 2421
     },
-    "Moksha": {
-      "HEAD_only": {
-        "abs": 3,
-        "rel": 9.38
-      },
-      "NUM_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 29,
-        "rel": 90.62
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 32
-    },
     "North_Sami": {
       "HEAD_only": {
         "abs": 0,
@@ -21016,25 +18959,6 @@
         "rel": 0.78
       },
       "total": 387
-    },
-    "Skolt_Sami": {
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "NUM_only": {
-        "abs": 1,
-        "rel": 7.14
-      },
-      "both": {
-        "abs": 13,
-        "rel": 92.86
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 14
     },
     "Slovak": {
       "HEAD_only": {
@@ -21311,47 +19235,7 @@
       "total": 582
     }
   },
-  "HEAD-PRON_Animacy": {
-    "Polish": {
-      "HEAD_only": {
-        "abs": 7,
-        "rel": 3.68
-      },
-      "PRON_only": {
-        "abs": 35,
-        "rel": 18.42
-      },
-      "both": {
-        "abs": 12,
-        "rel": 6.32
-      },
-      "neither": {
-        "abs": 136,
-        "rel": 71.58
-      },
-      "total": 190
-    }
-  },
   "HEAD-PRON_Case": {
-    "Albanian": {
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 14,
-        "rel": 100.0
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 14
-    },
     "Ancient_Greek": {
       "HEAD_only": {
         "abs": 0,
@@ -21370,44 +19254,6 @@
         "rel": 0.0
       },
       "total": 430
-    },
-    "Armenian": {
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 67,
-        "rel": 100.0
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 67
-    },
-    "Bengali": {
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 15,
-        "rel": 100.0
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 15
     },
     "Chintang": {
       "HEAD_only": {
@@ -21466,44 +19312,6 @@
       },
       "total": 77
     },
-    "Faroese": {
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 12,
-        "rel": 100.0
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 12
-    },
-    "Finnish": {
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 328,
-        "rel": 100.0
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 328
-    },
     "Hindi": {
       "HEAD_only": {
         "abs": 15,
@@ -21542,44 +19350,6 @@
       },
       "total": 967
     },
-    "Karelian": {
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 29,
-        "rel": 100.0
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 29
-    },
-    "Kazakh": {
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 76,
-        "rel": 100.0
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 76
-    },
     "Khoekhoe": {
       "HEAD_only": {
         "abs": 37,
@@ -21599,158 +19369,6 @@
       },
       "total": 108
     },
-    "Komi_Zyrian": {
-      "HEAD_only": {
-        "abs": 4,
-        "rel": 13.33
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 26,
-        "rel": 86.67
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 30
-    },
-    "Livvi": {
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 11,
-        "rel": 100.0
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 11
-    },
-    "Malayalam": {
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 14,
-        "rel": 100.0
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 14
-    },
-    "Marathi": {
-      "HEAD_only": {
-        "abs": 70,
-        "rel": 83.33
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 13,
-        "rel": 15.48
-      },
-      "neither": {
-        "abs": 1,
-        "rel": 1.19
-      },
-      "total": 84
-    },
-    "Naga": {
-      "HEAD_only": {
-        "abs": 21,
-        "rel": 30.43
-      },
-      "PRON_only": {
-        "abs": 20,
-        "rel": 28.99
-      },
-      "both": {
-        "abs": 15,
-        "rel": 21.74
-      },
-      "neither": {
-        "abs": 13,
-        "rel": 18.84
-      },
-      "total": 69
-    },
-    "North_Sami": {
-      "HEAD_only": {
-        "abs": 2,
-        "rel": 1.0
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 199,
-        "rel": 99.0
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 201
-    },
-    "Northern_Kurdish": {
-      "HEAD_only": {
-        "abs": 135,
-        "rel": 43.55
-      },
-      "PRON_only": {
-        "abs": 1,
-        "rel": 0.32
-      },
-      "both": {
-        "abs": 174,
-        "rel": 56.13
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 310
-    },
-    "Ottoman_Turkish": {
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 218,
-        "rel": 100.0
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 218
-    },
     "Polish": {
       "HEAD_only": {
         "abs": 0,
@@ -21769,101 +19387,6 @@
         "rel": 0.0
       },
       "total": 190
-    },
-    "Swedish": {
-      "HEAD_only": {
-        "abs": 733,
-        "rel": 40.56
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 1065,
-        "rel": 58.94
-      },
-      "neither": {
-        "abs": 9,
-        "rel": 0.5
-      },
-      "total": 1807
-    },
-    "Tamil": {
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 1,
-        "rel": 4.0
-      },
-      "both": {
-        "abs": 24,
-        "rel": 96.0
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 25
-    },
-    "Turkish": {
-      "HEAD_only": {
-        "abs": 1,
-        "rel": 1.0
-      },
-      "PRON_only": {
-        "abs": 2,
-        "rel": 2.0
-      },
-      "both": {
-        "abs": 97,
-        "rel": 97.0
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 100
-    },
-    "Uyghur": {
-      "HEAD_only": {
-        "abs": 13,
-        "rel": 4.87
-      },
-      "PRON_only": {
-        "abs": 126,
-        "rel": 47.19
-      },
-      "both": {
-        "abs": 104,
-        "rel": 38.95
-      },
-      "neither": {
-        "abs": 24,
-        "rel": 8.99
-      },
-      "total": 267
-    },
-    "Uzbek": {
-      "HEAD_only": {
-        "abs": 2,
-        "rel": 3.92
-      },
-      "PRON_only": {
-        "abs": 14,
-        "rel": 27.45
-      },
-      "both": {
-        "abs": 34,
-        "rel": 66.67
-      },
-      "neither": {
-        "abs": 1,
-        "rel": 1.96
-      },
-      "total": 51
     },
     "Western_Armenian": {
       "HEAD_only": {
@@ -21886,44 +19409,6 @@
     }
   },
   "HEAD-PRON_Definite": {
-    "Armenian": {
-      "HEAD_only": {
-        "abs": 52,
-        "rel": 77.61
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 15,
-        "rel": 22.39
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 67
-    },
-    "Swedish": {
-      "HEAD_only": {
-        "abs": 5,
-        "rel": 0.28
-      },
-      "PRON_only": {
-        "abs": 11,
-        "rel": 0.61
-      },
-      "both": {
-        "abs": 1782,
-        "rel": 98.62
-      },
-      "neither": {
-        "abs": 9,
-        "rel": 0.5
-      },
-      "total": 1807
-    },
     "Western_Armenian": {
       "HEAD_only": {
         "abs": 37,
@@ -21945,44 +19430,6 @@
     }
   },
   "HEAD-PRON_Gender": {
-    "Albanian": {
-      "HEAD_only": {
-        "abs": 1,
-        "rel": 7.14
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 13,
-        "rel": 92.86
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 14
-    },
-    "Ancient_Greek": {
-      "HEAD_only": {
-        "abs": 192,
-        "rel": 44.65
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 238,
-        "rel": 55.35
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 430
-    },
     "Ancient_Hebrew": {
       "HEAD_only": {
         "abs": 841,
@@ -22001,25 +19448,6 @@
         "rel": 0.12
       },
       "total": 6655
-    },
-    "Faroese": {
-      "HEAD_only": {
-        "abs": 2,
-        "rel": 16.67
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 10,
-        "rel": 83.33
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 12
     },
     "Hausa": {
       "HEAD_only": {
@@ -22134,25 +19562,6 @@
         "rel": 0.0
       },
       "total": 84
-    },
-    "Northern_Kurdish": {
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 310,
-        "rel": 100.0
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 310
     },
     "Norwegian_Bokm\u00e5l": {
       "HEAD_only": {
@@ -22386,44 +19795,6 @@
       },
       "total": 67
     },
-    "Assamese": {
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 1,
-        "rel": 9.09
-      },
-      "both": {
-        "abs": 10,
-        "rel": 90.91
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 11
-    },
-    "Bambara": {
-      "HEAD_only": {
-        "abs": 3,
-        "rel": 0.67
-      },
-      "PRON_only": {
-        "abs": 283,
-        "rel": 62.89
-      },
-      "both": {
-        "abs": 30,
-        "rel": 6.67
-      },
-      "neither": {
-        "abs": 134,
-        "rel": 29.78
-      },
-      "total": 450
-    },
     "Beja": {
       "HEAD_only": {
         "abs": 1,
@@ -22537,25 +19908,6 @@
         "rel": 0.0
       },
       "total": 77
-    },
-    "Faroese": {
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 12,
-        "rel": 100.0
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 12
     },
     "Finnish": {
       "HEAD_only": {
@@ -22727,25 +20079,6 @@
         "rel": 0.0
       },
       "total": 30
-    },
-    "Livvi": {
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 1,
-        "rel": 9.09
-      },
-      "both": {
-        "abs": 10,
-        "rel": 90.91
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 11
     },
     "Malayalam": {
       "HEAD_only": {
@@ -23108,25 +20441,6 @@
       },
       "total": 100
     },
-    "Uyghur": {
-      "HEAD_only": {
-        "abs": 4,
-        "rel": 1.5
-      },
-      "PRON_only": {
-        "abs": 182,
-        "rel": 68.16
-      },
-      "both": {
-        "abs": 23,
-        "rel": 8.61
-      },
-      "neither": {
-        "abs": 58,
-        "rel": 21.72
-      },
-      "total": 267
-    },
     "Uzbek": {
       "HEAD_only": {
         "abs": 2,
@@ -23205,25 +20519,6 @@
     }
   },
   "HEAD-PRON_Person": {
-    "Ancient_Greek": {
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 196,
-        "rel": 45.58
-      },
-      "neither": {
-        "abs": 234,
-        "rel": 54.42
-      },
-      "total": 430
-    },
     "Ancient_Hebrew": {
       "HEAD_only": {
         "abs": 0,
@@ -23242,25 +20537,6 @@
         "rel": 0.0
       },
       "total": 6655
-    },
-    "Assamese": {
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 10,
-        "rel": 90.91
-      },
-      "neither": {
-        "abs": 1,
-        "rel": 9.09
-      },
-      "total": 11
     },
     "Bambara": {
       "HEAD_only": {
@@ -23299,25 +20575,6 @@
         "rel": 1.38
       },
       "total": 217
-    },
-    "Bengali": {
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 15,
-        "rel": 100.0
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 15
     },
     "Brahui": {
       "HEAD_only": {
@@ -23585,25 +20842,6 @@
       },
       "total": 194
     },
-    "Karelian": {
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 23,
-        "rel": 79.31
-      },
-      "neither": {
-        "abs": 6,
-        "rel": 20.69
-      },
-      "total": 29
-    },
     "Kazakh": {
       "HEAD_only": {
         "abs": 1,
@@ -23660,25 +20898,6 @@
         "rel": 6.67
       },
       "total": 30
-    },
-    "Malayalam": {
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 13,
-        "rel": 92.86
-      },
-      "neither": {
-        "abs": 1,
-        "rel": 7.14
-      },
-      "total": 14
     },
     "Marathi": {
       "HEAD_only": {
@@ -23794,25 +21013,6 @@
       },
       "total": 310
     },
-    "Old_Irish": {
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 19,
-        "rel": 100.0
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 19
-    },
     "Ottoman_Turkish": {
       "HEAD_only": {
         "abs": 0,
@@ -23870,25 +21070,6 @@
       },
       "total": 190
     },
-    "Punjabi": {
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 23,
-        "rel": 82.14
-      },
-      "neither": {
-        "abs": 5,
-        "rel": 17.86
-      },
-      "total": 28
-    },
     "Scottish_Gaelic": {
       "HEAD_only": {
         "abs": 0,
@@ -23926,25 +21107,6 @@
         "rel": 8.06
       },
       "total": 62
-    },
-    "Tamil": {
-      "HEAD_only": {
-        "abs": 7,
-        "rel": 28.0
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 18,
-        "rel": 72.0
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 25
     },
     "Thai": {
       "HEAD_only": {
@@ -24078,25 +21240,6 @@
         "rel": 9.52
       },
       "total": 21
-    },
-    "Zazaki": {
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 24,
-        "rel": 58.54
-      },
-      "neither": {
-        "abs": 17,
-        "rel": 41.46
-      },
-      "total": 41
     }
   },
   "HEAD-PRON_Polite": {
@@ -24121,25 +21264,6 @@
     }
   },
   "HEAD-PRON_PronType": {
-    "Coptic": {
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 64,
-        "rel": 69.57
-      },
-      "both": {
-        "abs": 28,
-        "rel": 30.43
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 92
-    },
     "Indonesian": {
       "HEAD_only": {
         "abs": 0,
@@ -24177,46 +21301,6 @@
         "rel": 0.0
       },
       "total": 732
-    },
-    "Welsh": {
-      "HEAD_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 682,
-        "rel": 93.17
-      },
-      "both": {
-        "abs": 50,
-        "rel": 6.83
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 732
-    }
-  },
-  "HEAD-PRON_SubGender": {
-    "Polish": {
-      "HEAD_only": {
-        "abs": 9,
-        "rel": 4.74
-      },
-      "PRON_only": {
-        "abs": 44,
-        "rel": 23.16
-      },
-      "both": {
-        "abs": 21,
-        "rel": 11.05
-      },
-      "neither": {
-        "abs": 116,
-        "rel": 61.05
-      },
-      "total": 190
     }
   },
   "NUM-ADJ_Animacy": {
@@ -24869,47 +21953,9 @@
         "rel": 0.0
       },
       "total": 30
-    },
-    "Romanian": {
-      "ADJ_only": {
-        "abs": 302,
-        "rel": 87.54
-      },
-      "NUM_only": {
-        "abs": 2,
-        "rel": 0.58
-      },
-      "both": {
-        "abs": 40,
-        "rel": 11.59
-      },
-      "neither": {
-        "abs": 1,
-        "rel": 0.29
-      },
-      "total": 345
     }
   },
   "NUM-ADJ_Gender": {
-    "Ancient_Hebrew": {
-      "ADJ_only": {
-        "abs": 25,
-        "rel": 55.56
-      },
-      "NUM_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 20,
-        "rel": 44.44
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 45
-    },
     "Arabic": {
       "ADJ_only": {
         "abs": 85,
@@ -25099,25 +22145,6 @@
         "rel": 0.68
       },
       "total": 146
-    },
-    "Latin": {
-      "ADJ_only": {
-        "abs": 21,
-        "rel": 58.33
-      },
-      "NUM_only": {
-        "abs": 1,
-        "rel": 2.78
-      },
-      "both": {
-        "abs": 14,
-        "rel": 38.89
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 36
     },
     "Latvian": {
       "ADJ_only": {
@@ -25309,25 +22336,6 @@
       },
       "total": 59
     },
-    "Sanskrit": {
-      "ADJ_only": {
-        "abs": 4,
-        "rel": 17.39
-      },
-      "NUM_only": {
-        "abs": 4,
-        "rel": 17.39
-      },
-      "both": {
-        "abs": 12,
-        "rel": 52.17
-      },
-      "neither": {
-        "abs": 3,
-        "rel": 13.04
-      },
-      "total": 23
-    },
     "Serbian": {
       "ADJ_only": {
         "abs": 56,
@@ -25426,256 +22434,7 @@
       "total": 114
     }
   },
-  "NUM-ADJ_NumType": {
-    "Basque": {
-      "ADJ_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "NUM_only": {
-        "abs": 284,
-        "rel": 84.52
-      },
-      "both": {
-        "abs": 52,
-        "rel": 15.48
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 336
-    },
-    "Bulgarian": {
-      "ADJ_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "NUM_only": {
-        "abs": 180,
-        "rel": 94.74
-      },
-      "both": {
-        "abs": 10,
-        "rel": 5.26
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 190
-    },
-    "Catalan": {
-      "ADJ_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "NUM_only": {
-        "abs": 414,
-        "rel": 90.99
-      },
-      "both": {
-        "abs": 41,
-        "rel": 9.01
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 455
-    },
-    "English": {
-      "ADJ_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "NUM_only": {
-        "abs": 133,
-        "rel": 91.72
-      },
-      "both": {
-        "abs": 10,
-        "rel": 6.9
-      },
-      "neither": {
-        "abs": 2,
-        "rel": 1.38
-      },
-      "total": 145
-    },
-    "Estonian": {
-      "ADJ_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "NUM_only": {
-        "abs": 103,
-        "rel": 90.35
-      },
-      "both": {
-        "abs": 11,
-        "rel": 9.65
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 114
-    },
-    "German": {
-      "ADJ_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "NUM_only": {
-        "abs": 177,
-        "rel": 94.65
-      },
-      "both": {
-        "abs": 10,
-        "rel": 5.35
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 187
-    },
-    "Indonesian": {
-      "ADJ_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "NUM_only": {
-        "abs": 176,
-        "rel": 85.85
-      },
-      "both": {
-        "abs": 29,
-        "rel": 14.15
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 205
-    },
-    "Italian": {
-      "ADJ_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "NUM_only": {
-        "abs": 239,
-        "rel": 92.28
-      },
-      "both": {
-        "abs": 13,
-        "rel": 5.02
-      },
-      "neither": {
-        "abs": 7,
-        "rel": 2.7
-      },
-      "total": 259
-    },
-    "Portuguese": {
-      "ADJ_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "NUM_only": {
-        "abs": 181,
-        "rel": 93.3
-      },
-      "both": {
-        "abs": 10,
-        "rel": 5.15
-      },
-      "neither": {
-        "abs": 3,
-        "rel": 1.55
-      },
-      "total": 194
-    },
-    "Slovenian": {
-      "ADJ_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "NUM_only": {
-        "abs": 366,
-        "rel": 96.83
-      },
-      "both": {
-        "abs": 12,
-        "rel": 3.17
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 378
-    },
-    "Spanish": {
-      "ADJ_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "NUM_only": {
-        "abs": 293,
-        "rel": 89.6
-      },
-      "both": {
-        "abs": 34,
-        "rel": 10.4
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 327
-    }
-  },
   "NUM-ADJ_Number": {
-    "Ancient_Hebrew": {
-      "ADJ_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "NUM_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 45,
-        "rel": 100.0
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 45
-    },
-    "Arabic": {
-      "ADJ_only": {
-        "abs": 112,
-        "rel": 90.32
-      },
-      "NUM_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 12,
-        "rel": 9.68
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 124
-    },
     "Bulgarian": {
       "ADJ_only": {
         "abs": 0,
@@ -26037,25 +22796,6 @@
       },
       "total": 16
     },
-    "Old_East_Slavic": {
-      "ADJ_only": {
-        "abs": 22,
-        "rel": 62.86
-      },
-      "NUM_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 13,
-        "rel": 37.14
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 35
-    },
     "Polish": {
       "ADJ_only": {
         "abs": 0,
@@ -26150,25 +22890,6 @@
         "rel": 1.69
       },
       "total": 59
-    },
-    "Sanskrit": {
-      "ADJ_only": {
-        "abs": 4,
-        "rel": 17.39
-      },
-      "NUM_only": {
-        "abs": 4,
-        "rel": 17.39
-      },
-      "both": {
-        "abs": 12,
-        "rel": 52.17
-      },
-      "neither": {
-        "abs": 3,
-        "rel": 13.04
-      },
-      "total": 23
     },
     "Serbian": {
       "ADJ_only": {
@@ -26269,25 +22990,6 @@
     }
   },
   "NUM-ADP_Case": {
-    "Arabic": {
-      "ADP_only": {
-        "abs": 57,
-        "rel": 8.65
-      },
-      "NUM_only": {
-        "abs": 92,
-        "rel": 13.96
-      },
-      "both": {
-        "abs": 19,
-        "rel": 2.88
-      },
-      "neither": {
-        "abs": 491,
-        "rel": 74.51
-      },
-      "total": 659
-    },
     "Croatian": {
       "ADP_only": {
         "abs": 173,
@@ -26364,25 +23066,6 @@
       },
       "total": 491
     },
-    "Komi_Zyrian": {
-      "ADP_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "NUM_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 19,
-        "rel": 100.0
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 19
-    },
     "Lithuanian": {
       "ADP_only": {
         "abs": 41,
@@ -26420,25 +23103,6 @@
         "rel": 23.81
       },
       "total": 21
-    },
-    "Romanian": {
-      "ADP_only": {
-        "abs": 2039,
-        "rel": 90.58
-      },
-      "NUM_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "both": {
-        "abs": 212,
-        "rel": 9.42
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 2251
     },
     "Serbian": {
       "ADP_only": {
@@ -26595,25 +23259,6 @@
         "rel": 1.22
       },
       "total": 82
-    },
-    "Hebrew": {
-      "NUM_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 7,
-        "rel": 38.89
-      },
-      "both": {
-        "abs": 11,
-        "rel": 61.11
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 18
     }
   },
   "NUM-PRON_Number": {
@@ -26635,46 +23280,6 @@
         "rel": 0.0
       },
       "total": 82
-    },
-    "Hebrew": {
-      "NUM_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 7,
-        "rel": 38.89
-      },
-      "both": {
-        "abs": 11,
-        "rel": 61.11
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 18
-    }
-  },
-  "NUM-PRON_PronType": {
-    "Indonesian": {
-      "NUM_only": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "PRON_only": {
-        "abs": 16,
-        "rel": 59.26
-      },
-      "both": {
-        "abs": 11,
-        "rel": 40.74
-      },
-      "neither": {
-        "abs": 0,
-        "rel": 0.0
-      },
-      "total": 27
     }
   }
 }

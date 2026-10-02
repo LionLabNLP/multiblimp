@@ -1,4 +1,5 @@
 from pyexpat import features
+import functools
 import sys
 import os
 import random
@@ -17,12 +18,18 @@ from typing import *
 
 from multiblimp.treebank import Treebank
 from multiblimp.languages import remove_diacritics_langs, gblang2udlang
-from multiblimp.unimorph import UD2UM, UnimorphInflector, LAYERED_FEAT_SEP
+from multiblimp.unimorph import UD2UM, UnimorphInflector, LAYERED_FEAT_SEP, ud_value_to_um, _has_value
 from resources.um2ud_annotation.UM2UD_mapper import map_um_value_to_ud
 
 from .prediction_target import PredictionTarget
 from .utils import shorten_cls
 
+
+# Emit "{prefix}_xpos" as a Basic node feature (on by default; set the
+# environment variable SVA_DT_XPOS=0 to turn it off). Note that in some
+# treebanks (e.g. Czech's positional tags) xpos spells out gender/number/case
+# directly, so it can leak the agreement label the trees predict.
+INCLUDE_XPOS = os.environ.get("SVA_DT_XPOS", "1") != "0"
 
 META_FEATURES = ["sen", "no_space_after", "treebank", "sent_id", "tree_idx", "treebank_link", "sen_str"]
 
@@ -40,8 +47,19 @@ class TreeMaps:
 
 
 def load_treebank(
-    lang: str, resource_dir: str | None = None, max_treebank_len: int | None = None
+    lang: str, resource_dir: str | None = None, max_treebank_len: int | None = None,
+    only_excluded: bool = False, use_selected_treebanks: bool = True,
 ) -> Treebank:
+    """use_selected_treebanks=False loads EVERY treebank, selected and
+    excluded alike, in one pickle-backed pass (Treebank.__new__ re-filters
+    against the live excluded_treebanks config either way, so this is never
+    stale regardless of when the pickle was built -- see that function's own
+    docstring). Used by callers that want one unified per-language cache to
+    split into included/excluded AFTER extraction (sva_trees.pipeline.
+    Pipeline._build_df) rather than paying for two separate treebank-parsing
+    + feature-extraction passes, one per subset, the way only_excluded=True
+    (a second, independent call) still does. Ignored when only_excluded is
+    also True (that already means "excluded only")."""
     lang = gblang2udlang.get(lang, lang).replace(" ", "_")
 
     treebank = Treebank(
@@ -50,6 +68,8 @@ def load_treebank(
         resource_dir=resource_dir,
         remove_typo=True,
         load_from_pickle=True,
+        only_excluded=only_excluded,
+        use_selected_treebanks=use_selected_treebanks,
     )
     if max_treebank_len is not None and len(treebank) > max_treebank_len:
         rng = random.Random(42)
@@ -171,6 +191,12 @@ def clear_form_groups_cache() -> None:
     done with a language's data, so memory doesn't accumulate across the run.
     """
     _form_groups_cache.clear()
+    _group_arrays_cache.clear()
+
+
+# (id(um_data), form or None) -> (frame, {col: object ndarray}, {col: is-set
+# ndarray}); see partial_df_match. Cleared together with _form_groups_cache.
+_group_arrays_cache: dict = {}
 
 
 def partial_df_match(
@@ -179,73 +205,103 @@ def partial_df_match(
         ufeat,
         features: Dict[str, str],
         prefer_tight_match: Optional[bool] = None,
+        return_col: Optional[str] = None,
     ):
         """Find all rows in the morphology dataframe that match the
         group_index (lemma or form) and the features in the provided
         `features` dictionary.
+
+        return_col: return just that column's values for the matching rows
+        (an object ndarray, same row order) instead of the rows themselves.
+
+        Called once per treebank token, on a tiny per-form slice, where
+        pandas' fixed per-operation overhead dominates -- so the masks below
+        run on cached numpy views of the slice's columns instead of Series.
         """
         remaining_match_feats = dict(match_feats)
         form_val = remaining_match_feats.pop("form", None)
-        if (form_val not in (None, "_")) and ("form" in um_data.columns):
+        by_form = (form_val not in (None, "_")) and ("form" in um_data.columns)
+        if by_form:
             groups = _get_form_groups(um_data)
             if form_val not in groups.groups:
-                return um_data.iloc[0:0]
-            um_data = groups.get_group(form_val)
+                return np.empty(0, dtype=object) if return_col else um_data.iloc[0:0]
+        cache_key = (id(um_data), form_val if by_form else None)
+        entry = _group_arrays_cache.get(cache_key)
+        if entry is None or entry[3] is not um_data:
+            entry = (groups.get_group(form_val) if by_form else um_data, {}, {}, um_data)
+            _group_arrays_cache[cache_key] = entry
+        sub_df, col_arrays, is_set_arrays, _ = entry
 
+        def col_array(col):
+            arr = col_arrays.get(col)
+            if arr is None:
+                arr = col_arrays[col] = (
+                    sub_df[col].to_numpy(dtype=object) if col in sub_df.columns
+                    # col not in sub_df for this POS-slice (e.g. a feature
+                    # this language/upos never has) -- treat every cell as
+                    # undefined rather than raising, so callers that already
+                    # OR against UNDEFINED/isna leave the mask unfiltered.
+                    else np.full(len(sub_df), UNDEFINED, dtype=object)
+                )
+            return arr
+
+        # positions into sub_df that survive the exact-match filters
+        rows = np.arange(len(sub_df))
         for filter_type, filter_value in remaining_match_feats.items():
             if filter_value not in [None, "_"]:
-                um_data = um_data[um_data[filter_type] == filter_value]
-            if len(um_data) == 0:
-                return um_data.iloc[0:0]
-        sub_df = um_data
+                rows = rows[col_array(filter_type)[rows] == filter_value]
+            if len(rows) == 0:
+                return np.empty(0, dtype=object) if return_col else sub_df.iloc[0:0]
 
-        mask = np.ones(len(sub_df), dtype=bool)
+        mask = np.ones(len(rows), dtype=bool)
 
         for col, val in features.items():
             if isinstance(val, list):
+                arr = col_array(col)[rows]
                 sub_mask = np.zeros_like(mask)
                 for subval in val:
-                    sub_mask |= sub_df[col] == subval
+                    sub_mask |= arr == subval
+                if col != ufeat:  # unknown cells don't contradict, as for scalars
+                    sub_mask |= (arr == UNDEFINED) | pd.isna(arr)
                 mask &= sub_mask
             elif (val is not None) and (pd.notna(val)):
                 if val.startswith("-"):
-                    mask &= (sub_df[col] != val[1:]) & (sub_df[col] != UNDEFINED)
+                    arr = col_array(col)[rows]
+                    mask &= (arr != val[1:]) & (arr != UNDEFINED)
                 elif col == ufeat:
-                    mask &= sub_df[col] == val
+                    mask &= col_array(col)[rows] == val
                 else:
-                    try:
-                        mask &= (
-                            (sub_df[col] == val)
-                            | (sub_df[col] == UNDEFINED)
-                            | pd.isna(sub_df[col])
-                        )
-                    except KeyError:
-                        pass  # col not in sub_df for this POS-slice; leave mask unfiltered on it
+                    arr = col_array(col)[rows]
+                    mask &= (arr == val) | (arr == UNDEFINED) | pd.isna(arr)
 
-        candidate_rows = sub_df[mask]
+        rows = rows[mask]
 
-        if (not prefer_tight_match) or (len(candidate_rows) < 2):
-            return candidate_rows
+        def result(positions):
+            return col_array(return_col)[positions] if return_col else sub_df.iloc[positions]
 
-        is_set_df = candidate_rows.notna() | (candidate_rows == UNDEFINED)
-        not_in_features = pd.Series(
-            {col: (col not in features) for col in candidate_rows.columns}
-        )
-        wants_feature = pd.Series(
-            {
-                col: (col in features) and pd.notna(features.get(col))
-                for col in candidate_rows.columns
-            }
-        )
-        penalty = is_set_df.mul(not_in_features, axis=1).astype(int) + (
-            (~is_set_df).mul(wants_feature, axis=1).astype(int)
-        )
-        features_added = penalty.sum(axis=1).to_numpy()
+        if (not prefer_tight_match) or (len(rows) < 2):
+            return result(rows)
+
+        # Per candidate row: columns whose cell is set (not nan, or
+        # UNDEFINED) although `features` doesn't constrain it, plus columns
+        # whose cell is nan although `features` has a real value for it;
+        # keep only the rows with the fewest such additions.
+        features_added = np.zeros(len(rows), dtype=int)
+        for col in sub_df.columns:
+            is_set = is_set_arrays.get(col)
+            if is_set is None:
+                arr = col_array(col)
+                is_set = is_set_arrays[col] = ~pd.isna(arr) | (arr == UNDEFINED)
+            is_set = is_set[rows]
+            if col not in features:
+                features_added += is_set
+            elif _has_value(features.get(col)):
+                features_added += ~is_set
 
         min_features_added = min(features_added)
         min_features_added_mask = features_added == min_features_added
 
-        return candidate_rows[min_features_added_mask]
+        return result(rows[min_features_added_mask])
 
 
 def _strip_layered_ufeat(ufeat_string: str) -> str:
@@ -265,9 +321,25 @@ def _strip_layered_ufeat(ufeat_string: str) -> str:
     )
 
 
+@functools.lru_cache(maxsize=None)
+def _ufeat_to_ud(ufeat_raw):
+    # the same few UM tag strings recur across the whole treebank
+    return map_um_value_to_ud(_strip_layered_ufeat(ufeat_raw))
+
+
 def expand_anno(node, morph_feats, target, um_split):
-    # make copy to keep upos/lemma separate from conllu Token's feats
-    inflect_feats = morph_feats
+    # Real copy (not an alias) to keep upos/lemma/the VerbForm=Fin matching
+    # assumption below out of the conllu Token's own feats dict -- they're
+    # only needed to build this call's um_feats match query. A prior version
+    # aliased instead of copying, so these three kept leaking into
+    # morph_feats (== node["feats"]) as an unintended side effect: once any
+    # node anywhere in the corpus got a "lemma" key this way, extract_node_
+    # features' all_feats-driven column loop treated "lemma" as a real
+    # feature name for EVERY node, overwriting the correct node["lemma"]-
+    # sourced value with node["feats"].get("lemma") -- None for any node
+    # that itself never went through this function (confirmed: ~58% of
+    # Amharic nsubj_lemma, ~22-25% for French/German, corrupted this way).
+    inflect_feats = dict(morph_feats)
     inflect_feats["upos"] = node["upos"]
     # allows for soft matching if no lemma was specified in UD
     inflect_feats["lemma"] = node.get("lemma", None) if node.get("lemma", None) != "_" else None
@@ -276,25 +348,26 @@ def expand_anno(node, morph_feats, target, um_split):
     if node["upos"] in ("VERB", "AUX") and "VerbForm" not in inflect_feats:
         inflect_feats["VerbForm"] = "Fin"
 
-    um_feats = {f: (UD2UM.get((f,v), None) if f!="lemma" else v) for f, v in inflect_feats.items()}
+    um_feats = {f: (ud_value_to_um(f, v) if f!="lemma" else v) for f, v in inflect_feats.items()}
 
-    form_rows = partial_df_match(
+    row_ufeats = partial_df_match(
         um_split,
         {"form": node["form"], "lemma":inflect_feats["lemma"]},
-        target,
+        target.swap_feat,
         um_feats,
-        prefer_tight_match=True
+        prefer_tight_match=True,
+        return_col="ufeat",
     )
     add_feats=False
-    if len(form_rows):
+    if len(row_ufeats):
         unified = dict()
-        for i, row in form_rows.iterrows():
+        for row_ufeat in row_ufeats:
             # go through all plausible match rows
             # -> if more than one, only use features for which all rows agree on the value
-            transformed = map_um_value_to_ud(_strip_layered_ufeat(row["ufeat"]))
+            transformed = _ufeat_to_ud(row_ufeat)
             for k, v in transformed["morpho"].items():
-                unified[k] = unified.get(k, list()) + [v]
-            unified["upos"] = unified.get("upos", list()) + [transformed["upos"]]
+                unified.setdefault(k, []).append(v)
+            unified.setdefault("upos", []).append(transformed["upos"])
 
         # drop any features with multiple competing values
         unified = {k: list(set(v))[0] for k, v in unified.items()
@@ -316,6 +389,9 @@ def expand_anno(node, morph_feats, target, um_split):
         if add_feats:
             for feat, val in add_feats.items():
                 morph_feats[feat] = val
+            # provenance: link_head_slot_feats prefers treebank-annotated
+            # values over lexicon-derived ones when merging slot spellings
+            node.setdefault("enriched_feats", set()).update(add_feats)
 
     return morph_feats
 
@@ -334,11 +410,13 @@ def extract_node_features(
     encode_positional_features: bool = False,
     um_data: pd.DataFrame=None,
     ud_data: pd.DataFrame=None,
-    fetch_all=False
+    fetch_all=False,
+    include_xpos: bool | None = None,
 ) -> dict[str, str | bool | int]:
     """
     Extract all features for a specific node (whether it's a child, head, or co-child).
     This ensures consistent feature extraction across all node types.
+    include_xpos: None uses INCLUDE_XPOS.
     """
     features = {}
     if type(node.get("feats", None))!=dict: node["feats"] = dict()
@@ -348,11 +426,17 @@ def extract_node_features(
     features[f"{prefix}_deprel"] = node["deprel"]
     features[f"{prefix}_pos"] = node["upos"]
     features[f"{prefix}_idx"] = node["id"]
+    if INCLUDE_XPOS if include_xpos is None else include_xpos:
+        features[f"{prefix}_xpos"] = node.get("xpos")
 
     if lexicalize:
         features[f"{prefix}_form"] = (
             node["form"].lower() if node["upos"] != "PROPN" else node["form"]
         )
+        # Untouched CoNLL-U spelling (unlike "_form" above, never lowercased)
+        # -- for exact-match grew.fr links (build_grew_link), not modeling;
+        # excluded from decision-tree fitting, see decision_tree.fit_dt.
+        features[f"{prefix}_form_orig"] = node["form"]
         features[f"{prefix}_lemma"] = node["lemma"]
 
     # Morphological features
@@ -644,6 +728,18 @@ _DEPREL_BRACKET_ALIASES = {
 }
 
 
+def slot_suffixes(deprel, child_case):
+    """Bracket suffixes that can name `deprel`'s argument slot on the verb,
+    in priority order: relation-named (the deprel and its known aliases,
+    e.g. "iobj"/"io"), then the child's own Case, lowercased (e.g. "dat").
+    Which case-named bracket is right is only knowable from the child token,
+    so this is derived per instance, never from a fixed language table."""
+    sufs = list(_DEPREL_BRACKET_ALIASES.get(deprel, [deprel]))
+    if child_case is not None:
+        sufs.append(str(child_case).lower())
+    return list(dict.fromkeys(sufs))
+
+
 def resolve_layered_head_key(head_features, child_features, target_feature, deprel):
     """The bracketed feature NAME (e.g. "Number[erg]" -- unprefixed, matching
     sva_trees.create_pairs' kind_feat_cols/og_feats convention, NOT
@@ -672,18 +768,49 @@ def resolve_layered_head_key(head_features, child_features, target_feature, depr
     relevant convention: a deprel name/case value with no matching
     head_{feat}[...] column just falls through.
     """
-    for suffix in _DEPREL_BRACKET_ALIASES.get(deprel, [deprel]):
+    for suffix in slot_suffixes(deprel, child_features.get(f"{deprel}_Case")):
         feat_name = f"{target_feature}[{suffix}]"
-        if head_features.get(f"head_{feat_name}") is not None:
+        # create_pairs passes DataFrame rows here, where an unset column is
+        # NaN rather than None
+        if pd.notna(head_features.get(f"head_{feat_name}")):
             return feat_name
-
-    child_case = child_features.get(f"{deprel}_Case")
-    if child_case is not None:
-        feat_name = f"{target_feature}[{str(child_case).lower()}]"
-        if head_features.get(f"head_{feat_name}") is not None:
-            return feat_name
-
     return None
+
+
+def link_head_slot_feats(head_features, instance, deprel, child_features, enriched=()):
+    """Rename the verb's relation-named brackets for `deprel`'s slot (e.g.
+    Number[io]) to the dependent's own case-named one (Number[dat]) when the
+    dependent carries a Case, so one slot is one feature under one readable
+    name. If the case-named bracket is already set, the two are the same
+    slot recorded twice (treebank vs. lexicon spelling): keep one value,
+    preferring the treebank-annotated one (`enriched` = keys the lexicon
+    added, see expand_anno).
+    Without a child Case nothing is renamed -- the relation-named bracket
+    is the only link there is.
+    Mutates head_features and instance in place."""
+    child_case = child_features.get(f"{deprel}_Case")
+    rel_sufs = set(slot_suffixes(deprel, None))
+    bracket_cols = [c for c in head_features if c.startswith("head_") and c.endswith("]")]
+
+    def merge(rel_col, case_col):
+        feat, _, suffix = rel_col[len("head_"):-1].partition("[")
+        case_suf = case_col[case_col.index("[") + 1:-1]
+        rel_key, case_key = f"{feat}[{suffix}]", f"{feat}[{case_suf}]"
+        if head_features.get(case_col) is None or (
+            case_key in enriched and rel_key not in enriched
+        ):
+            head_features[case_col] = head_features[rel_col]
+        head_features[rel_col] = None
+        instance[case_col] = head_features[case_col]
+        instance[rel_col] = None
+
+    if child_case is not None:
+        case_suf = str(child_case).lower()
+        for col in bracket_cols:
+            feat, _, suffix = col[len("head_"):-1].partition("[")
+            if suffix in rel_sufs and suffix != case_suf and head_features[col] is not None:
+                merge(col, f"head_{feat}[{case_suf}]")
+        return
 
 
 def _resolve_layered_head_val(head_features, child_features, target_feature, deprel):
@@ -709,6 +836,15 @@ def _resolve_layered_head_val(head_features, child_features, target_feature, dep
     """
     feat_name = resolve_layered_head_key(head_features, child_features, target_feature, deprel)
     return head_features.get(f"head_{feat_name}") if feat_name is not None else None
+
+
+def values_overlap(val1, val2) -> bool:
+    """True if two UD feature values share a member, treating a comma value
+    as the set of readings it lists ("Masc,Neut" agrees with "Masc" and with
+    "Neut"). False if either is missing."""
+    if val1 is None or val2 is None:
+        return False
+    return bool(set(str(val1).split(",")) & set(str(val2).split(",")))
 
 
 def extract_instances(
@@ -841,6 +977,10 @@ def extract_instances(
                 fetch_all=fetch_all,
             )
             instance.update(child_features)
+            link_head_slot_feats(
+                head_features, instance, deprel, child_features,
+                enriched=head.get("enriched_feats", ()),
+            )
 
             # add SV agreement variable(s) (e.g. "head_nsubj_Number_agreement")
             if agreement_feats is not None:
@@ -889,14 +1029,14 @@ def extract_instances(
                         child_features[f"{deprel}_{target_feature}"] = child_val
                         instance[f"{deprel}_{target_feature}"] = child_val
 
-                if head_val == child_val:
+                if head_val == child_val or values_overlap(head_val, child_val):
                     if head_val != None:
-                        agreement_label = "Yes"  # both set and agreeing
+                        agreement_label = "yes"  # both set and agreeing
                     else:
                         agreement_label = "--"  # both undefined
                 elif head_val != None:
                     if child_val != None:
-                        agreement_label = "No"  # both set but disagreement
+                        agreement_label = "no"  # both set but disagreement
                     else:
                         agreement_label = "+-"  # child feat not set
                 elif head_val == None:
@@ -926,20 +1066,35 @@ def extract_instances(
 
 def _categorize(df: pd.DataFrame) -> pd.DataFrame:
     """Convert object-dtype columns to categorical, skipping columns with unhashable values."""
-    for col in df.select_dtypes(include="object").columns:
-        if df[col].isna().all():
-            continue
-        try:
-            non_null = df[col].dropna().unique()
-            if len(non_null) == 1 and non_null[0] is True:
-                df.loc[df[col].isna(), col] = False
+    obj_cols = df.select_dtypes(include="object").columns
+    # numpy arrays and one concat instead of per-column Series work and
+    # df[col] = ... assignments, which dominate on frames this wide
+    converted = {}
+    if len(obj_cols):
+        not_all_na = ~df[obj_cols].isna().all().to_numpy()
+        for col in obj_cols[not_all_na]:
+            values = df[col].to_numpy()
+            is_na = pd.isna(values)
+            try:
+                non_null = pd.unique(values[~is_na])
+                if len(non_null) == 1 and non_null[0] is True:
+                    values = np.where(is_na, False, values).astype(object)
 
-            df[col] = df[col].astype("category")
-        except TypeError:
-            # some columns are lists of strings, we leave those as is
-            pass
+                converted[col] = pd.Categorical(values)
+            except TypeError:
+                # some columns are lists of strings, we leave those as is
+                pass
 
-    return df
+    if converted:
+        df = pd.concat(
+            [df.drop(columns=list(converted)), pd.DataFrame(converted, index=df.index)],
+            axis=1,
+        )
+
+    # Feature records are built by iterating sets, so their column order
+    # varies with every process (string hashing); a fixed order keeps
+    # cached tables, and the trees fit on them, reproducible.
+    return df[sorted(df.columns)]
 
 
 def records_to_df(records: list[dict]) -> pd.DataFrame:
@@ -1005,6 +1160,13 @@ def extract_features(
     return dfs
 
 
+def is_feature_col(col: str) -> bool:
+    """A morphological feature column (head_Number, iobj_Case,
+    head_Person[io], ...): its last underscore-separated segment is a
+    capitalised feature name, optionally bracketed."""
+    return re.fullmatch(r"[A-Z][A-Za-z]*(\[[^\]]+\])?", col.rsplit("_", 1)[-1]) is not None
+
+
 def drop_singleton_cols(
     df: pd.DataFrame, target: "PredictionTarget | None" = None, extra_always_keep=()
 ) -> pd.DataFrame:
@@ -1042,15 +1204,22 @@ def drop_singleton_cols(
     always_keep.update(col for col in df.columns if col.endswith("agreement"))
     always_keep.update(col for col in df.columns if col.endswith("_idx"))
     always_keep.update(col for col in df.columns if col.endswith("_form"))
+    always_keep.update(col for col in df.columns if col.endswith("_form_orig"))
     always_keep.update(col for col in df.columns if col.endswith("_pos"))
     if target is not None and target.head_feats:
         always_keep.update(f"head_{feat}" for feat in target.head_feats)
+    # every non-empty morphological feature column (plain or bracketed,
+    # constant or not): a language-wide constant like Person[io]=3 is useless
+    # to the tree but still needed later, e.g. by resolve_layered_head_key
+    always_keep.update(
+        col for col in df.columns if is_feature_col(col) and df[col].notna().any()
+    )
     always_keep.update(extra_always_keep)
     cols_to_check = df.columns.difference(list(always_keep))
     # dropna=False: a column that alternates between one real value and
     # "not annotated" (NaN) is informative, not a singleton.
     keep = df[cols_to_check].nunique(dropna=False) > 1
-    kept_always = [c for c in always_keep if c in df.columns]
+    kept_always = [c for c in df.columns if c in always_keep]  # df order, not set order
     return df[[*kept_always, *keep.index[keep]]].copy()
 
 

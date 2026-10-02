@@ -15,6 +15,7 @@ from collections import Counter
 from glob import glob
 
 import pandas as pd
+import pyarrow.parquet as pq
 
 BUCKET_LABELS = {
     "no_candidates": "no match",
@@ -23,6 +24,7 @@ BUCKET_LABELS = {
     "same_features": "same feature",
     "undefined_features": "undefined feature",
     "ambiguous_subjects": "ambiguous subject",
+    "conflicting_features": "conflicting features",
 }
 
 _BUCKET_JSON_KEYS = {
@@ -32,6 +34,7 @@ _BUCKET_JSON_KEYS = {
     "same_features": "same_feature",
     "undefined_features": "undefined_feature",
     "ambiguous_subjects": "ambiguous_subject",
+    "conflicting_features": "conflicting_features",
 }
 
 # We excludes multi_now_valid (a logging duplicate of some correct_swaps rows) so nothing
@@ -41,9 +44,33 @@ DISTRIBUTION_BUCKETS = ["correct_swaps", "same_features", "ambiguous_subjects", 
 ROW_SCOPED_BUCKETS = {"no_candidates", "no_inflections"}
 
 
-def _read_bucket(lang_dir: str, item_type: str) -> pd.DataFrame:
+def _read_bucket(lang_dir: str, item_type: str, columns=None) -> pd.DataFrame:
+    """One bucket's parquet (only `columns` of it, those that exist, when
+    given -- these files can be thousands of columns wide)."""
     fn = os.path.join(lang_dir, f"{item_type}.parquet")
-    return pd.read_parquet(fn) if os.path.exists(fn) else pd.DataFrame()
+    if not os.path.exists(fn):
+        return pd.DataFrame()
+    if columns is not None:
+        columns = [c for c in columns if c in pq.read_schema(fn).names]
+    return pd.read_parquet(fn, columns=columns)
+
+
+def _bucket_len(lang_dir: str, item_type: str) -> int:
+    """Row count from the parquet footer, without reading any data."""
+    fn = os.path.join(lang_dir, f"{item_type}.parquet")
+    return pq.ParquetFile(fn).metadata.num_rows if os.path.exists(fn) else 0
+
+
+def _bucket_second_chance_count(lang_dir: str, item_type: str) -> int:
+    """How many of this bucket's rows only exist because sva_trees.
+    second_chance retried this language at a laxer bar, vs. how many already
+    cleared the strict first pass -- 0 if the language was never retried (no
+    "second_chance" column at all, see create_pairs) or the bucket is empty.
+    """
+    df = _read_bucket(lang_dir, item_type, columns=["second_chance"])
+    if "second_chance" not in df.columns:
+        return 0
+    return int(df["second_chance"].sum())
 
 
 def _read_meta(lang_dir: str) -> dict:
@@ -98,12 +125,16 @@ def _format_distribution(dist: Counter) -> str:
 
 def language_diagnostics_row(lang: str, lang_dir: str) -> dict:
     bucket_names = list(BUCKET_LABELS) + ["correct_swaps", "multi_now_valid"]
-    buckets = {name: _read_bucket(lang_dir, name) for name in bucket_names}
-    counts = {name: len(df) for name, df in buckets.items()}
+    counts = {name: _bucket_len(lang_dir, name) for name in bucket_names}
+    buckets = {
+        name: _read_bucket(lang_dir, name, columns=["feature_vals"])
+        for name in DISTRIBUTION_BUCKETS if counts[name]
+    }
 
     meta = _read_meta(lang_dir)
     n_raw = meta.get("num_ud_candidates_raw") or 0
     n_keep = meta.get("num_ud_candidates_keep") or 0
+    n_keep_second_chance = meta.get("num_ud_candidates_keep_second_chance") or 0
     items_seen = meta.get("items_seen") or 0
     swap_items = items_seen - counts["no_candidates"] - counts["no_inflections"]
     n_pairs = counts["correct_swaps"]
@@ -122,15 +153,20 @@ def language_diagnostics_row(lang: str, lang_dir: str) -> dict:
 
     dist, probs = _distribution_and_probs(buckets)
 
+    # A dict here means a second_chance depth-aware retry gave leaves their
+    # own individual cutoffs -- no single number represents the language for
+    # this per-language table (each leaf's own tag on the tree page has it).
+    leaf_threshold = meta.get("leaf_threshold")
     row = {
         "Language": lang,
-        "leaf_threshold": meta.get("leaf_threshold"),
+        "leaf_threshold": None if isinstance(leaf_threshold, dict) else leaf_threshold,
         "# minimal pairs": n_pairs,
         "# forms of interest": num_forms_of_interest,
         "% covered by UM": pct(num_covered_um, num_forms_of_interest),
         "% covered by UM+UD": pct(num_covered_um_ud, num_forms_of_interest),
         "# UD candidates (raw)": n_raw,
         "# UD candidates (kept)": n_keep,
+        "# UD candidates (kept, 2nd chance)": n_keep_second_chance,
         "# UM lemmas": meta.get("num_lemma"),
         "# UM Forms": meta.get("num_form"),
         # unk ≈ missing annotation, can be dropped from fit_dt
@@ -160,6 +196,7 @@ def generate_diagnostics_table(pairs_dir: str) -> pd.DataFrame:
         "Language", "leaf_threshold", "# minimal pairs", "# forms of interest",
         "% covered by UM", "% covered by UM+UD",
         "# UD candidates (raw)", "# UD candidates (kept)",
+        "# UD candidates (kept, 2nd chance)",
         "# UM lemmas", "# UM Forms",
         "# head unk", "# nsubj unk", "# both unk",
     ]
@@ -241,7 +278,8 @@ def diagnostics_row_to_json(row, lang_dir: str | None = None) -> dict:
     for item_type, label in BUCKET_LABELS.items():
         n = _num(row, f"# {label}")
         pct = _num(row, f"% {label}")
-        buckets[_BUCKET_JSON_KEYS[item_type]] = [int(n), float(pct)]
+        n_second = _bucket_second_chance_count(lang_dir, item_type) if lang_dir else 0
+        buckets[_BUCKET_JSON_KEYS[item_type]] = [int(n), float(pct), n_second]
 
     probs = {}
     for col, val in dict(row).items():
@@ -250,14 +288,33 @@ def diagnostics_row_to_json(row, lang_dir: str | None = None) -> dict:
             probs[value] = round(float(val), 3)
 
     leaf_threshold = row.get("leaf_threshold")
+    # A dict here means a second_chance depth-aware retry gave leaves their
+    # own individual cutoffs -- no single number represents the language, so
+    # this per-language summary table leaves it out rather than picking one
+    # leaf's value arbitrarily (see each leaf's own tag on the tree page).
+    is_per_leaf = isinstance(leaf_threshold, dict)
+    # correct_swaps rows are 1:1 with kept rows (no fan-out), so its own
+    # bucket count is a safe proxy for the pairs-level split. nKeep's split
+    # is NOT derivable the same way from the buckets: several of them (e.g.
+    # same_features, undefined_features) can hold more than one diagnostic
+    # item per source row (one per inflection candidate tried), so their
+    # counts don't sum back to n_keep's own row count -- read the row-level
+    # figure create_pairs itself already computed instead (see meta.json's
+    # num_ud_candidates_keep_second_chance).
+    n_pairs_second = _bucket_second_chance_count(lang_dir, "correct_swaps") if lang_dir else 0
     result = {
-        "leafThreshold": None if leaf_threshold is None or pd.isna(leaf_threshold) else float(leaf_threshold),
+        "leafThreshold": (
+            None if is_per_leaf or leaf_threshold is None or pd.isna(leaf_threshold)
+            else float(leaf_threshold)
+        ),
         "nPairs": int(_num(row, "# minimal pairs")),
+        "nPairsSecondChance": n_pairs_second,
         "nForms": int(_num(row, "# forms of interest")),
         "pctUM": float(_num(row, "% covered by UM")),
         "pctUMUD": float(_num(row, "% covered by UM+UD")),
         "nRaw": int(_num(row, "# UD candidates (raw)")),
         "nKeep": int(_num(row, "# UD candidates (kept)")),
+        "nKeepSecondChance": int(_num(row, "# UD candidates (kept, 2nd chance)")),
         "nLemma": int(_num(row, "# UM lemmas")),
         "nForm": int(_num(row, "# UM Forms")),
         "nValidFromMulti": int(_num(row, "# valid from multi")),
