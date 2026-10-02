@@ -68,7 +68,7 @@ sed "s/:3:/;3;/" hsb/hsb > hsb/hsb2; mv hsb/hsb2 hsb/hsb
 
 # Slovak
 unxz slk/slk.xz
-cut -d$'\t' -f 1-3 slk/slk > slk/slk2; mv slk/slk2 slk/slk
+awk -F'\t' -v OFS='\t' '{ if ($4 != "") $3 = $3 ";" $4; print $1, $2, $3 }' slk/slk > slk/slk2; mv slk/slk2 slk/slk
 
 # Kazakh
 cat kaz/kaz.sm >> kaz/kaz

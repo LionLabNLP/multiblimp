@@ -12,12 +12,13 @@ from multiblimp.languages import (
     lang2unimorph_lang,
     lang2langcode,
 )
+from multiblimp.argparse import fetch_lang_candidates
 from multiblimp.unimorph import UnimorphInflector
 
 
 if __name__ == "__main__":
     resource_dir = "../../resources"
-    ud_langs = get_ud_langs(resource_dir)
+    ud_langs = fetch_lang_candidates(resource_dir)
 
     for lang in ud_langs:
         print(lang)

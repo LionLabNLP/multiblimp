@@ -1,5 +1,7 @@
 import os
+import shutil
 from typing import *
+from urllib.parse import quote, unquote
 from unidecode import unidecode
 
 import numpy as np
@@ -17,6 +19,25 @@ from resources.um2ud_annotation.UM2UD_mapper import (
     feature_for, um_tag_upos,
 )
 from resources.um2ud_annotation.UD2UM_mapper import UD2UM_values
+
+
+# Tables above this many rows are pickled per UPOS (see pickle_unimorph_df).
+SPLIT_PICKLE_MIN_ROWS = 5_000_000
+
+
+class PosLookup(dict):
+    """{upos: DataFrame} whose slices may be loaded on first .get() (a split
+    pickle) instead of up front."""
+
+    def __init__(self, loader=None, names=()):
+        super().__init__()
+        self._loader = loader
+        self._names = frozenset(names)
+
+    def get(self, key, default=None):
+        if key not in self and key in self._names:
+            self[key] = self._loader(key)
+        return super().get(key, default)
 
 
 @lru_cache(maxsize=None)
@@ -570,27 +591,101 @@ class UnimorphInflector:
 
         return df
 
-    def load_unimorph_pickle(
-        self, pickle_path: str, filter: Dict[str, List[str]]
-    ) -> pd.DataFrame:
-        path = os.path.join(self.resource_dir, pickle_path, f"{self.langcode}.pickle")
-        if not os.path.isfile(path):
-            if self.verbose:
-                print(f"UM Pickle not found at {path}")
-            return None
-        df = pd.read_pickle(path)
+    def _finalize_pickle_df(self, df, filter: Dict[str, List[str]]):
         df = self.filter_entries(df, filter)
 
         # Convert to plain object dtype (same reason as load_unimorph above)
         for column in df.columns:
             df[column] = df[column].astype(object)
 
-        df = self.set_unk_values(df)
+        return self.set_unk_values(df)
 
-        return df
+    def _split_pickle_dir(self, pickle_path: str) -> str:
+        return os.path.join(self.resource_dir, pickle_path, f"{self.langcode}.split")
+
+    def _split_pickle_upos(self, split_dir: str) -> List[str]:
+        if not os.path.isdir(split_dir):
+            return []
+        return [
+            unquote(f[: -len(".pickle")])
+            for f in os.listdir(split_dir)
+            if f.endswith(".pickle")
+        ]
+
+    def _split_pickle_file(self, split_dir: str, upos: str) -> str:
+        return os.path.join(split_dir, f"{quote(upos, safe='')}.pickle")
+
+    def load_unimorph_pickle(
+        self, pickle_path: str, filter: Dict[str, List[str]]
+    ) -> pd.DataFrame:
+        path = os.path.join(self.resource_dir, pickle_path, f"{self.langcode}.pickle")
+        if os.path.isfile(path):
+            return self._finalize_pickle_df(pd.read_pickle(path), filter)
+
+        split_dir = self._split_pickle_dir(pickle_path)
+        available = self._split_pickle_upos(split_dir)
+        if len(available) == 0:
+            if self.verbose:
+                print(f"UM Pickle not found at {path}")
+            return None
+
+        wanted = available
+        if "upos" in filter:
+            values = self.val2ud_um("upos", filter["upos"])
+            pos_values = [val for val in values if not val.startswith("-")]
+            neg_values = [val[1:] for val in values if val.startswith("-")]
+            wanted = [
+                u for u in available
+                if (len(pos_values) == 0 or u in pos_values) and u not in neg_values
+            ]
+        if len(wanted) == 0:
+            return None
+        df = pd.concat(
+            [pd.read_pickle(self._split_pickle_file(split_dir, u)) for u in wanted],
+            ignore_index=True,
+        )
+        return self._finalize_pickle_df(df, filter)
+
+    def load_pos_lookup(self, pickle_path: str) -> Optional["PosLookup"]:
+        """{upos: DataFrame slice} lookup over a pickled table. A split pickle
+        (see pickle_unimorph_df) is read one UPOS at a time, on first use."""
+        split_dir = self._split_pickle_dir(pickle_path)
+        names = self._split_pickle_upos(split_dir)
+        if len(names) > 0 and not os.path.isfile(
+            os.path.join(self.resource_dir, pickle_path, f"{self.langcode}.pickle")
+        ):
+            def loader(upos):
+                df = self._finalize_pickle_df(
+                    pd.read_pickle(self._split_pickle_file(split_dir, upos)), {}
+                )
+                return df.dropna(axis=1, how="all")
+
+            return PosLookup(loader, names)
+
+        df = self.load_unimorph_pickle(pickle_path, {})
+        if not isinstance(df, pd.DataFrame):
+            return None
+        lookup = PosLookup()
+        for pos in df["upos"].unique():
+            lookup[pos] = df[df["upos"] == pos].dropna(axis=1, how="all")
+        return lookup
 
     def pickle_unimorph_df(self, path: str) -> None:
-        self.unimorph_df.to_pickle(path)
+        """Pickle to `path`; tables over SPLIT_PICKLE_MIN_ROWS rows are written
+        as one pickle per UPOS in a sibling `<langcode>.split/` dir instead, so
+        readers can load just the UPOS they need."""
+        split_dir = path[: -len(".pickle")] + ".split"
+        if len(self.unimorph_df) <= SPLIT_PICKLE_MIN_ROWS:
+            shutil.rmtree(split_dir, ignore_errors=True)
+            self.unimorph_df.to_pickle(path)
+            return
+
+        if os.path.isfile(path):
+            os.remove(path)
+        shutil.rmtree(split_dir, ignore_errors=True)
+        os.makedirs(split_dir)
+        for upos, group in self.unimorph_df.groupby("upos", observed=True):
+            group.to_pickle(self._split_pickle_file(split_dir, str(upos)))
 
     def filter_entries(self, df, filter: Dict[str, List[str]]):
         """Only keep entries of a particular feature tag to speed up inflections later."""

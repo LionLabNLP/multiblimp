@@ -90,14 +90,7 @@ def get_impurity(n, min_n=300, max_n=4000, max_val=0.1, min_val=0.01):
 
 
 def get_um_lookup_table(inflector):
-    um_df = inflector.load_unimorph_pickle("unimorph/um_pickles", filter={})
-    if type(um_df)==DataFrame:
-        um_data = {pos: um_df[um_df["upos"]==pos].dropna(axis=1, how="all")
-                    for pos in um_df["upos"].unique()}
-        um_data["full"] = um_df
-    else:
-        um_data = None
-    return um_data
+    return inflector.load_pos_lookup("unimorph/um_pickles")
 
 def get_ud_lookup_table(inflector):
     """UD-derived UniMorph-schema data (expand_anno fallback for features
@@ -107,14 +100,7 @@ def get_ud_lookup_table(inflector):
     """
     if inflector.ud_inflector is None:
         return None
-    ud_df = inflector.ud_inflector.load_unimorph_pickle("ud_unimorph/ud_pickles", filter={})
-    if type(ud_df)==DataFrame:
-        ud_data = {pos: ud_df[ud_df["upos"]==pos].dropna(axis=1, how="all")
-                    for pos in ud_df["upos"].unique()}
-        ud_data["full"] = ud_df
-    else:
-        ud_data = None
-    return ud_data
+    return inflector.ud_inflector.load_pos_lookup("ud_unimorph/ud_pickles")
 
 
 def refresh_deprel_index(target_id, deprel, predictor_var, head_label="Verb",

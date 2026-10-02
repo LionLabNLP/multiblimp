@@ -441,7 +441,7 @@ def extract_node_features(
 
     # Morphological features
     # First: Try to get missing anno from Unimorph
-    if type(um_data)==dict and fetch_all:
+    if isinstance(um_data, dict) and fetch_all:
         # first check if we could even get any more anno from UM for this upos
         um_split = um_data.get(UD2UM["upos", node["upos"]], None)
         if type(um_split)==pd.DataFrame and (
@@ -452,7 +452,7 @@ def extract_node_features(
     # data (combine_um_ud's ud_inflector source) as a fallback — only reached
     # for features the UM pass above didn't already fill in, mirroring the
     # UM-first/UD-fallback precedence UnimorphInflector.inflect() uses.
-    if type(ud_data)==dict and fetch_all:
+    if isinstance(ud_data, dict) and fetch_all:
         ud_split = ud_data.get(UD2UM["upos", node["upos"]], None)
         if type(ud_split)==pd.DataFrame and (
             not all([node["feats"].get(k, False) for k in [x for x in ud_split.columns if x[0].isupper()]])):
