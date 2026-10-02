@@ -2,6 +2,7 @@ def create_html(
     rows_six, rows_binary, plot_data_six_json, plot_data_binary_json, trivial_note="",
     header_cells="", diagnostics_enabled=False,
     languages_six_json="[]", languages_binary_json="[]",
+    languages_json="[]", plot_data_json="[]",
     leaf_threshold=None, agreement_label="Subject-Verb", head_role_label="head",
     subject_label="subject", nsubj_label="nsubj", overview_href="../",
     stats_overview_href="../../index.html", show_diagnostics_panel=None,
@@ -62,8 +63,8 @@ def create_html(
     """
     if diagnostics_enabled:
         return _create_diagnostics_html(
-            plot_data_six_json, plot_data_binary_json, trivial_note,
-            languages_six_json, languages_binary_json, leaf_threshold,
+            plot_data_json, trivial_note,
+            languages_json, leaf_threshold,
             agreement_label, head_role_label, subject_label, nsubj_label,
             overview_href, stats_overview_href,
             show_diagnostics=diagnostics_enabled if show_diagnostics_panel is None else show_diagnostics_panel,
@@ -504,16 +505,16 @@ def _create_classic_html(
 
 
 def _create_diagnostics_html(
-    plot_data_six_json, plot_data_binary_json, trivial_note,
-    languages_six_json, languages_binary_json, leaf_threshold=None,
+    plot_data_json, trivial_note,
+    languages_json, leaf_threshold=None,
     agreement_label="Subject-Verb", head_role_label="head",
     subject_label="subject", nsubj_label="nsubj", overview_href="../",
     stats_overview_href="../../index.html", show_diagnostics=True,
 ):
     """Language-overview page for the SVA/agreement pipeline: same scatter
-    plot, six/binary toggle and sortable columns as the classic page, plus an
+    plot and sortable columns as the classic page (accuracy-based here), plus an
     expandable create_pairs diagnostics panel per language. Row markup is
-    built client-side from languages_six_json/languages_binary_json (one
+    built client-side from languages_json (one
     object per language, matching sva_trees.diagnostics.diagnostics_row_to_json's
     "diag" shape plus the metrics fields already computed for the classic
     page) rather than server-rendered, so colours -- which read CSS custom
@@ -532,12 +533,12 @@ def _create_diagnostics_html(
     word_order.viz_deprel.build_languages), populated independent of "diag".
     """
     threshold_badge = (
-        f'<span class="threshold-badge" title="The entropy cutoff N KEEP and the '
+        f'<span class="threshold-badge" title="The leaf-accuracy floor N KEEP and the '
         f'bucket breakdown were computed with -- a row is only “kept” if its '
-        f'leaf entropy is below this.">Keep threshold: entropy &lt; {leaf_threshold:g}</span>'
+        f'leaf’s smoothed accuracy is above this.">Keep threshold: leaf accuracy &gt; {leaf_threshold:g}</span>'
         if leaf_threshold is not None else ""
     )
-    threshold_text = f"entropy &lt; {leaf_threshold:g}" if leaf_threshold is not None else "the run's leaf-confidence filter"
+    threshold_text = f"leaf accuracy &gt; {leaf_threshold:g}" if leaf_threshold is not None else "the run's leaf-confidence filter"
     diagnostics_button_html = (
         '<button class="btn toggle-btn" id="diagnosticsBtn" type="button" aria-pressed="false" '
         'title="Show the per-language bucket breakdown row (no match / no inflection / same '
@@ -920,9 +921,9 @@ def _create_diagnostics_html(
         .c-lang  {{ width: 9rem; overflow: hidden; text-overflow: ellipsis; }}
         .c-dist  {{ width: 6.5rem; }}
         .c-base  {{ width: 6.75rem; text-align: right; }}
-        .c-reduced {{ width: 7.25rem; text-align: right; }}
-        .c-delta {{ width: 5.5rem; text-align: right; }}
-        .c-acc   {{ width: 5.25rem; text-align: right; }}
+        .c-tree  {{ width: 6.25rem; text-align: right; }}
+        .c-gain  {{ width: 5.5rem; text-align: right; }}
+        .c-test  {{ width: 6rem; text-align: right; }}
         .c-raw   {{ width: 5.25rem; text-align: right; }}
         .c-keep  {{ width: 5.25rem; text-align: right; }}
         .c-pairs {{ width: 5.25rem; text-align: right; }}
@@ -934,8 +935,8 @@ def _create_diagnostics_html(
             padding: 0.75rem 0.9rem; font-size: 0.88rem; text-transform: none; letter-spacing: 0;
             color: var(--text); font-weight: 400; font-variant-numeric: tabular-nums; white-space: nowrap;
         }}
-        .lang-row .c-base, .lang-row .c-reduced, .lang-row .c-delta,
-        .lang-row .c-acc, .lang-row .c-raw, .lang-row .c-keep, .lang-row .c-pairs {{ text-align: right; }}
+        .lang-row .c-base, .lang-row .c-tree, .lang-row .c-gain, .lang-row .c-test,
+        .lang-row .c-raw, .lang-row .c-keep, .lang-row .c-pairs {{ text-align: right; }}
         .lang-name {{
             font-weight: 600 !important; display: flex; flex-direction: column;
             align-items: flex-start; gap: 0.15rem; overflow: hidden;
@@ -1085,11 +1086,6 @@ def _create_diagnostics_html(
                     </svg>
                     <span id="conditionsBackLabel"></span>
                 </a>
-                <label for="entropyType">Entropy Type:</label>
-                <select id="entropyType">
-                    <option value="six" selected>Six-class</option>
-                    <option value="binary">Binary (majority vs. rest)</option>
-                </select>
                 <button type="button" class="theme-toggle" id="themeToggleBtn" title="Toggle light/dark theme">☾</button>
             </div>
         </div>
@@ -1104,11 +1100,11 @@ def _create_diagnostics_html(
         </div>
         <div class="controls">
             <div class="legend-group">
-                <div class="scale-legend" title="Vermilion at 0%, violet in the middle, teal at 100%. Used wherever a high percentage is good (UM/UM+UD coverage, DT Acc%, N KEEP/N RAW, N PAIRS/N KEEP, Δ Entropy/Base Entropy).">
+                <div class="scale-legend" title="Vermilion at 0%, violet in the middle, teal at 100%. Used wherever a high percentage is good (UM/UM+UD coverage, Root/Train Accuracy, N KEEP/N RAW, N PAIRS/N KEEP, share of error removed by the tree).">
                     <span class="legend-title">Coverage</span>
                     <span>0%</span><span class="bar"></span><span>100%</span>
                 </div>
-                <div class="scale-legend inverted" title="Teal at 0%, violet in the middle, vermilion at 100% — the same scale mirrored. Used in the bucket breakdown (a high % means more rows dropped out at that step) and for Base/Reduced Entropy.">
+                <div class="scale-legend inverted" title="Teal at 0%, violet in the middle, vermilion at 100% — the same scale mirrored. Used in the bucket breakdown (a high % means more rows dropped out at that step).">
                     <span class="legend-title">Item loss</span>
                     <span>0%</span><span class="bar"></span><span>100%</span>
                 </div>
@@ -1129,11 +1125,11 @@ def _create_diagnostics_html(
                     <div class="cell c-chev"></div>
                     <div class="cell c-lang sortable" data-column="name">Language</div>
                     <div class="cell c-dist" title="The language's full Yes / No / unk label mix, before the decision tree drops unk rows. Always ordered Yes → No → unk.">Distribution</div>
-                    <div class="cell c-base sortable" data-column="base" title="Entropy of the target label distribution before any splitting — the uninformed baseline.">Base Entropy</div>
-                    <div class="cell c-reduced sortable" data-column="reduced" title="Entropy remaining after fitting the decision tree; lower means the tree explains more of the outcome.">Reduced Entropy</div>
-                    <div class="cell c-delta sortable" data-column="delta" title="Base Entropy minus Reduced Entropy — how much uncertainty the tree removes, as a fraction of Base Entropy.">Δ Entropy</div>
-                    <div class="cell c-acc sortable" data-column="acc" title="The decision tree's accuracy scored on its own training data.">DT Acc%</div>
-                    <div class="cell c-raw sortable" data-column="nRaw" title="Candidate rows before the entropy/leaf-confidence filter is applied.">N RAW</div>
+                    <div class="cell c-base sortable" data-column="base" title="Smoothed accuracy of always predicting the majority class, before any splitting — the uninformed baseline.">Root Acc</div>
+                    <div class="cell c-tree sortable" data-column="tree" title="The decision tree's accuracy on the data it was fit on: (sum of each leaf's majority count + 0.5) / (N + 1) -- smoothed once for the whole dataset, same as Root Acc, so leaves are not penalised one by one.">Train Acc</div>
+                    <div class="cell c-gain sortable" data-column="gain" title="Train Acc minus Root Acc, in percentage points — how much the tree improves on always guessing the majority class on its own training data. Never negative.">Δ Acc</div>
+                    <div class="cell c-test sortable" data-column="test" title="Raw accuracy of this tree on the held-out split it was not fit on. Faded when the test split has fewer than 10 rows. Compare with Train Acc to spot overfitting.">Test Acc</div>
+                    <div class="cell c-raw sortable" data-column="nRaw" title="Candidate rows before the leaf-confidence filter is applied.">N RAW</div>
                     <div class="cell c-keep sortable" data-column="nKeep" title="Of N RAW, the rows kept after the leaf-confidence filter — the ones actually attempted.">N KEEP</div>
                     {bucket_header_html}
                     <div class="cell c-pairs sortable" data-column="nPairs" title="Rows that ended up as a correctly re-inflected minimal pair, as a fraction of N KEEP.">N PAIRS</div>
@@ -1159,11 +1155,11 @@ def _create_diagnostics_html(
           <h3>Table columns</h3>
           <dl class="legend-list">
             <div><dt>Distribution</dt><dd>The language's full Yes / No / unk label mix, before the decision tree drops unk rows. Always ordered Yes &rarr; No &rarr; unk, coloured to match the tree pages. Hover a bar for exact percentages.</dd></div>
-            <div><dt>Base Entropy</dt><dd>Entropy of the target label distribution before any splitting. The uninformed baseline. Coloured on the item-loss scale (teal = low = good), relative to 1 bit or the highest base entropy in this table, whichever is larger.</dd></div>
-            <div><dt>Reduced Entropy</dt><dd>Entropy remaining after fitting the decision tree; lower means the tree explains more of the outcome. Coloured on the item-loss scale (teal = low = good), on the same 1-bit-or-highest-base-entropy scale as Base Entropy above, so the two columns are directly comparable -- teal here means a language landed on a meaningfully low absolute entropy, not just a low entropy relative to its own (possibly already-low) starting point.</dd></div>
-            <div><dt>Δ Entropy</dt><dd>Base Entropy minus Reduced Entropy. How much uncertainty the tree removes. Coloured on the coverage scale (teal = good), by what fraction of the base entropy that delta represents, not the raw number. 0.3 off a base of 0.4 is a much bigger win than 0.3 off a base of 2.0.</dd></div>
-            <div><dt>DT Acc%</dt><dd>The decision tree's accuracy scored on its own training data. Coloured on the coverage scale (teal = high = good).</dd></div>
-            <div><dt>N RAW</dt><dd>Candidate rows before the entropy/leaf-confidence filter is applied. Not coloured. There's no cheap per-language reference point (like treebank size) to scale it against, and not informative enough to be worth adding one for. A language with more than zero but fewer than 10 is left out of this table entirely and listed instead, with its full label distribution, in the "too few or uninformative agreement labels" note above &mdash; still real data, just too little of it for this language &amp; condition to draw much of a conclusion from.</dd></div>
+            <div><dt>Root Acc</dt><dd>Smoothed accuracy (+0.5 per class) of always predicting the majority class before any splitting &mdash; the root node&rsquo;s own accuracy. The uninformed baseline. Coloured on the coverage scale between 50% and 100% (teal = high).</dd></div>
+            <div><dt>Train Acc</dt><dd>The decision tree&rsquo;s accuracy on its own training data: (sum of each leaf&rsquo;s majority count + 0.5) / (N + 1). Smoothed once for the whole dataset, exactly like Root Acc, so the two are directly comparable and extra leaves are not penalised one by one (the per-leaf <code>acc</code> shown on the tree page is smoothed per leaf, for the keep test, and so does not average to this). Same colour scale as Root Acc.</dd></div>
+            <div><dt>Δ Acc</dt><dd>Train Acc minus Root Acc, in percentage points; never negative. Coloured on the coverage scale (teal = good) by the share of the root&rsquo;s remaining error the tree removed, i.e. gain &divide; (100% &minus; Root Acc), clamped to 0&ndash;100%. +1 point off a root accuracy of 98% is a much bigger win than +1 point off a root accuracy of 60%.</dd></div>
+            <div><dt>Test Acc</dt><dd>Raw accuracy of the same tree on the held-out split it was not fit on. Compare with Train Acc to spot overfitting: a large gap means the tree learned its training rows more than the pattern. Coloured on the same 50&ndash;100% scale, and faded (with a tooltip) when the test split has fewer than 10 rows, since that figure is then too noisy to mean much. Blank when the model has no recorded test split.</dd></div>
+            <div><dt>N RAW</dt><dd>Candidate rows before the leaf-confidence filter is applied. Not coloured. There's no cheap per-language reference point (like treebank size) to scale it against, and not informative enough to be worth adding one for. A language with more than zero but fewer than 10 is left out of this table entirely and listed instead, with its full label distribution, in the "too few or uninformative agreement labels" note above &mdash; still real data, just too little of it for this language &amp; condition to draw much of a conclusion from.</dd></div>
             <div><dt>N KEEP</dt><dd>Of those, the rows kept after the leaf-confidence filter ({threshold_text}). The ones actually attempted. Coloured on the coverage scale, as a fraction of N RAW &mdash; faded (with a hover tooltip) when N RAW is below 10, since that fraction is too noisy to mean much at that size (2/2 reads as a perfect 100% off pure small-sample luck). The colour still shows, just dimmed, rather than disappearing outright. A language whose strict pass alone wasn't enough and got a laxer, depth-aware retry (sva_trees.second_chance) gets a "retried" tag under its name &mdash; N KEEP then reflects that retry's own per-leaf thresholds, whether or not it produced any pairs.</dd></div>
             <div><dt>N PAIRS</dt><dd>Rows that ended up as a correctly re-inflected minimal pair. Coloured on the coverage scale, as a fraction of N KEEP, with the same under-10 fade as N KEEP above (checked against N KEEP this time, not N RAW). Clickable when example rows are available &mdash; opens the same examples modal as the bucket breakdown.</dd></div>
           </dl>
@@ -1172,7 +1168,7 @@ def _create_diagnostics_html(
         <div class="legend-section">
           <h3>Results (below-row panel)</h3>
           <dl class="legend-list">
-            <div><dt># UD candidates (raw)</dt><dd>Same value as N RAW above. Candidate rows before the entropy/leaf-confidence filter.</dd></div>
+            <div><dt># UD candidates (raw)</dt><dd>Same value as N RAW above. Candidate rows before the leaf-confidence filter.</dd></div>
             <div><dt># UD candidates (kept)</dt><dd>Same value as N KEEP above. The rows kept after that filter.</dd></div>
             <div><dt># forms of interest</dt><dd>Distinct {head_role_label}/{nsubj_label} forms eligible for this prediction target at all, whether or not they ended up labelled "Yes".</dd></div>
             <div><dt>% covered by UM</dt><dd>Share of those forms found directly in UniMorph's inflection tables.</dd></div>
@@ -1219,8 +1215,8 @@ def _create_diagnostics_html(
         <div class="legend-section">
           <h3>Colour scales</h3>
           <dl class="legend-list">
-            <div><dt>Coverage</dt><dd>Vermilion (red) at 0%, violet around the middle, teal at 100%. Used where a high percentage is good (UM/UM+UD coverage, DT Acc%, N KEEP as a fraction of N RAW, N PAIRS as a fraction of N KEEP, and Δ Entropy as a fraction of Base Entropy).</dd></div>
-            <div><dt>Item loss</dt><dd>Teal at 0%, violet around the middle, vermilion at 100%, same scale mirrored. Used in the bucket breakdown (a high percentage means more rows dropped out at that step) and for Base/Reduced Entropy, scaled against the highest base entropy shown in this table rather than a fixed 0&ndash;100 range.</dd></div>
+            <div><dt>Coverage</dt><dd>Vermilion (red) at 0%, violet around the middle, teal at 100%. Used where a high percentage is good (UM/UM+UD coverage, Root/Train Accuracy between 50% and 100%, N KEEP as a fraction of N RAW, N PAIRS as a fraction of N KEEP, and Δ Accuracy as a share of the root&rsquo;s remaining error).</dd></div>
+            <div><dt>Item loss</dt><dd>Teal at 0%, violet around the middle, vermilion at 100%, same scale mirrored. Used in the bucket breakdown (a high percentage means more rows dropped out at that step).</dd></div>
           </dl>
         </div>
       </div>
@@ -1279,8 +1275,8 @@ def _create_diagnostics_html(
       btn.style.display = '';
     }})();
 
-    const LANGUAGES = {{ six: {languages_six_json}, binary: {languages_binary_json} }};
-    const plotData = {{ six: {plot_data_six_json}, binary: {plot_data_binary_json} }};
+    const LANGUAGES = {languages_json};
+    const plotData = {plot_data_json};
     const SHOW_DIAGNOSTICS = {str(show_diagnostics).lower()};
 
     const BUCKETS = [
@@ -1384,31 +1380,20 @@ def _create_diagnostics_html(
       return pctColor(Math.max(0, Math.min(100, pct)));
     }}
 
-    // Entropy has no fixed 0-100 scale (its ceiling depends on how many
-    // labels the target has), so colour it relative to a ceiling rather
-    // than assuming a theoretical max -- maxBaseEntropy (table-wide,
-    // computed in renderAll/generate_rows below), shared by both Base and
-    // Reduced Entropy so they're directly comparable at a glance. invert
-    // stays at its default true for both: lower is better, teal at the low
-    // end.
-    function entropyColor(value, maxEntropy, invert = true) {{
-      return pctColor(Math.min(100, (value / maxEntropy) * 100), invert);
+    // A binary tree's accuracy lives in [50%, 100%], so scale colour over that
+    // span rather than 0-100 (otherwise every language reads as teal).
+    function accuracyColor(acc) {{
+      return pctColor(Math.max(0, Math.min(100, ((acc - 0.5) / 0.5) * 100)));
     }}
 
-    // Delta entropy isn't meaningful in isolation -- 0.3 off a base of 0.4
-    // is a much bigger win than 0.3 off a base of 2.0 -- so colour it by
-    // what fraction of the base entropy got explained away instead.
-    //
-    // base == 0 means there was no entropy to explain in the first place
-    // (e.g. a single-sample or perfectly pure language) -- that's a
-    // trivial, not a meritorious, 0.000, and must not be painted the same
-    // "fully explained" colour as a language whose tree genuinely explained
-    // away 100% of a real base entropy. Returns null for that case; callers
-    // should fall back to a neutral/muted colour instead of colouring it.
-    function deltaColor(base, delta) {{
-      if (base <= 0) return null;
-      const pct = Math.max(0, Math.min(100, (delta / base) * 100));
-      return pctColor(pct);
+    // Gain isn't meaningful in isolation -- +1 point off a root accuracy of 98% is a much
+    // bigger win than +1 point off a root accuracy of 60% -- so colour it by the share
+    // of the root's remaining error the tree removed. Null when there was no
+    // error left to remove (callers fall back to a muted colour).
+    function gainColor(base, gain) {{
+      const headroom = 1 - base;
+      if (headroom <= 0) return null;
+      return pctColor(Math.max(0, Math.min(100, (gain / headroom) * 100)));
     }}
 
     function chevronSvg() {{
@@ -1471,7 +1456,7 @@ def _create_diagnostics_html(
           <div>
             <p class="section-label">Coverage &amp; volume</p>
             <div class="stat-rows">
-              <div class="stat" style="grid-column:1;grid-row:1;"><span class="label" title="Candidate rows before the entropy/leaf-confidence filter is applied. Same value as N RAW in the table."># UD candidates (raw)</span><span class="value">${{lang.nRaw.toLocaleString()}}</span></div>
+              <div class="stat" style="grid-column:1;grid-row:1;"><span class="label" title="Candidate rows before the leaf-confidence filter is applied. Same value as N RAW in the table."># UD candidates (raw)</span><span class="value">${{lang.nRaw.toLocaleString()}}</span></div>
               <div class="stat" style="grid-column:2;grid-row:1;"><span class="label" title="Distinct {head_role_label}/{nsubj_label} forms eligible for this prediction target at all, whether or not they ended up labelled &quot;Yes&quot;."># forms of interest</span><span class="value">${{diag ? diag.nForms.toLocaleString() : "—"}}</span></div>
 
               <div class="stat" style="grid-column:1;grid-row:2;"><span class="label" title="Share of forms of interest covered once the UD-derived fallback is added on top of UniMorph.">% covered by UM+UD</span><span class="value"${{diag ? ` style="color:${{pctColor(diag.pctUMUD)}}"` : ""}}>${{diag ? diag.pctUMUD.toFixed(1) + "%" : "—"}}</span></div>
@@ -1515,7 +1500,6 @@ def _create_diagnostics_html(
     }}
 
     // ---- state ----
-    let currentEntropyType = "six";
     let currentSort = {{ column: "name", ascending: true }};
     const openResults = new Set();   // language names with the Results panel open
     const openBuckets = new Set();   // language names with the bucket breakdown open
@@ -1523,9 +1507,9 @@ def _create_diagnostics_html(
     const SORT_ACCESSORS = {{
       name: (l) => l.name.toLowerCase(),
       base: (l) => l.base,
-      reduced: (l) => l.reduced,
-      delta: (l) => l.delta,
-      acc: (l) => l.acc,
+      tree: (l) => l.tree,
+      gain: (l) => l.gain,
+      test: (l) => (Number.isNaN(l.test) ? -1 : l.test),
       nRaw: (l) => l.nRaw,
       nKeep: (l) => l.nKeep,
       nPairs: (l) => l.nPairs,
@@ -1547,42 +1531,7 @@ def _create_diagnostics_html(
     }}
 
     function renderAll() {{
-      const list = LANGUAGES[currentEntropyType];
-      // Base entropy: anchored at 1 bit (the true ceiling for a binary
-      // Yes/No split) rather than just "worst on screen" -- otherwise a
-      // table where every language happens to sit close together stretches
-      // that narrow band across the whole gradient and makes mediocre
-      // values look artificially bad. Math.max(...) still wins when the
-      // real data exceeds 1 (possible for six-class entropy, never binary).
-      // Lower is better, teal at the low end.
-      //
-      // Reduced entropy: scaled on the SAME table-wide ceiling as Base
-      // Entropy, deliberately not each row's own base (that was the
-      // previous scheme). reduced/base and delta/base are complementary
-      // fractions of the same number, so scaling Reduced per-row against
-      // its own base made its colour exactly reproduce Delta Entropy's (t
-      // and 1-t cancel through the two invert directions) -- zero
-      // additional information over the Δ Entropy column, since it's
-      // literally the same colour every time, not just visually similar.
-      // Scaling against maxBaseEntropy instead makes Base/Reduced/Delta
-      // three genuinely distinct reads: Base = absolute starting
-      // uncertainty, Delta = fraction of that language's own uncertainty
-      // explained away (relative effort), Reduced = absolute uncertainty
-      // actually left over -- so at a glance you can see which languages
-      // landed on a meaningfully low entropy in absolute terms, not just
-      // which ones improved a lot relatively.
-      //
-      // .filter(Number.isFinite): defensive -- a row with no fitted tree
-      // would have base = NaN by design (there's no real entropy to report
-      // for it), and every such row is omitted from the table entirely
-      // (see generate_html_deprel_index's trivial/undersized/sparse
-      // handling) before this ever runs, so this should never actually
-      // trigger. Math.max with even one NaN argument returns NaN, no matter
-      // how many real numbers are also present -- left unfiltered, a single
-      // such row poisoned this table-wide ceiling and broke Base/Reduced
-      // Entropy's colour for every OTHER language's row too, not just the
-      // trivial one's own (already-handled-separately) blank cell.
-      const maxBaseEntropy = Math.max(1, ...list.map(l => l.base).filter(Number.isFinite));
+      const list = LANGUAGES;
       const acc = SORT_ACCESSORS[currentSort.column];
       // Space-/comma-separated terms, case-insensitive, OR'd -- same matching
       // as the stats overview's language filter.
@@ -1611,7 +1560,7 @@ def _create_diagnostics_html(
           ? `<a class="lang-name-text" href="${{lang.langUrl}}"${{nameStyle}}>${{lang.name}}</a>`
           : `<span class="lang-name-text"${{nameStyle}}>${{lang.name}}</span>`;
         const retriedBadge = lang.retried
-          ? `<span class="retried-badge" title="sva_trees.second_chance retried this language at a laxer, depth-aware entropy bar after the strict pass alone wasn't enough.">retried</span>`
+          ? `<span class="retried-badge" title="sva_trees.second_chance retried this language at a laxer, depth-aware accuracy floor after the strict pass alone wasn't enough.">retried</span>`
           : "";
 
         const hasPairsExamples = lang.diag && lang.diag.examples && lang.diag.examples.correct_swaps && lang.nPairs > 0;
@@ -1631,29 +1580,33 @@ def _create_diagnostics_html(
           ? `${{(lang.nPairs - nPairsSecond).toLocaleString()}} from the strict first pass, ${{nPairsSecond.toLocaleString()}} from a second_chance retry`
           : "";
 
-        // Defensive: a language with no fitted tree would have base/reduced/
-        // delta/acc arrive as NaN rather than a real number, but every such
-        // language is omitted from the table entirely before this ever runs
-        // (see generate_html_deprel_index) -- render those as a blank dash
-        // instead of "NaN"/"NaN%", and skip the color-scale functions (which
-        // assume a real number) in favor of a plain muted tone, just in case.
-        const baseText = Number.isNaN(lang.base) ? "—" : lang.base.toFixed(3);
-        const reducedText = Number.isNaN(lang.reduced) ? "—" : lang.reduced.toFixed(3);
-        const deltaText = Number.isNaN(lang.delta) ? "—" : lang.delta.toFixed(3);
-        const accText = Number.isNaN(lang.acc) ? "—" : (lang.acc * 100).toFixed(1) + "%";
-        const baseColor = Number.isNaN(lang.base) ? "var(--text-muted)" : entropyColor(lang.base, maxBaseEntropy);
-        const reducedColor = Number.isNaN(lang.reduced) ? "var(--text-muted)" : entropyColor(lang.reduced, maxBaseEntropy);
-        const deltaColorVal = Number.isNaN(lang.delta) ? "var(--text-muted)" : (deltaColor(lang.base, lang.delta) || "var(--text-muted)");
-        const accColor = Number.isNaN(lang.acc) ? "var(--text-muted)" : pctColor(lang.acc * 100);
+        // Defensive: a language with no fitted tree would have base/tree/gain
+        // arrive as NaN rather than a real number, but every such language is
+        // omitted from the table entirely before this ever runs (see
+        // generate_html_deprel_index) -- render those as a blank dash and a
+        // plain muted tone, just in case.
+        const pctText = (v) => Number.isNaN(v) ? "—" : (v * 100).toFixed(1) + "%";
+        const baseText = pctText(lang.base);
+        const treeText = pctText(lang.tree);
+        const gainText = Number.isNaN(lang.gain) ? "—"
+          : (lang.gain >= 0 ? "+" : "−") + Math.abs(lang.gain * 100).toFixed(1) + " pp";
+        const baseColor = Number.isNaN(lang.base) ? "var(--text-muted)" : accuracyColor(lang.base);
+        const treeColor = Number.isNaN(lang.tree) ? "var(--text-muted)" : accuracyColor(lang.tree);
+        const testText = pctText(lang.test);
+        const testDim = lang.testN < MIN_N_FOR_COLOR;
+        const testColor = Number.isNaN(lang.test) ? "var(--text-muted)" : accuracyColor(lang.test);
+        const testStyle = Number.isNaN(lang.test) ? ` style="color:${{testColor}}"`
+          : dimColorStyle(testColor, testDim, `test split has only ${{lang.testN}} rows — too small for this figure to be meaningful`, `n=${{lang.testN}} held-out rows`);
+        const gainColorVal = Number.isNaN(lang.gain) ? "var(--text-muted)" : (gainColor(lang.base, lang.gain) || "var(--text-muted)");
 
         langRow.innerHTML = `
           <div class="cell c-chev"><span class="chevron">${{chevronSvg()}}</span></div>
           <div class="cell c-lang lang-name">${{nameHtml}}${{retriedBadge}}</div>
           <div class="cell c-dist">${{renderDistBar((lang.diag && lang.diag.labelDistribution) || lang.labelDistribution)}}</div>
           <div class="cell c-base" style="color:${{baseColor}}">${{baseText}}</div>
-          <div class="cell c-reduced" style="color:${{reducedColor}}">${{reducedText}}</div>
-          <div class="cell c-delta" style="color:${{deltaColorVal}}">${{deltaText}}</div>
-          <div class="cell c-acc" style="color:${{accColor}}">${{accText}}</div>
+          <div class="cell c-tree" style="color:${{treeColor}}">${{treeText}}</div>
+          <div class="cell c-gain" style="color:${{gainColorVal}}">${{gainText}}</div>
+          <div class="cell c-test"${{testStyle}}>${{testText}}</div>
           <div class="cell c-raw">${{lang.nRaw.toLocaleString()}}</div>
           <div class="cell c-keep"${{dimColorStyle(investmentColor(lang.nKeep, lang.nRaw), lang.nRaw < MIN_N_FOR_COLOR, `N RAW is only ${{lang.nRaw}} — too small a sample for this ratio to be meaningful`, nKeepSplitTitle)}}>${{lang.nKeep.toLocaleString()}}</div>
           {bucket_row_html}
@@ -1709,7 +1662,7 @@ def _create_diagnostics_html(
       const shouldOpen = Array.from(rows).some(r => !r.classList.contains("is-open"));
       rows.forEach(r => r.classList.toggle("is-open", shouldOpen));
       document.querySelectorAll(".detail-row").forEach(r => r.classList.toggle("is-open", shouldOpen));
-      LANGUAGES[currentEntropyType].forEach(l => {{
+      LANGUAGES.forEach(l => {{
         if (shouldOpen) openResults.add(l.name); else openResults.delete(l.name);
       }});
       resultsBtn.classList.toggle("active", shouldOpen);
@@ -1720,7 +1673,7 @@ def _create_diagnostics_html(
       const rows = document.querySelectorAll(".lang-row");
       const shouldOpen = Array.from(rows).some(r => !r.classList.contains("buckets-open"));
       rows.forEach(r => r.classList.toggle("buckets-open", shouldOpen));
-      LANGUAGES[currentEntropyType].forEach(l => {{
+      LANGUAGES.forEach(l => {{
         if (shouldOpen) openBuckets.add(l.name); else openBuckets.delete(l.name);
       }});
       syncHeaderBuckets();
@@ -1777,7 +1730,7 @@ def _create_diagnostics_html(
     }}
 
     function openExamplesModal(langName, bucketKey) {{
-      const lang = LANGUAGES[currentEntropyType].find(l => l.name === langName);
+      const lang = LANGUAGES.find(l => l.name === langName);
       if (!lang || !lang.diag || !lang.diag.examples || !lang.diag.examples[bucketKey]) return;
       examplesTitle.textContent = `${{lang.name}} — ${{bucketLabel(bucketKey)}}`;
       const n = bucketCount(lang, bucketKey);
@@ -1823,42 +1776,41 @@ def _create_diagnostics_html(
     }});
 
     // ---- scatter plot: unchanged from the classic page ----
-    function renderPlot(entropyType) {{
-      const data = plotData[entropyType];
+    function renderPlot() {{
+      const data = plotData;
       const trace = {{
-        x: data.map(d => d.base), y: data.map(d => d.reduced),
+        x: data.map(d => d.base), y: data.map(d => d.tree),
         mode: 'markers', type: 'scatter', text: data.map(d => d.name),
         customdata: data.map(d => [d.url, d.n_items]),
-        hovertemplate: '<b>%{{text}}</b><br>Base Entropy: %{{x:.3f}}<br>Reduced Entropy: %{{y:.3f}}<br>N Items: %{{customdata[1]:,}}<br><extra></extra>',
+        hovertemplate: '<b>%{{text}}</b><br>Root Acc: %{{x:.3f}}<br>Train Acc: %{{y:.3f}}<br>N Items: %{{customdata[1]:,}}<br><extra></extra>',
         marker: {{
           size: data.map(d => d.n_items), sizemode: 'area',
           sizeref: 2 * Math.max(...data.map(d => d.n_items)) / (40 ** 2), sizemin: 4,
           color: data.map(d => d.color), opacity: 0.6, line: {{ color: '#1e40af', width: 1 }},
         }},
       }};
+      // y = x reference: points above it are languages where the tree beat the baseline.
+      const diagonal = {{
+        x: [0.5, 1], y: [0.5, 1], mode: 'lines', type: 'scatter', hoverinfo: 'skip',
+        line: {{ color: CHART_THEME.border, width: 1, dash: 'dash' }}, showlegend: false,
+      }};
       const layout = {{
-        title: {{ text: 'Base Entropy vs. Reduced Entropy', font: {{ family: 'DM Sans, system-ui, sans-serif', size: 16, color: CHART_THEME.text }} }},
-        xaxis: {{ title: 'Base Entropy', gridcolor: CHART_THEME.border, zeroline: false }},
-        yaxis: {{ title: 'Reduced Entropy', gridcolor: CHART_THEME.border, zeroline: false }},
+        title: {{ text: 'Root Accuracy vs. Train Accuracy', font: {{ family: 'DM Sans, system-ui, sans-serif', size: 16, color: CHART_THEME.text }} }},
+        xaxis: {{ title: {{ text: 'Root Accuracy', standoff: 14 }}, gridcolor: CHART_THEME.border, zeroline: false, range: [0.45, 1.02], autorange: false, tickvals: [0.5, 0.6, 0.7, 0.8, 0.9, 1.0], automargin: true }},
+        yaxis: {{ title: {{ text: 'Train Accuracy', standoff: 14 }}, gridcolor: CHART_THEME.border, zeroline: false, range: [0.45, 1.02], autorange: false, tickvals: [0.5, 0.6, 0.7, 0.8, 0.9, 1.0], automargin: true }},
         plot_bgcolor: 'rgba(0,0,0,0)', paper_bgcolor: 'rgba(0,0,0,0)',
         font: {{ family: 'DM Sans, system-ui, sans-serif', color: CHART_THEME.text }},
-        hovermode: 'closest', margin: {{ t: 50, r: 30, b: 50, l: 60 }},
+        hovermode: 'closest', showlegend: false, margin: {{ t: 50, r: 30, b: 50, l: 60 }},
       }};
       const config = {{ responsive: true, displayModeBar: true, modeBarButtonsToRemove: ['lasso2d', 'select2d'], displaylogo: false }};
-      Plotly.newPlot('scatterPlot', [trace], layout, config);
+      Plotly.newPlot('scatterPlot', [diagonal, trace], layout, config);
       document.getElementById('scatterPlot').on('plotly_click', function(data) {{
-        const url = data.points[0].customdata[0];
+        const url = data.points[0].customdata && data.points[0].customdata[0];
         if (url) window.location.href = url;
       }});
     }}
 
-    document.getElementById('entropyType').addEventListener('change', (e) => {{
-      currentEntropyType = e.target.value;
-      renderPlot(currentEntropyType);
-      renderAll();
-    }});
-
-    renderPlot(currentEntropyType);
+    renderPlot();
     renderAll();
     </script>
 </body>

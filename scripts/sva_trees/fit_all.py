@@ -46,6 +46,7 @@ from sva_trees.conditions import CONDITIONS
 
 CANDIDATE_CONFIG = "../../resources/sva_agreement_config.json"
 FIXED_FLAGS = ["--include_excluded"]
+NO_INDEX_FLAG = ["--no_index"]  # indexes are built once, in parallel, after the loop
 
 ORDER = [f"{prefix}{suffix}" for prefix in GROUP_PREFIXES for suffix in ("Na", "Pa", "Ga")]
 assert set(ORDER) == set(CONDITIONS)
@@ -82,7 +83,14 @@ def main():
                              "--candidates, entries must be \"family:feature\"; without it, "
                              "a fixed condition id (e.g. svNa).")
     parser.add_argument("--skip_indexes", action="store_true",
-                        help="Don't run scripts/generate_html_indexes.py afterwards")
+                        help="Build no indexes at all: every fit gets --no_index and "
+                             "scripts/overview/generate_html_indexes.py is not run "
+                             "afterwards (run it, or overview/run_all.sh, yourself)")
+    parser.add_argument("--index_jobs", type=int, default=None,
+                        help="Parallel workers for the final index build (default: "
+                             "generate_html_indexes.py's own, min(cpu_count, 8)); "
+                             "separate from -j, which parallelises languages "
+                             "within each fit")
     args, passthrough = parser.parse_known_args()
 
     if args.candidates:
@@ -101,6 +109,7 @@ def main():
         target_argvs = [[cid] for cid in conditions]
         names = conditions
         flags = FIXED_FLAGS + passthrough
+    flags = [*flags, *NO_INDEX_FLAG]
 
     failed = []
     for name, target_argv in zip(names, target_argvs):
@@ -110,8 +119,13 @@ def main():
             failed.append(name)
 
     if not args.skip_indexes:
-        print("\n=== generate_html_indexes.py", flush=True)
-        subprocess.run([sys.executable, "generate_html_indexes.py"], cwd="..")
+        # Every fit above skipped its own index (--no_index); this builds all
+        # of them once, in parallel, plus the cross-pipeline overview.
+        cmd = [sys.executable, "../overview/generate_html_indexes.py"]
+        if args.index_jobs:
+            cmd += ["-j", str(args.index_jobs)]
+        print(f"\n=== {' '.join(cmd)}", flush=True)
+        subprocess.run(cmd)
 
     if failed:
         print(f"\nFailed: {', '.join(failed)}")

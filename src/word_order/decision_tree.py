@@ -14,7 +14,7 @@ from sklearn.base import BaseEstimator, TransformerMixin
 import numpy as np
 import pandas as pd
 
-from .entropy import order_entropy
+from .entropy import order_entropy, smoothed_accuracy
 from .prediction_target import PredictionTarget
 from .process_treebank import META_FEATURES, is_feature_col
 from .utils import get_all_orders
@@ -508,7 +508,7 @@ def set_dt_features_in_df(
         threshold: entropy threshold below which a leaf prediction is considered confident.
 
     Returns:
-        A new DataFrame with added columns: leaf_id, leaf_full_entropy, leaf_top1_entropy,
+        A new DataFrame with added columns: leaf_id, leaf_full_entropy, leaf_top1_entropy, leaf_top1_acc,
         per-class entropies, leaf_rule, leaf_decision, keep, num_swaps, swap_order_candidates.
     """
     X_trans = model.named_steps["preprocessor"].transform(df)
@@ -554,12 +554,18 @@ def set_dt_features_in_df(
     }
 
     leaf_top1_entropies = []
+    leaf_top1_accs = []
     for leaf_id, deprel_order in zip(leaf_ids, predictor_series):
         leaf_distribution = leaf_distributions[leaf_id]
         n_right = leaf_distribution[class_to_idx[deprel_order]]
         n_wrong = sum(leaf_distribution) - n_right
         leaf_top1_entropies.append(order_entropy(n_right, n_wrong))
+        leaf_top1_accs.append(smoothed_accuracy(n_right, n_right + n_wrong))
     new_cols["leaf_top1_entropy"] = leaf_top1_entropies
+    # Smoothed accuracy of this row's own class in its leaf: the agreement
+    # pipelines' keep rule (sva_trees/npa create_pairs, second_chance) reads
+    # this; word-order callers keep using the entropy columns above.
+    new_cols["leaf_top1_acc"] = leaf_top1_accs
 
     tree_rules = get_tree_rules(model, tight=True)
     new_cols["leaf_rule"] = [tree_rules[node] for node in leaf_ids]

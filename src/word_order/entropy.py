@@ -164,3 +164,46 @@ def leaf_weighted_entropy(
         weighted_entropy += leaf_weight * leaf_entropy
 
     return weighted_entropy
+
+
+# --- accuracy-based leaf/tree measures (add-`smoothing` per class) ----------
+
+# Strict leaf-keep floor: a leaf is kept when its smoothed accuracy is above
+# this. A pure leaf of min_samples_leaf=10 has smoothed accuracy 10.5/11 = 0.955.
+DEFAULT_LEAF_MIN_ACCURACY = 0.95
+
+
+def smoothed_accuracy(n_right: float, n_total: float, smoothing: float = 0.5) -> float:
+    """Add-`smoothing` accuracy of "right vs. rest": (n_right + s) / (n_total + 2s).
+    Same smoothed p that order_entropy(n_right, n_total - n_right) uses."""
+    return (n_right + smoothing) / (n_total + 2 * smoothing)
+
+
+def calculate_base_accuracy(df: pd.DataFrame, target_col: str, smoothing: float = 0.5) -> float:
+    """Smoothed accuracy of always predicting the majority class (the
+    pre-split baseline) -- i.e. the root node's own smoothed accuracy."""
+    counts = df[target_col].astype(str).value_counts()
+    return smoothed_accuracy(counts.iloc[0], len(df), smoothing)
+
+
+def pooled_leaf_accuracy(leaf_ids: np.ndarray, df: pd.DataFrame, target_col: str,
+                         smoothing: float = 0.5) -> float:
+    """Train accuracy of the tree, smoothed ONCE over the whole dataset: (sum of each
+    leaf's majority count + s) / (N + 2s). Same smoothing as calculate_base_
+    accuracy, so base and tree are directly comparable and the gain
+    (tree - base) can't go negative -- smoothing each leaf separately would
+    stack one more penalty per leaf and dip below base for small trees.
+    Per-leaf smoothed accuracy is still what the keep rule and the tree
+    page's leaf labels use (see smoothed_accuracy)."""
+    labels = df[target_col].astype(str)
+    majority = sum(
+        labels[leaf_ids == leaf].value_counts().iloc[0] for leaf in np.unique(leaf_ids)
+    )
+    return smoothed_accuracy(majority, len(df), smoothing)
+
+
+def calculate_tree_accuracy(dt: Pipeline, df: pd.DataFrame, target_col: str,
+                            smoothing: float = 0.5) -> float:
+    X = df.drop(columns=[target_col])
+    leaf_ids = dt.named_steps["clf"].apply(dt.named_steps["preprocessor"].transform(X))
+    return pooled_leaf_accuracy(leaf_ids, df, target_col, smoothing=smoothing)

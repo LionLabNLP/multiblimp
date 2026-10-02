@@ -583,7 +583,7 @@ def render(data: dict) -> str:
         .nav-link:hover {{ border-color: var(--accent); background: var(--accent-soft); }}
         /* Upscaled variant for the header's own CTA -- .nav-link itself stays
            at its original size since it's also reused for the small
-           per-condition "decision tree & entropy detail" links inside each
+           per-condition "decision tree overview" links inside each
            category tab, which shouldn't grow along with this one. */
         .nav-link-lg {{
             font-size: 1.05rem;
@@ -592,7 +592,7 @@ def render(data: dict) -> str:
             border-radius: 8px;
         }}
         /* Filled instead of outlined -- for the picked-condition's own
-           "decision tree & entropy detail" link, so it reads as the
+           "decision tree overview" link, so it reads as the
            panel's one actionable next step rather than blending in with
            plain text next to it. */
         .nav-link-accent {{
@@ -703,8 +703,8 @@ def render(data: dict) -> str:
             border-radius: 7px;
         }}
 
-        /* Groups the condition picker with its own "decision tree & entropy
-           detail" button (moved here from below the chart, right after this
+        /* Groups the condition picker with its own "decision tree
+           overview" button (moved here from below the chart, right after this
            panel) in one visually distinct region -- makes it read as "one
            active control that switches what's shown below" instead of a
            row of buttons floating on the same card background as everything
@@ -2632,7 +2632,7 @@ def render(data: dict) -> str:
             // funnel block.
             document.getElementById(`cat-${{slug}}-detail-link`).innerHTML = `
                 <a class="nav-link nav-link-accent" href="${{decisionTreeUrl(state.condId, state.isNpaSub)}}" target="_blank" rel="noopener">
-                    ${{info.label}} decision tree &amp; entropy detail &rarr;
+                    ${{info.label}} decision tree overview &rarr;
                 </a>
             `;
             document.getElementById(`cat-${{slug}}-ministats`).innerHTML = `

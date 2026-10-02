@@ -15,7 +15,7 @@ from word_order.prediction_target import PredictionTarget, nsubj_target
 from word_order.process_treebank import resolve_layered_head_key, slot_suffixes
 from word_order.utils import build_grew_link
 from word_order.decision_tree import UNK_LABELS
-from word_order.entropy import default_leaf_threshold
+from word_order.entropy import DEFAULT_LEAF_MIN_ACCURACY
 from multiblimp.unimorph import load_inflector
 from multiblimp.agreement_pipeline_utils import match_casing
 
@@ -758,7 +758,7 @@ def process_item(
 
 def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_target,
                   swap_target=["head",], context_inflector=None, max_num_of_pairs=None,
-                  leaf_threshold=default_leaf_threshold(10), save_to=None,
+                  leaf_threshold=DEFAULT_LEAF_MIN_ACCURACY, save_to=None,
                   max_examples=5, num_lemma=None, num_form=None, full_df=None,
                   unk_counts=None, label_distribution=None, head_label=None,
                   extra_meta=None, second_chance_threshold=None):
@@ -767,8 +767,8 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
 
     Args:
         dt_df (pd.DataFrame): Decision tree dataframe containing the rows to process.
-        leaf_threshold: entropy cutoff below which a leaf's prediction counts as "keep".
-            Recomputed here from leaf_top1_entropy/leaf_decision rather than trusting the
+        leaf_threshold: smoothed-accuracy floor above which a leaf's prediction counts as "keep".
+            Recomputed here from leaf_top1_acc/leaf_decision rather than trusting the
             df's precomputed `keep` column, so it can be tuned without re-running fit_dt.
             Either one cutoff for every row, or (sva_trees.second_chance's depth-aware
             retry) a {leaf_id: that leaf's own cutoff} map.
@@ -805,7 +805,7 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
             have needed to clear without a second_chance retry. Pass this only on
             a lax retry call (leaf_threshold itself is the lax value then); every
             output bucket gets a "second_chance" bool column (True where the row's
-            leaf_top1_entropy is above this strict bar, i.e. only kept because of
+            leaf_top1_acc is at or below this strict bar, i.e. only kept because of
             the retry) and a "second_chance_lax_threshold" column recording the
             lax bar it cleared instead. None (default) omits both columns.
     Returns:
@@ -819,11 +819,11 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
     row_threshold = (
         df["leaf_id"].map(leaf_threshold) if isinstance(leaf_threshold, dict) else leaf_threshold
     )
-    if "leaf_top1_entropy" in df.columns and "leaf_decision" in df.columns:
-        keep = (df["leaf_top1_entropy"] < row_threshold) & df["leaf_decision"]
+    if "leaf_top1_acc" in df.columns and "leaf_decision" in df.columns:
+        keep = (df["leaf_top1_acc"] > row_threshold) & df["leaf_decision"]
     else:
         # Trivial languages/deprels (single-class predictor, no tree fit) have no
-        # leaf_top1_entropy/leaf_decision columns and are kept in full — same
+        # leaf_top1_acc/leaf_decision columns and are kept in full — same
         # convention as viz_deprel.py's _agreement_row_stats.
         keep = pd.Series(True, index=df.index)
     is_yes = df[swap_feat] == "yes"
@@ -838,7 +838,7 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
         # part of `keep` because it was relaxed to leaf_threshold for this
         # call, so they only exist in swap_df because of the retry.
         swap_df = swap_df.copy()
-        swap_df["second_chance"] = swap_df["leaf_top1_entropy"] >= second_chance_threshold
+        swap_df["second_chance"] = swap_df["leaf_top1_acc"] <= second_chance_threshold
         swap_df["second_chance_lax_threshold"] = (
             row_threshold.loc[swap_df.index] if isinstance(row_threshold, pd.Series) else row_threshold
         )
@@ -1087,7 +1087,7 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
             full_df, child_deprel, inflector
         )
         meta = {
-            "leaf_threshold": leaf_threshold,
+            "leaf_min_acc": leaf_threshold,
             "num_ud_candidates_raw": n_raw,
             "num_ud_candidates_keep": n_keep,
             "num_ud_candidates_keep_second_chance": n_keep_second_chance,

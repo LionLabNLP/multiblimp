@@ -56,6 +56,11 @@ def build_parser(description: str, is_aux: bool) -> argparse.ArgumentParser:
                         help="Keep unk-labeled rows (missing head/child feature "
                              "annotation) in the decision tree fit instead of "
                              "dropping them. Default: dropped.")
+    parser.add_argument("--no_index", action="store_true",
+                        help="Skip this run's diagnostics table + deprel index.html "
+                             "(fit_all.py passes this and builds every condition's "
+                             "index once, in parallel, via scripts/overview/"
+                             "generate_html_indexes.py afterwards).")
     parser.add_argument("--no_per_treebank", action="store_true",
                         help="Skip the analysis-only decision tree per treebank "
                              "(default: fit/render one for languages with several "
@@ -156,6 +161,7 @@ def run_condition(condition_id: str, argv=None):
         never_skip=args.recache,
         never_skip_fit=args.refit,
         rm_columns=list(condition.rm_columns),
+        head_label=condition.head_label,
         target_id=target_id,
         simplify=not args.distinguish_unk,
         n_jobs=args.n_jobs,
@@ -170,6 +176,7 @@ def run_condition(condition_id: str, argv=None):
         incl_unk=args.incl_unk_trees,
         detailed_unk=args.debug,
         second_chance=second_chance,
+        build_index=not args.no_index,
         **kwargs,
     )
     pipeline()
@@ -277,6 +284,7 @@ def run_candidate_condition(argv=None):
         never_skip=args.recache,
         never_skip_fit=args.refit,
         rm_columns=list(condition.rm_columns),
+        head_label=condition.head_label,
         target_id=target_id,
         simplify=not args.distinguish_unk,
         # Number/Gender/Person stay in the fit alongside the candidate
@@ -296,6 +304,7 @@ def run_candidate_condition(argv=None):
         incl_unk=args.incl_unk_trees,
         detailed_unk=args.debug,
         second_chance=second_chance,
+        build_index=not args.no_index,
         **kwargs,
     )
     pipeline()

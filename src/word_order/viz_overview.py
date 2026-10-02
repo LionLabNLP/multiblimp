@@ -16,38 +16,28 @@ from multiblimp.condition_taxonomy import (
 
 
 def _extract_plot_data(html_content: str) -> dict | None:
-    """Extract plotData.six and plotData.binary from a deprel index HTML page.
+    """Extract the per-language scatter points from a deprel index HTML page.
 
     Anchored to the "plotData" assignment specifically -- the diagnostics-
-    enabled page (_create_diagnostics_html, what every current sva_trees run
-    produces) also declares a LANGUAGES blob with its own six:/binary: keys
-    earlier in the page, holding much richer nested per-language dicts. A
-    bare "six:...binary:..." search matches that one first, and its nested
-    arrays (e.g. "buckets": {"no_match": [33, 19.3], ...}) break the
-    non-greedy [.+?] used here, which relies on plotData's own six/binary
-    arrays never containing a nested "[" (see word_order.viz_deprel.
-    generate_plot_data -- each entry is a flat dict of scalars).
-
-    \\s* alone (not a hardcoded \\n) between six/binary: the classic table page
-    (_create_classic_html) spreads plotData across lines; the diagnostics
-    page embeds it on one line, which a literal \\n requirement never matches.
+    enabled page (_create_diagnostics_html) also declares a LANGUAGES blob
+    with much richer nested per-language dicts, so this must not match that
+    one. plotData is a flat array of scalar dicts (see word_order.viz_deprel.
+    generate_plot_data: name/base/tree/n_items/url/color), so a non-greedy
+    [.*?] never trips over a nested "[".
 
     [.*?] not [.+?]: a deprel with zero successfully-processed languages
-    renders "plotData = { six: [], binary: [] }" -- the "+" required at
-    least one character inside the brackets, so an empty array never
-    matched and the whole deprel silently vanished from the overview
-    instead of showing up as a "no data yet" panel.
+    renders "plotData = []" -- the "+" would require at least one character
+    inside the brackets, so the deprel would silently vanish from the
+    overview instead of showing up as a "no data yet" panel.
+
+    Returns {"acc": [...]}, or None for a page that predates the accuracy
+    switch (old pages carry plotData = { six: [...], binary: [...] } of
+    entropies) -- regenerate it rather than mix units in one overview.
     """
-    match = re.search(
-        r"plotData\s*=\s*\{\s*six:\s*(\[.*?\]),\s*binary:\s*(\[.*?\])\s*\}",
-        html_content,
-    )
+    match = re.search(r"plotData\s*=\s*(\[.*?\])\s*;", html_content, flags=re.S)
     if not match:
         return None
-    return {
-        "six": json.loads(match.group(1)),
-        "binary": json.loads(match.group(2)),
-    }
+    return {"acc": json.loads(match.group(1))}
 
 
 def _safe_id(deprel: str) -> str:
@@ -75,11 +65,11 @@ def _point_url(raw_url: str | None, deprel: str, prefix: str = "") -> str | None
 
 def _localize_plot_data(data: dict, deprel: str, prefix: str = "") -> dict:
     return {
-        entropy_type: [
+        measure: [
             {**point, "url": _point_url(point.get("url"), deprel, prefix)}
             for point in points
         ]
-        for entropy_type, points in data.items()
+        for measure, points in data.items()
     }
 
 
@@ -207,7 +197,7 @@ def _npa_group_by(npa_deprels: dict[str, dict], axis: int) -> dict[str, dict]:
 def _npa_languages_covered(npa_deprels: dict[str, dict], entries: list) -> int:
     langs = set()
     for _, _, deprel in entries:
-        for point in npa_deprels[deprel].get("six", []):
+        for point in npa_deprels[deprel].get("acc", []):
             langs.add(point.get("name"))
     return len(langs)
 

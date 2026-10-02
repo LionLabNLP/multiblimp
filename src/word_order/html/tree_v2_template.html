@@ -1944,7 +1944,9 @@ __V2_TREE_DATA_JS__
     if (!node.dist) return null;
     const majority = node.dist.reduce((a, b) => (b.cnt > a.cnt ? b : a));
     const base = SEMANTIC_BASE_HEX[majority.cls.toLowerCase()] || majority.color;
-    const t = Math.min(1, node.H * 0.72);
+    // accuracy pages: acc in [0.5, 1] -> uncertainty in [1, 0]; entropy pages: H directly.
+    const uncertainty = T.META.measure === 'accuracy' ? Math.max(0, 2 * (1 - node.acc)) : node.H;
+    const t = Math.min(1, uncertainty * 0.72);
     return interpolateHex(base, '#ffffff', t);
   }
 
@@ -2071,17 +2073,17 @@ __V2_TREE_DATA_JS__
 
       // Minimal pairs are only ever generated from an Agree-majority leaf
       // (create_pairs never swaps out of a Disagree majority) -- node.keep
-      // is computed from H alone, with no majority-label check, so it can
-      // still come back true for a Disagree leaf whose H happens to clear
+      // is computed from acc alone, with no majority-label check, so it can
+      // still come back true for a Disagree leaf whose acc happens to clear
       // the threshold; omit the badge entirely there rather than show a
       // "kept" or "not kept" note that can't ever inform anything.
       const isAgreeLeaf = node.majorityLabel && node.majorityLabel.toLowerCase() === 'yes';
-      // node.keepThresholdH is this leaf's own cutoff -- same value for every
+      // node.keepThresholdAcc is this leaf's own cutoff -- same value for every
       // leaf unless second_chance's depth-aware retry gave leaves different
       // ones, in which case T.META's single global number can't be trusted.
-      const keepHtml = !node.leaf || !isAgreeLeaf || node.keepThresholdH == null ? '' : node.keep
-        ? `<span class="node-keep yes${node.secondChance ? ' second-chance' : ''}" data-keep-toggle="1">🔑${node.secondChance ? '2️⃣' : ''} ${node.kept.toLocaleString()} kept${node.secondChance ? ` (H<${node.keepThresholdH.toFixed(2)})` : ''} › ${node.correctSwaps.toLocaleString()} pairs ▸</span>`
-        : `<span class="node-keep no">not kept (H≥${node.keepThresholdH.toFixed(2)})</span>`;
+      const keepHtml = !node.leaf || !isAgreeLeaf || node.keepThresholdAcc == null ? '' : node.keep
+        ? `<span class="node-keep yes${node.secondChance ? ' second-chance' : ''}" data-keep-toggle="1">🔑${node.secondChance ? '2️⃣' : ''} ${node.kept.toLocaleString()} kept${node.secondChance ? ` (acc>${node.keepThresholdAcc.toFixed(2)})` : ''} › ${node.correctSwaps.toLocaleString()} pairs ▸</span>`
+        : `<span class="node-keep no">not kept (acc ${node.acc.toFixed(3)} ≤ ${node.keepThresholdAcc.toFixed(2)})</span>`;
       const fill = nodeFillColor(node);
       // [+] marker: flags a split rule where some other feature was >99%
       // correlated with the chosen one in the rows reaching this node (the
@@ -2106,7 +2108,7 @@ __V2_TREE_DATA_JS__
             <span class="node-rule">${nodeRuleDisplay(node)}${corrHtml}</span>
           </div>
           <div class="node-body">
-            [${id}]&nbsp; n=${node.n}&nbsp; H=${node.H.toFixed(2)}
+            [${id}]&nbsp; n=${node.n}&nbsp; ${T.META.measure === 'accuracy' ? `acc=${node.acc.toFixed(3)}` : `H=${node.H.toFixed(2)}`}
             ${buildDistBar(node)}
             ${keepHtml}
           </div>
@@ -2279,6 +2281,7 @@ __V2_TREE_DATA_JS__
   const META_ROWS = [
     ['Language', 'languageName'], ['Treebank', 'treebank'], ['Excluded from pairs', 'excludedReason'], ['Keep threshold', 'keepThreshold'], ['train accuracy', 'accuracy'], ['test accuracy', 'testAccuracyRow'],
     ['base entropy', 'baseEntropy'], ['reduced entropy', 'reducedEntropy'],
+    ['root accuracy', 'rootAccuracy'], ['train accuracy (smoothed)', 'trainAccuracy'],
     ['Nodes', 'nodes'], ['Depth', 'depth'],
     ['Training samples', 'trainingSamples'], ['Predictor', 'predictor'],
   ];
@@ -2293,7 +2296,7 @@ __V2_TREE_DATA_JS__
     infoPanelAccuracy.textContent = T.META.testAccuracy
       ? `train ${T.META.accuracy} · test ${T.META.testAccuracy}`
       : `${T.META.accuracy} accuracy`;
-    infoPanelMeta.innerHTML = META_ROWS.filter(([, key]) => T.META[key] !== undefined).map(([label, key]) => `
+    infoPanelMeta.innerHTML = META_ROWS.filter(([, key]) => T.META[key] !== undefined && !(T.META.measure === 'accuracy' && key === 'accuracy')).map(([label, key]) => `
       <div class="meta-row"><span class="meta-key">${label}</span><span class="meta-val">${T.META[key]}</span></div>`).join('');
 
     const maxCnt = Math.max(...T.CLASSES.map(c => c.cnt), 1);
@@ -2727,7 +2730,7 @@ __V2_TREE_DATA_JS__
   function buildPairsList() {
     pairsList.innerHTML = '';
     // Pages without a keep threshold (per-treebank trees) generate no pairs.
-    if (T.META.keepThresholdH == null) { pairsCard.style.display = 'none'; tabPairs.hidden = true; drawerPairRoles.hidden = true; return; }
+    if (T.META.keepThresholdAcc == null) { pairsCard.style.display = 'none'; tabPairs.hidden = true; drawerPairRoles.hidden = true; return; }
     // Pairs belong to leaves: only the selected node's own pairs are shown,
     // and only when it is a kept leaf that actually generated some. T.PAIRS
     // itself is already capped server-side (html_tree._v2_build_pairs, up
@@ -2743,7 +2746,7 @@ __V2_TREE_DATA_JS__
       : `No minimal pairs for node ${currentNode}`;
     updateDrawerHint();
 
-    // Which leaf/leaves, how many kept, and H vs. the keep threshold are all
+    // Which leaf/leaves, how many kept, and acc vs. the keep threshold are all
     // already on the node badges above (and repeated in pairsTitle just
     // above this); this only needs to add what those don't already say --
     // that these specific pairs come straight from correct_swaps.parquet.

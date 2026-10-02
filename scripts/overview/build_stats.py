@@ -2,7 +2,7 @@
 single JSON blob, consumed by overview.html.
 
 Source: this repo's own html/decision_trees/ output, read straight from
-each condition's rendered index.html LANGUAGES.six blob (the same
+each condition's rendered index.html LANGUAGES blob (the same
 per-language diagnostics dict sva_trees.diagnostics.diagnostics_row_to_json
 produces -- nRaw/nPairs/diag.buckets map directly onto this script's
 samples/pairs/bucket fields). Conditions/subgroups are discovered from
@@ -10,7 +10,7 @@ whatever's actually on disk under HTML_DECISION_TREES_DIR (see
 _discover_conditions), not a hardcoded list, so a newly (re)built condition
 shows up automatically -- the same tree whether that's this checkout or the
 one the site deploys from, since both are built by the same pipeline. See
-scripts/generate_html_indexes.py to (re)build those pages from cached
+scripts/overview/generate_html_indexes.py to (re)build those pages from cached
 model/pairs data without refitting.
 
 Run from the repo root: python scripts/overview/build_stats.py
@@ -99,7 +99,7 @@ PUBLISHED_BUCKET_KEYS = {
     "conflicting_features": "conflicting_features",
 }
 
-LANGUAGES_RE = re.compile(r"const LANGUAGES = \{\s*six:\s*(\[.*?\]),\s*binary:\s*(\[.*?\])\s*\};", re.S)
+LANGUAGES_RE = re.compile(r"const LANGUAGES = (\[.*?\]);\s*const plotData\b", re.S)
 
 
 def _load_languages_six(index_html_path: str) -> list[dict] | None:
@@ -196,7 +196,7 @@ def _discover_conditions() -> tuple[list[str], list[str]]:
     """(flat_condition_ids, npa_subgroup_ids) -- every condition/subgroup
     that currently has a real index.html under HTML_ROOT, discovered
     fresh each build rather than a hardcoded list, so a newly (re)built
-    condition (see scripts/generate_html_indexes.py) shows up here without
+    condition (see scripts/overview/generate_html_indexes.py) shows up here without
     editing this file."""
     if not os.path.isdir(HTML_ROOT):
         return [], []
@@ -219,7 +219,7 @@ def collect_records() -> tuple[list[dict], dict[str, set[str]]]:
     if not flat_conditions and not npa_subgroups:
         raise FileNotFoundError(
             f"No condition index.html pages found under {HTML_ROOT} -- "
-            "run scripts/generate_html_indexes.py (or a pipeline's own "
+            "run scripts/overview/generate_html_indexes.py (or a pipeline's own "
             "fit script) first."
         )
 

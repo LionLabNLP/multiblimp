@@ -15,7 +15,10 @@ from tqdm import tqdm
 
 from multiblimp.agreement_pipeline_utils import read_label_distribution, wilson_lower_bound
 
-from .entropy import calculate_base_entropy, calculate_tree_entropy, leaf_weighted_entropy
+from .entropy import (
+    calculate_base_entropy, calculate_tree_entropy, leaf_weighted_entropy,
+    calculate_base_accuracy, pooled_leaf_accuracy, DEFAULT_LEAF_MIN_ACCURACY,
+)
 from .html.html_deprel import create_html
 from .utils import is_agreement_predictor
 
@@ -65,29 +68,45 @@ def _notes_disclosure(summary: str, body: str) -> str:
 
 
 def _dtype_coerced_metrics(dt, df, target_col, binary_entropy, smoothing,
-                           eval_cache=None, cache_key=None):
+                           eval_cache=None, cache_key=None, accuracy_measure=False):
     """Coerce df's feature columns to match the fitted pipeline's expected dtypes
-    (mutates df in place), then compute (base_entropy, reduced_entropy,
-    delta_entropy, accuracy).
+    (mutates df in place), then compute (base, reduced, delta, accuracy).
+
+    accuracy_measure=False (word-order pages): base/reduced/delta are entropies
+    (lower reduced = better, delta = base - reduced).
+    accuracy_measure=True (agreement pages): base/reduced/delta are smoothed
+    accuracies, both smoothed once over the whole dataset (+0.5 per class) --
+    base = the root node's own smoothed accuracy, "reduced" is the tree's
+    (sum of leaf majority counts + 0.5) / (N + 1), delta = tree - base
+    (never negative). Per-leaf smoothing is deliberately not stacked here. `accuracy` is always the raw training
+    accuracy of the fitted tree.
 
     Shared by calculate_metrics and calculate_agreement_metrics, which only
     differ in the extra per-language stats appended after this.
 
-    eval_cache: optional dict shared across calls (the six-class and binary
-    passes evaluate the same model on the same df); the tree's leaf ids and
-    accuracy don't depend on the entropy variant, so they're computed once
-    per (cache_key, df).
+    eval_cache: optional dict shared across calls; the tree's leaf ids and
+    accuracy don't depend on the measure, so they're computed once per
+    (cache_key, df).
     """
+    def base_of(d):
+        if accuracy_measure:
+            return calculate_base_accuracy(d, target_col, smoothing=smoothing)
+        return calculate_base_entropy(d, target_col, binary=binary_entropy, smoothing=smoothing)
+
+    def reduced_of(leaf_ids, d):
+        if accuracy_measure:
+            return pooled_leaf_accuracy(leaf_ids, d, target_col, smoothing=smoothing)
+        return leaf_weighted_entropy(leaf_ids, d, target_col, binary=binary_entropy, smoothing=smoothing)
+
+    def delta_of(base, reduced):
+        return reduced - base if accuracy_measure else base - reduced
+
     cached = eval_cache.get(cache_key) if eval_cache is not None else None
     if cached is not None and cached[0] is df:
         _, leaf_ids, accuracy = cached
-        base_ent = calculate_base_entropy(
-            df, target_col, binary=binary_entropy, smoothing=smoothing
-        )
-        reduced_ent = leaf_weighted_entropy(
-            leaf_ids, df, target_col, binary=binary_entropy, smoothing=smoothing
-        )
-        return base_ent, reduced_ent, base_ent - reduced_ent, accuracy
+        base_v = base_of(df)
+        reduced_v = reduced_of(leaf_ids, df)
+        return base_v, reduced_v, delta_of(base_v, reduced_v), accuracy
 
     # ensure dtype matching of loaded data and classifier
     cat_cols = [
@@ -107,31 +126,29 @@ def _dtype_coerced_metrics(dt, df, target_col, binary_entropy, smoothing,
     df[cat_cols] = df[cat_cols].astype(str)
     df[num_cols] = df[num_cols].apply(pd.to_numeric, errors="coerce").fillna(0)
 
-    # Calculate entropies
-    base_ent = calculate_base_entropy(
-        df, target_col, binary=binary_entropy, smoothing=smoothing
-    )
+    base_v = base_of(df)
     X = df.drop(columns=[target_col])
     y = df[target_col]
     if [name for name, _ in dt.steps] == ["preprocessor", "clf"]:
         # one transform serves both the leaf assignment and the accuracy
         X_t = dt.named_steps["preprocessor"].transform(X)
         leaf_ids = dt.named_steps["clf"].apply(X_t)
-        reduced_ent = leaf_weighted_entropy(
-            leaf_ids, df, target_col, binary=binary_entropy, smoothing=smoothing
-        )
+        reduced_v = reduced_of(leaf_ids, df)
         # Calculate accuracy on full training data
         accuracy = dt.named_steps["clf"].score(X_t, y)
         if eval_cache is not None:
             eval_cache[cache_key] = (df, leaf_ids, accuracy)
     else:
-        reduced_ent = calculate_tree_entropy(
-            dt, df, target_col, binary=binary_entropy, smoothing=smoothing
-        )
+        if accuracy_measure:
+            leaf_ids = dt.named_steps["clf"].apply(dt.named_steps["preprocessor"].transform(X))
+            reduced_v = reduced_of(leaf_ids, df)
+        else:
+            reduced_v = calculate_tree_entropy(
+                dt, df, target_col, binary=binary_entropy, smoothing=smoothing
+            )
         accuracy = dt.score(X, y)
-    delta_ent = base_ent - reduced_ent
 
-    return base_ent, reduced_ent, delta_ent, accuracy
+    return base_v, reduced_v, delta_of(base_v, reduced_v), accuracy
 
 
 def _metrics_df(metrics: list, columns: list) -> pd.DataFrame:
@@ -216,10 +233,10 @@ def _agreement_row_stats(df, target_col, leaf_threshold, pairs_dir, lang_name):
 
     n_raw: rows with target_col's positive label (candidates for a feature
         swap), labelled "yes" in both SVA and NPA.
-    n_keep: of those, how many pass the same leaf_top1_entropy < leaf_threshold
+    n_keep: of those, how many pass the same leaf_top1_acc > leaf_threshold
         and leaf_decision filter sva_trees.create_pairs.create_pairs uses to pick
         which rows to actually attempt to re-inflect. Trivial languages (no fitted
-        tree, hence no leaf_top1_entropy/leaf_decision columns) are single-class by
+        tree, hence no leaf_top1_acc/leaf_decision columns) are single-class by
         construction, so every raw row counts as kept.
     n_pairs: rows actually turned into a re-inflected minimal pair by create_pairs,
         read from "<pairs_dir>/<language>/correct_swaps.parquet". 0 if pairs_dir is
@@ -239,10 +256,10 @@ def _agreement_row_stats(df, target_col, leaf_threshold, pairs_dir, lang_name):
         if os.path.exists(meta_fn):
             with open(meta_fn) as f:
                 meta = json.load(f)
-            leaf_threshold = meta.get("leaf_threshold", leaf_threshold)
+            leaf_threshold = meta.get("leaf_min_acc", leaf_threshold)
             retried = bool(meta.get("second_pass"))
 
-    if "leaf_top1_entropy" in df.columns and "leaf_decision" in df.columns:
+    if "leaf_top1_acc" in df.columns and "leaf_decision" in df.columns:
         # A second_chance depth-aware retry's meta.json stores {leaf_id: that
         # leaf's own cutoff} instead of one number; JSON round-trips the keys
         # as strings, so normalize back to int before mapping onto leaf_id.
@@ -250,7 +267,7 @@ def _agreement_row_stats(df, target_col, leaf_threshold, pairs_dir, lang_name):
             df["leaf_id"].map({int(k): v for k, v in leaf_threshold.items()})
             if isinstance(leaf_threshold, dict) else leaf_threshold
         )
-        keep = (df["leaf_top1_entropy"] < row_threshold) & df["leaf_decision"]
+        keep = (df["leaf_top1_acc"] > row_threshold) & df["leaf_decision"]
         n_keep = int((keep & is_yes).sum())
     else:
         n_keep = n_raw
@@ -267,9 +284,8 @@ def _agreement_row_stats(df, target_col, leaf_threshold, pairs_dir, lang_name):
 def calculate_agreement_metrics(
     language_data: Dict[str, Tuple[Pipeline, pd.DataFrame]],
     target_col: str,
-    leaf_threshold: float = 0.1,
+    leaf_threshold: float = DEFAULT_LEAF_MIN_ACCURACY,
     pairs_dir: str | None = None,
-    binary_entropy: bool = False,
     smoothing: float = 0.5,
     eval_cache: dict | None = None,
 ) -> pd.DataFrame:
@@ -281,16 +297,25 @@ def calculate_agreement_metrics(
     this reports n_raw/n_keep/n_pairs — see _agreement_row_stats.
 
     Returns:
-        DataFrame with columns: language, base_entropy, reduced_entropy,
-                                delta_entropy, accuracy, n_raw, n_keep, n_pairs, retried
+        DataFrame with columns: language, base_acc, tree_acc, gain_acc, accuracy,
+                                test_acc, test_n, n_raw, n_keep, n_pairs, retried
+        (base_acc/tree_acc are smoothed once -- see _dtype_coerced_metrics;
+        accuracy is the raw training accuracy, test_acc the raw held-out one.)
     """
     metrics = []
 
     for lang_name, (dt, df) in tqdm(language_data.items()):
-        base_ent, reduced_ent, delta_ent, accuracy = _dtype_coerced_metrics(
-            dt, df, target_col, binary_entropy, smoothing,
-            eval_cache=eval_cache, cache_key=lang_name,
+        base_acc, tree_acc, gain_acc, accuracy = _dtype_coerced_metrics(
+            dt, df, target_col, False, smoothing,
+            eval_cache=eval_cache, cache_key=lang_name, accuracy_measure=True,
         )
+        # Held-out accuracy from the split the tree was fit with (fit_dt
+        # attaches test_eval_); NaN for a model without one.
+        test_eval = getattr(dt, "test_eval_", None)
+        if test_eval is not None and len(test_eval):
+            test_acc, test_n = float((test_eval["y"] == test_eval["pred"]).mean()), int(len(test_eval))
+        else:
+            test_acc, test_n = float("nan"), 0
 
         n_raw, n_keep, n_pairs, retried = _agreement_row_stats(
             df, target_col, leaf_threshold, pairs_dir, lang_name
@@ -299,10 +324,12 @@ def calculate_agreement_metrics(
         metrics.append(
             {
                 "language": lang_name,
-                "base_entropy": base_ent,
-                "reduced_entropy": reduced_ent,
-                "delta_entropy": delta_ent,
+                "base_acc": base_acc,
+                "tree_acc": tree_acc,
+                "gain_acc": gain_acc,
                 "accuracy": accuracy,
+                "test_acc": test_acc,
+                "test_n": test_n,
                 "n_raw": n_raw,
                 "n_keep": n_keep,
                 "n_pairs": n_pairs,
@@ -311,7 +338,7 @@ def calculate_agreement_metrics(
         )
 
     return _metrics_df(metrics, [
-        "language", "base_entropy", "reduced_entropy", "delta_entropy", "accuracy",
+        "language", "base_acc", "tree_acc", "gain_acc", "accuracy", "test_acc", "test_n",
         "n_raw", "n_keep", "n_pairs", "retried",
     ])
 
@@ -358,7 +385,7 @@ def generate_html_deprel_index(
     target_col: str = "deprel_order",
     smoothing: float = 0.5,
     exclude_labels: set | None = None,
-    leaf_threshold: float = 0.1,
+    leaf_threshold: float = DEFAULT_LEAF_MIN_ACCURACY,
     pairs_dir: str | None = None,
     diagnostics_by_lang: dict | None = None,
     agreement_label: str = "Subject-Verb",
@@ -481,20 +508,17 @@ def generate_html_deprel_index(
                 pd.read_parquet(parquet_fn),
             )
 
-    # Calculate metrics for BOTH entropy types (sharing each language's tree
-    # evaluation between the two passes)
+    # Agreement pages: one set of smoothed-accuracy metrics (base/tree/gain).
+    # Word-order pages: entropy, for BOTH entropy types (sharing each
+    # language's tree evaluation between the two passes).
     eval_cache = {}
     if is_agreement:
         metrics_six = calculate_agreement_metrics(
             language_data, target_col, leaf_threshold=leaf_threshold,
-            pairs_dir=pairs_dir, binary_entropy=False, smoothing=smoothing,
-            eval_cache=eval_cache,
+            pairs_dir=pairs_dir, smoothing=smoothing, eval_cache=eval_cache,
         )
-        metrics_binary = calculate_agreement_metrics(
-            language_data, target_col, leaf_threshold=leaf_threshold,
-            pairs_dir=pairs_dir, binary_entropy=True, smoothing=smoothing,
-            eval_cache=eval_cache,
-        )
+        metrics_binary = metrics_six
+        BASE_COL, TREE_COL, GAIN_COL = "base_acc", "tree_acc", "gain_acc"
     else:
         metrics_six = calculate_metrics(
             language_data, target_col, binary_entropy=False, smoothing=smoothing,
@@ -504,10 +528,14 @@ def generate_html_deprel_index(
             language_data, target_col, binary_entropy=True, smoothing=smoothing,
             eval_cache=eval_cache,
         )
+        BASE_COL, TREE_COL, GAIN_COL = "base_entropy", "reduced_entropy", "delta_entropy"
 
     # Pick up any trivial langs not yet covered by placeholder files
-    for l in metrics_six[metrics_six["base_entropy"] == 0.0]["language"]:
-        trivial_langs[l] = dict(language_data[l][1][target_col].value_counts())
+    # single observed class (smoothed base accuracy never reaches exactly 1.0,
+    # so this is checked on the labels directly rather than on the metric)
+    for l in metrics_six["language"]:
+        if language_data[l][1][target_col].astype(str).nunique() <= 1:
+            trivial_langs[l] = dict(language_data[l][1][target_col].value_counts())
 
     # Every trivial-distribution language (including an all-one-label case
     # like 100% "Yes") is omitted from the table -- there used to be an
@@ -582,7 +610,7 @@ def generate_html_deprel_index(
                     'font-weight:600;color:#d97706;background:#fef3c7;'
                     'border-radius:999px;padding:0.05rem 0.5rem;vertical-align:middle;"'
                     ' title="sva_trees.second_chance retried this language at a laxer,'
-                    ' depth-aware entropy bar after the strict pass alone wasn\'t'
+                    ' depth-aware accuracy floor after the strict pass alone wasn\'t'
                     ' enough.">retried</span>'
                 )
 
@@ -636,7 +664,7 @@ def generate_html_deprel_index(
     # says so explicitly (debug_view) -- just without the diagnostics panel
     # itself (show_diagnostics=diagnostics_enabled below, i.e. only when
     # real per-language diagnostics exist).
-    use_rich_table = diagnostics_enabled or (is_agreement and debug_view)
+    use_rich_table = is_agreement
 
     def build_languages(metrics_df, lang_colors):
         """Per-language dicts for the diagnostics page's client-side
@@ -661,9 +689,13 @@ def generate_html_deprel_index(
                 "name": lang_name,
                 "langUrl": f"{quote(lang_file.name)}" if lang_file else None,
                 "color": color if color != "#2563eb" else None,
-                "base": row["base_entropy"],
-                "reduced": row["reduced_entropy"],
-                "delta": row["delta_entropy"],
+                "base": row[BASE_COL],
+                "tree": row[TREE_COL],
+                "gain": row[GAIN_COL],
+                "test": row["test_acc"],
+                "testN": int(row["test_n"]),
+                # raw training accuracy: not shown in this page's table any more,
+                # but scripts/overview/build_stats.py reads it for the dataset overview
                 "acc": row["accuracy"],
                 "nRaw": int(row["n_raw"]),
                 "retried": bool(row["retried"]),
@@ -674,9 +706,10 @@ def generate_html_deprel_index(
             })
         return languages
 
+    languages_json = "[]"
     if use_rich_table:
-        languages_six_json = json.dumps(build_languages(metrics_six, lang_colors))
-        languages_binary_json = json.dumps(build_languages(metrics_binary, lang_colors))
+        languages_json = json.dumps(build_languages(metrics_six, lang_colors))
+        languages_six_json = languages_binary_json = "[]"
         rows_six = rows_binary = ""
     else:
         languages_six_json = languages_binary_json = "[]"
@@ -694,8 +727,8 @@ def generate_html_deprel_index(
             data.append(
                 {
                     "name": lang_name,
-                    "base": row["base_entropy"],
-                    "reduced": row["reduced_entropy"],
+                    "base": row[BASE_COL],
+                    "tree" if is_agreement else "reduced": row[TREE_COL],
                     # marker size / hover count — n_raw ("Yes" items) in agreement mode,
                     # since there's no "n_items" column there
                     "n_items": int(row["n_raw"] if is_agreement else row["n_items"]),
@@ -710,6 +743,7 @@ def generate_html_deprel_index(
 
     plot_data_six_json = json.dumps(plot_data_six)
     plot_data_binary_json = json.dumps(plot_data_binary)
+    plot_data_json = plot_data_six_json
 
     # Build legend / notes
     color_note = ""
@@ -871,6 +905,8 @@ def generate_html_deprel_index(
         show_diagnostics_panel=diagnostics_enabled,
         languages_six_json=languages_six_json,
         languages_binary_json=languages_binary_json,
+        languages_json=languages_json,
+        plot_data_json=plot_data_json,
         leaf_threshold=leaf_threshold if is_agreement else None,
         agreement_label=agreement_label,
         head_role_label=head_role_label,

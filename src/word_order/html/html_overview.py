@@ -297,17 +297,12 @@ def create_html(sections_html, all_data_json, back_links=(("../index.html", "Mai
                 <p class="description">
                     This page gives an overview of agreement predictability across dependency relations and languages,
                     grouped by what the subject agrees with (verb, participle, auxiliary, ...). Each panel shows the
-                    base entropy vs. reduced entropy (after fitting a decision tree) for a specific agreement feature
+                    root accuracy vs. train accuracy (after fitting a decision tree) for a specific agreement feature
                     across all available languages. Click a panel to explore it in detail, or click a point to go
                     directly to a specific language.
                 </p>
             </div>
             <div class="controls">
-                <label for="entropyType">Entropy type:</label>
-                <select id="entropyType">
-                    <option value="six" selected>Six-class</option>
-                    <option value="binary">Binary (majority vs. rest)</option>
-                </select>
                 <button type="button" class="theme-toggle" id="themeToggleBtn" title="Toggle light/dark theme">☾</button>
             </div>
         </div>
@@ -336,8 +331,6 @@ def create_html(sections_html, all_data_json, back_links=(("../index.html", "Mai
 
         const allData = {all_data_json};
 
-        let currentType = 'six';
-
         // Read once at load, after the theme CSS (light or dark) has applied --
         // Plotly's own layout config takes plain color strings, not CSS vars, so
         // this is the only way its mini-charts can follow the page's theme.
@@ -354,16 +347,14 @@ def create_html(sections_html, all_data_json, back_links=(("../index.html", "Mai
 
         function renderMiniPlot(el, points) {{
             const url = el.dataset.url;
-            // Some languages' entropy is NaN (too few items to compute it);
+            // Some languages' accuracy is NaN (too few items to compute it);
             // Math.min/max propagate NaN from a single such point, so filter
             // before reducing.
             const finite = (vals) => vals.filter(v => Number.isFinite(v));
 
-            const baseLine = (() => {{
-                const vals = finite(points.map(d => d.base));
-                const mn = Math.min(...vals), mx = Math.max(...vals);
-                return {{ x: [mn, mx], y: [mn, mx] }};
-            }})();
+            // y = x reference over the fixed axis range: points above it are
+            // languages where the tree beat the majority-class baseline.
+            const baseLine = {{ x: [0.5, 1], y: [0.5, 1] }};
 
             const traceLine = {{
                 x: baseLine.x,
@@ -377,12 +368,12 @@ def create_html(sections_html, all_data_json, back_links=(("../index.html", "Mai
 
             const tracePoints = {{
                 x: points.map(d => d.base),
-                y: points.map(d => d.reduced),
+                y: points.map(d => d.tree),
                 mode: 'markers',
                 type: 'scatter',
                 text: points.map(d => d.name),
                 customdata: points.map(d => [d.url, d.n_items]),
-                hovertemplate: '<b>%{{text}}</b><br>Base: %{{x:.3f}}<br>Reduced: %{{y:.3f}}<br>N: %{{customdata[1]:,}}<extra></extra>',
+                hovertemplate: '<b>%{{text}}</b><br>Root: %{{x:.3f}}<br>Train: %{{y:.3f}}<br>N: %{{customdata[1]:,}}<extra></extra>',
                 marker: {{
                     size: points.map(d => d.n_items),
                     sizemode: 'area',
@@ -400,36 +391,31 @@ def create_html(sections_html, all_data_json, back_links=(("../index.html", "Mai
 
             const layout = {{
                 margin: {{ t: 12, r: 12, b: 40, l: 44 }},
-                // Both axes fixed to [0, 1] (binary entropy's own natural bound,
-                // and where six-class entropy also lands for most conditions)
-                // rather than autoscaled -- so 0 (perfect predictability) and
-                // 1 both stay meaningful, fixed reference points a viewer can
-                // compare across panels, instead of every single-point or
-                // tightly-clustered panel silently rescaling to its own tiny
-                // range. Six-class entropy's true ceiling is log2(n classes)
-                // (>1 whenever a condition's label distribution spans 3+
-                // classes fairly evenly), so the upper end extends past 1
-                // rather than clipping a real point out of view. Lower bound
-                // is -0.1, not 0: a marker sitting exactly at 0 has real
-                // radius (bigger still for a high-n_items point, since size
-                // is area-scaled), so anchoring the axis line itself at 0
-                // clips the marker's bottom/left edge against the plot
-                // border -- -0.1 gives it breathing room while 0 stays
-                // clearly marked by a gridline/tick.
+                // Both axes fixed to [0.5, 1] (a binary tree's accuracy can't sit
+                // below chance in a majority-vote leaf) rather than autoscaled, so
+                // the same fixed reference points hold across every panel instead
+                // of each tightly-clustered panel silently rescaling to its own
+                // tiny range. Upper bound 1.02, lower 0.44 (extra room around the 0.5/0.5 corner so the two 0.5 tick labels don't collide): a marker sitting
+                // exactly at an edge has real radius (area-scaled by n_items) and
+                // would otherwise clip against the plot border.
                 xaxis: {{
-                    title: {{ text: 'Base entropy', font: {{ size: 10 }} }},
+                    title: {{ text: 'Root accuracy', font: {{ size: 10 }}, standoff: 8 }},
+                    automargin: true,
                     gridcolor: THEME.grid,
                     zeroline: false,
                     tickfont: {{ size: 9 }},
-                    range: [-0.1, Math.max(1, ...finite(points.map(d => d.base))) * 1.05],
+                    range: [0.44, 1.02],
+                    tickvals: [0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
                     autorange: false,
                 }},
                 yaxis: {{
-                    title: {{ text: 'Reduced entropy', font: {{ size: 10 }} }},
+                    title: {{ text: 'Train accuracy', font: {{ size: 10 }}, standoff: 8 }},
+                    automargin: true,
                     gridcolor: THEME.grid,
                     zeroline: false,
                     tickfont: {{ size: 9 }},
-                    range: [-0.1, Math.max(1, ...finite(points.map(d => d.reduced))) * 1.05],
+                    range: [0.44, 1.02],
+                    tickvals: [0.5, 0.6, 0.7, 0.8, 0.9, 1.0],
                     autorange: false,
                 }},
                 // Transparent, not a fixed white/panel color: .panel paints its
@@ -459,12 +445,12 @@ def create_html(sections_html, all_data_json, back_links=(("../index.html", "Mai
             }});
         }}
 
-        function renderAll(type) {{
+        function renderAll() {{
             document.querySelectorAll('.mini-plot').forEach(el => {{
                 const deprel = el.dataset.deprel;
                 const data = allData[deprel];
-                if (data && data[type]) {{
-                    renderMiniPlot(el, data[type]);
+                if (data && data.acc) {{
+                    renderMiniPlot(el, data.acc);
                 }}
             }});
         }}
@@ -482,12 +468,7 @@ def create_html(sections_html, all_data_json, back_links=(("../index.html", "Mai
             }});
         }});
 
-        renderAll('six');
-
-        document.getElementById('entropyType').addEventListener('change', (e) => {{
-            currentType = e.target.value;
-            renderAll(currentType);
-        }});
+        renderAll();
 
         // NPA's role-pair/feature toggle -- a no-op wherever this markup
         // doesn't exist (every page except the main overview's own "Noun

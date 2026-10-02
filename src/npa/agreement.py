@@ -116,7 +116,7 @@ def npa_fit_omit_feats(columns, target_col: str, omit_extra: set | None = None) 
 def fit_npa_tree(df: pd.DataFrame, target_col: str, drop_unk: bool = True,
                   max_depth: int = 12, min_samples_leaf: int = 25,
                   min_impurity_decrease: float = 0.005, test_size: float = 0.1,
-                  leaf_threshold: float = 0.1, omit_extra: set | None = None):
+                  leaf_threshold: float = 0.95, omit_extra: set | None = None):
     """Fit a decision tree predicting one NPA pairwise agreement column (e.g.
     "HEAD-DET_Number", values "yes"/"no"/"unk") from every other column in
     `df`. Adapts word_order.decision_tree.fit_dt for NPA's role-based naming
@@ -159,7 +159,7 @@ def fit_npa_tree(df: pd.DataFrame, target_col: str, drop_unk: bool = True,
     leaf a row lands in.
 
     Returns (model, dt_df, y_train, sub_df) -- dt_df is X_train enriched
-    with leaf_id/leaf_top1_entropy/leaf_decision/keep etc (see
+    with leaf_id/leaf_top1_acc/leaf_decision/keep etc (see
     set_dt_features_in_df), ready for create_npa_pairs; sub_df is the full
     filtered-but-unsplit dataset (all "yes"/"no" rows, not just the train
     split), for callers that want it separately (e.g.
@@ -256,11 +256,11 @@ def _row_threshold(dt_df: pd.DataFrame, leaf_threshold):
 
 def create_npa_pairs(dt_df: pd.DataFrame, target_col: str, inflector,
                       swap_role: str | None = None, context_inflector=None,
-                      leaf_threshold: float | dict = 0.1,
+                      leaf_threshold: float | dict = 0.95,
                       second_chance_threshold: float | None = None,
                       verbose: bool = True) -> tuple[dict[str, pd.DataFrame], int]:
     """Minimal re-inflected pairs from a fit_npa_tree dt_df, for rows where
-    the tree confidently predicts target_col == "yes" (leaf_top1_entropy <
+    the tree confidently predicts target_col == "yes" (leaf_top1_acc <
     leaf_threshold and leaf_decision True -- same convention as sva_trees.
     create_pairs). leaf_threshold may also be a {leaf_id: cutoff} map (a
     sva_trees.second_chance depth-aware retry); second_chance_threshold, the
@@ -315,14 +315,14 @@ def create_npa_pairs(dt_df: pd.DataFrame, target_col: str, inflector,
     fixed_role = role2 if swap_role == role1 else role1
 
     row_threshold = _row_threshold(dt_df, leaf_threshold)
-    if "leaf_top1_entropy" in dt_df.columns and "leaf_decision" in dt_df.columns:
-        keep = (dt_df["leaf_top1_entropy"] < row_threshold) & dt_df["leaf_decision"]
+    if "leaf_top1_acc" in dt_df.columns and "leaf_decision" in dt_df.columns:
+        keep = (dt_df["leaf_top1_acc"] > row_threshold) & dt_df["leaf_decision"]
     else:
         keep = pd.Series(True, index=dt_df.index)
     swap_df = dt_df[keep & (dt_df[target_col] == "yes")]
     if second_chance_threshold is not None:
         swap_df = swap_df.copy()
-        swap_df["second_chance"] = swap_df["leaf_top1_entropy"] >= second_chance_threshold
+        swap_df["second_chance"] = swap_df["leaf_top1_acc"] <= second_chance_threshold
         swap_df["second_chance_lax_threshold"] = (
             row_threshold.loc[swap_df.index] if isinstance(row_threshold, pd.Series) else row_threshold
         )
@@ -568,7 +568,7 @@ _NPA_BUCKET_NAMES = [
 
 def create_npa_pairs_for_target_col(
     dt_df: pd.DataFrame, target_col: str, inflectors: dict,
-    leaf_threshold: float | dict = 0.1, save_to: str | None = None,
+    leaf_threshold: float | dict = 0.95, save_to: str | None = None,
     full_df: pd.DataFrame | None = None, label_distribution: dict | None = None,
     num_lemma=None, num_form=None, max_examples: int = 5, verbose: bool = True,
     extra_meta: dict | None = None, second_chance_threshold: float | None = None,
@@ -629,8 +629,8 @@ def create_npa_pairs_for_target_col(
     total_n_keep = 0
     total_n_keep_second = 0
     row_threshold = _row_threshold(dt_df, leaf_threshold)
-    if "leaf_top1_entropy" in dt_df.columns and "leaf_decision" in dt_df.columns:
-        keep = (dt_df["leaf_top1_entropy"] < row_threshold) & dt_df["leaf_decision"]
+    if "leaf_top1_acc" in dt_df.columns and "leaf_decision" in dt_df.columns:
+        keep = (dt_df["leaf_top1_acc"] > row_threshold) & dt_df["leaf_decision"]
     else:
         keep = pd.Series(True, index=dt_df.index)
     n_raw = int((dt_df[target_col] == "yes").sum())
@@ -648,7 +648,7 @@ def create_npa_pairs_for_target_col(
         if second_chance_threshold is not None:
             total_n_keep_second += int(
                 (keep & (dt_df[target_col] == "yes")
-                 & (dt_df["leaf_top1_entropy"] >= second_chance_threshold)).sum())
+                 & (dt_df["leaf_top1_acc"] <= second_chance_threshold)).sum())
         for name, bdf in buckets.items():
             if len(bdf):
                 collected[name].append(bdf)
@@ -667,7 +667,7 @@ def create_npa_pairs_for_target_col(
     )
 
     meta = {
-        "leaf_threshold": leaf_threshold,
+        "leaf_min_acc": leaf_threshold,
         "num_ud_candidates_raw": n_raw,
         "num_ud_candidates_keep": total_n_keep,
         "num_ud_candidates_keep_second_chance": total_n_keep_second,
@@ -721,14 +721,14 @@ def refresh_deprel_index(target_col: str,
                           html_decision_trees_root: str = HTML_DECISION_TREES_DIR,
                           pairs_dir: str | None = None,
                           diagnostics_csv: str | None = None,
-                          leaf_threshold: float = 0.1,
+                          leaf_threshold: float = 0.95,
                           has_pairs: bool = True) -> None:
     """Rebuild one NPA target_col's diagnostics CSV + deprel index.html,
     purely from on-disk output/decision_trees + output/minimal_pairs
     artifacts -- the tail of run_agreement_pipeline (everything from
     "Generating diagnostics table" on), extracted so a caller that only
     wants to refresh an already-fully-built condition's index (see
-    scripts/generate_html_indexes.py) doesn't have to pay for
+    scripts/overview/generate_html_indexes.py) doesn't have to pay for
     run_agreement_pipeline's per-language loop first.
 
     That loop unconditionally reads each language's full np_instances/
@@ -747,7 +747,7 @@ def refresh_deprel_index(target_col: str,
     has_pairs=False (the data-debugging mode, see run_agreement_pipeline's
     own build_pairs) skips the diagnostics table/CSV entirely and passes
     pairs_dir=None to generate_html_deprel_index -- that still renders the
-    entropy-scatter index page (word_order.viz_deprel's classic, non-
+    accuracy-scatter index page (word_order.viz_deprel's classic, non-
     diagnostics-panel layout), just without the pairs-derived N KEEP/N
     PAIRS columns and per-language diagnostics panel, since neither exists.
     """
@@ -800,7 +800,7 @@ def run_agreement_pipeline(target_col: str, langs: list[str], instances_dir: str
                             never_skip: bool = False,
                             drop_unk: bool = True, max_depth: int = 12,
                             min_samples_leaf: int = 10, test_size: float = 0.1,
-                            leaf_threshold: float = 0.1,
+                            leaf_threshold: float = 0.95,
                             palette_map: dict | None = None,
                             unimorph_args: dict | None = None,
                             build_pairs: bool = True, verbose: bool = True,
@@ -808,7 +808,8 @@ def run_agreement_pipeline(target_col: str, langs: list[str], instances_dir: str
                             include_excluded: bool = False,
                             detailed_unk: bool = False,
                             incl_unk: bool = False,
-                            second_chance=None) -> None:
+                            second_chance=None,
+                            build_index: bool = True) -> None:
     """Per-language: fit_npa_tree + word_order.viz_tree.tree2html, then (when
     build_pairs, the default) create_npa_pairs_for_target_col, for one NPA
     pairwise agreement column, e.g. "HEAD-DET_Number" -- then, once every
@@ -821,7 +822,7 @@ def run_agreement_pipeline(target_col: str, langs: list[str], instances_dir: str
     every NPA target_col into one "Noun Phrase" section, subdivided by role
     pair -- see word_order.viz_overview._classify_deprel) -- that's rescan-
     everything-recursively work best done once after a whole sweep, not
-    once per target_col; see scripts/generate_html_indexes.py.
+    once per target_col; see scripts/overview/generate_html_indexes.py.
 
     The NPA analog of sva_trees.pipeline.Pipeline._process_language_impl
     plus its post-loop indexing stage, both folded into one function since
@@ -879,9 +880,13 @@ def run_agreement_pipeline(target_col: str, langs: list[str], instances_dir: str
     parquet at read time (word_order.per_treebank.split_excluded; never used
     for the pooled tree or pairs); a language without any just has none.
 
+    build_index (default True): False skips the diagnostics table + deprel
+    index at the end (scripts/overview/generate_html_indexes.py builds them,
+    in parallel, after a sweep).
+
     second_chance: a sva_trees.second_chance.SecondChanceConfig to retry a
     language whose strict pass under-filled at a laxer, depth-aware per-leaf
-    entropy bar (same rule and meta.json bookkeeping as sva_trees.pipeline.
+    accuracy floor (same rule and meta.json bookkeeping as sva_trees.pipeline.
     Pipeline); None (default) never retries. Needs build_pairs.
 
     incl_unk (default False, as in sva_trees.pipeline.Pipeline): also fit the
@@ -1040,7 +1045,7 @@ def run_agreement_pipeline(target_col: str, langs: list[str], instances_dir: str
                 meta_path = os.path.join(lang_pairs_dir, "meta.json")
                 if os.path.exists(meta_path):
                     with open(meta_path) as f:
-                        cached_threshold = json.load(f).get("leaf_threshold")
+                        cached_threshold = json.load(f).get("leaf_min_acc")
                     if isinstance(cached_threshold, dict):
                         lang_leaf_threshold = {int(k): v for k, v in cached_threshold.items()}
 
@@ -1135,17 +1140,18 @@ def run_agreement_pipeline(target_col: str, langs: list[str], instances_dir: str
                 **tree_html_kwargs,
             )
 
-    refresh_deprel_index(
-        target_col,
-        save_dir=save_dir,
-        html_dir=html_dir,
-        pairs_dir=pairs_dir,
-        diagnostics_csv=diagnostics_csv,
-        leaf_threshold=leaf_threshold,
-        has_pairs=build_pairs,
-    )
+    if build_index:
+        refresh_deprel_index(
+            target_col,
+            save_dir=save_dir,
+            html_dir=html_dir,
+            pairs_dir=pairs_dir,
+            diagnostics_csv=diagnostics_csv,
+            leaf_threshold=leaf_threshold,
+            has_pairs=build_pairs,
+        )
 
     # Cross-pipeline overview index is no longer rebuilt here -- see
     # sva_trees.pipeline.Pipeline.run's identical comment;
-    # scripts/generate_html_indexes.py now does this once, after all
+    # scripts/overview/generate_html_indexes.py now does this once, after all
     # conditions are (re)built.

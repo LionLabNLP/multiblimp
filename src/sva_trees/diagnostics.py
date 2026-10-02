@@ -156,7 +156,7 @@ def language_diagnostics_row(lang: str, lang_dir: str) -> dict:
     # A dict here means a second_chance depth-aware retry gave leaves their
     # own individual cutoffs -- no single number represents the language for
     # this per-language table (each leaf's own tag on the tree page has it).
-    leaf_threshold = meta.get("leaf_threshold")
+    leaf_threshold = meta.get("leaf_min_acc")
     row = {
         "Language": lang,
         "leaf_threshold": None if isinstance(leaf_threshold, dict) else leaf_threshold,

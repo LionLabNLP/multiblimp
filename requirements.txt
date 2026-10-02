@@ -1,10 +1,24 @@
-pandas
-tqdm
-conllu
 arabic2latin
-indic_transliteration
-unidecode
-iso639-lang
-minicons
+beautifulsoup4
+conllu
 datasets
-lm-eval
+huggingface_hub
+indic_transliteration
+iso639-lang
+joblib
+matplotlib
+minicons
+numpy
+pandas
+plotly
+pyarrow
+scikit-learn
+scipy
+seaborn
+tqdm
+transformers
+unidecode
+
+# optional, imported lazily
+# lightgbm   (word_order.decision_tree, LightGBM option)
+# spacy      (word_order.tree_utils, displacy rendering)

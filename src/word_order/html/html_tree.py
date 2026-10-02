@@ -1668,7 +1668,7 @@ def _v2_build_nodes(node_data, screen, leaf_threshold, strict_leaf_threshold=Non
         entry = {
             "x": round(x, 1), "y": round(y, 1),
             "branch": branch,
-            "n": nd["n"], "H": round(nd["H"], 4),
+            "n": nd["n"], "H": round(nd["H"], 4), "acc": round(nd["acc"], 4),
             "leaf": is_leaf,
             "corr": nd.get("corr") or [],
             "dist": [
@@ -1682,19 +1682,19 @@ def _v2_build_nodes(node_data, screen, leaf_threshold, strict_leaf_threshold=Non
             entry["predicted"] = " / ".join(quals)
             entry["majorityLabel"] = quals[0] if quals else None
             node_threshold = _v2_leaf_threshold_for(leaf_threshold, i)
-            entry["keep"] = bool(node_threshold is not None and nd["H"] < node_threshold)
+            entry["keep"] = bool(node_threshold is not None and nd["acc"] > node_threshold)
             # This leaf's own cutoff, always -- whether kept or not, and
             # whether leaf_threshold is one global cutoff or a per-leaf map
             # (depth-aware second_chance gives leaves different values).
-            entry["keepThresholdH"] = node_threshold
+            entry["keepThresholdAcc"] = node_threshold
             # Only reached via a second_chance retry: strict_leaf_threshold is
             # the pipeline's own (pre-retry) bar, always passed regardless of
             # whether a retry happened -- so this is False both when there was
             # no retry and when one was reverted, since node_threshold then
-            # equals strict_leaf_threshold and no kept leaf's H can be >= it.
+            # equals strict_leaf_threshold and no kept leaf's acc can be <= it.
             entry["secondChance"] = bool(
                 entry["keep"] and strict_leaf_threshold is not None
-                and nd["H"] >= strict_leaf_threshold
+                and nd["acc"] <= strict_leaf_threshold
             )
             # "kept" is the majority class's own count, not the leaf's full n.
             majority_cnt = next(
@@ -1749,22 +1749,27 @@ def _v2_build_meta(meta, leaf_threshold, strict_leaf_threshold=None):
         "accuracy": meta.get("accuracy", ""),
         "testAccuracy": meta.get("testAccuracy"),
         "testN": meta.get("testN"),
-        "baseEntropy": meta.get("base entropy", ""),
-        "reducedEntropy": meta.get("reduced entropy", ""),
+        "measure": meta.get("measure", "entropy"),
         "nodes": meta.get("Nodes", ""),
         "depth": meta.get("Depth", ""),
         "trainingSamples": meta.get("Training samples", ""),
         "predictor": meta.get("Predictor", ""),
     }
+    if m["measure"] == "accuracy":
+        m["rootAccuracy"] = meta.get("root accuracy", "")
+        m["trainAccuracy"] = meta.get("train accuracy (smoothed)", "")
+    else:
+        m["baseEntropy"] = meta.get("base entropy", "")
+        m["reducedEntropy"] = meta.get("reduced entropy", "")
     if isinstance(leaf_threshold, dict):
         # A depth-aware second_chance retry: no single number to show here --
         # each leaf's own 🔑/🔑2️⃣ tag already carries its own cutoff, so the
         # legend just shows the plain strict bar every leaf was first held to.
-        m["keepThreshold"] = f"entropy < {strict_leaf_threshold:g}" if strict_leaf_threshold is not None else ""
-        m["keepThresholdH"] = strict_leaf_threshold
+        m["keepThreshold"] = f"leaf accuracy > {strict_leaf_threshold:g}" if strict_leaf_threshold is not None else ""
+        m["keepThresholdAcc"] = strict_leaf_threshold
     elif leaf_threshold is not None:
-        m["keepThreshold"] = f"entropy < {leaf_threshold:g}"
-        m["keepThresholdH"] = leaf_threshold
+        m["keepThreshold"] = f"leaf accuracy > {leaf_threshold:g}"
+        m["keepThresholdAcc"] = leaf_threshold
     if meta.get("Treebank"):
         m["treebank"] = meta["Treebank"]
     if meta.get("Excluded"):

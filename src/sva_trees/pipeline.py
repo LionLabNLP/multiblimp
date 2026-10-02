@@ -19,7 +19,7 @@ from word_order.process_treebank import (
     create_word_order_df, read_df, clear_form_groups_cache, load_treebank,
 )
 from word_order.decision_tree import fit_dt, FIT_EXCLUDED_FEATS, fit_excluded_for_display
-from word_order.entropy import default_leaf_threshold
+from word_order.entropy import DEFAULT_LEAF_MIN_ACCURACY
 from word_order.viz_tree import tree2html
 from word_order.per_treebank import (
     fit_treebank_trees, render_treebank_pages, build_nav, split_excluded,
@@ -117,6 +117,69 @@ def get_ud_lookup_table(inflector):
     return ud_data
 
 
+def refresh_deprel_index(target_id, deprel, predictor_var, head_label="Verb",
+                         simplify=True, leaf_threshold=DEFAULT_LEAF_MIN_ACCURACY,
+                         has_pairs=True):
+    """Rebuild one SVA condition x deprel's diagnostics CSV + deprel
+    index.html purely from the on-disk output/decision_trees +
+    output/minimal_pairs artifacts -- the tail of Pipeline.__call__, extracted
+    so it can run without any fitting (see scripts/overview/
+    generate_html_indexes.py, which runs it in parallel across conditions;
+    NPA's counterpart is npa.agreement.refresh_deprel_index).
+
+    has_pairs=False (the data-debugging mode) skips the pairs-derived
+    diagnostics and renders the index without the pairs columns/panel.
+    """
+    pairs_dir = os.path.join(OUTPUT_MINIMAL_PAIRS_DIR, target_id, f"{target_id}_{deprel}")
+    decision_trees_dir = os.path.join(OUTPUT_DECISION_TREES_DIR, target_id, f"{target_id}_{deprel}")
+
+    # Data-debugging mode: no pairs were ever created, so there's
+    # nothing for the pairs-derived diagnostics table to summarize --
+    # generate_html_deprel_index still runs below (pairs_dir=None,
+    # diagnostics_by_lang=None), just without the pairs/diagnostics
+    # columns and panel, so the accuracy-scatter overview keeps working.
+    diagnostics_by_lang = None
+    if has_pairs:
+        print("Generating diagnostics table for", deprel)
+        diagnostics_df = generate_diagnostics_table(pairs_dir)
+        write_diagnostics_csv(
+            diagnostics_df,
+            os.path.join(OUTPUT_DIAGNOSTICS_DIR, target_id, f"{target_id}_{deprel}.csv"),
+        )
+        # Reshaped here (not inside word_order.viz_deprel) so that
+        # module doesn't need to depend on sva_trees.
+        diagnostics_by_lang = {
+            row["Language"]: diagnostics_row_to_json(
+                row, lang_dir=os.path.join(pairs_dir, row["Language"])
+            )
+            for _, row in diagnostics_df.iterrows()
+        }
+
+    subject_label, nsubj_label = _DEPREL_ROLE_LABELS.get(deprel, ("subject", deprel))
+    # target_id is e.g. "svNa"/"spGa"/"ovPa" -- prefix (all but
+    # the last 2 chars) selects the group, suffix (the last 2) the
+    # feature, so this naturally covers every prefix length ("sv"/
+    # "sp"/"ov" at 2 chars, "iov" at 3) without hardcoding either.
+    condition_id = target_id.removesuffix("_single")
+    group_label = _TARGET_PREFIX_GROUP_LABELS.get(condition_id[:-2], "Subject-Verb")
+    feature_label = FEATURE_SUFFIXES.get(condition_id[-2:], "")
+    agreement_label = f"{group_label} {feature_label}".strip()
+    print("Generating deprel index for", deprel)
+    generate_html_deprel_index(data_dir=decision_trees_dir,
+                    html_directory=os.path.join(HTML_DECISION_TREES_DIR, target_id),
+                    target_col=predictor_var,
+                    exclude_labels={"unk"} if simplify else {"--", "+-"},
+                    leaf_threshold=leaf_threshold,
+                    pairs_dir=pairs_dir if has_pairs else None,
+                    diagnostics_by_lang=diagnostics_by_lang,
+                    head_role_label=head_label,
+                    agreement_label=agreement_label,
+                    subject_label=subject_label,
+                    nsubj_label=nsubj_label,
+                    debug_view=not has_pairs,
+                    )
+
+
 class Pipeline:
     # Wording of the agreeing head in reports/pages; subclasses override.
     head_label = "Verb"
@@ -130,7 +193,7 @@ class Pipeline:
                  agreement_feats=None, drop_unk=True, max_tasks_per_child=1,
                  second_chance=None, per_treebank=True, include_excluded=False,
                  generate_pairs=True, fetch_all=True, incl_unk=False,
-                 detailed_unk=False):
+                 detailed_unk=False, build_index=True, head_label=None):
         self.target = target
         self.predictor_var = predictor_var
         # Extract agreement var for all of these, df's can be shared between similar scripts.
@@ -158,15 +221,13 @@ class Pipeline:
         self.rm_columns = rm_columns
         self.target_id = target_id if target_id else predictor_var.split("_")[2][0]
         self.min_samples_leaf = min_samples_leaf
-        # None (default): derive from min_samples_leaf/Jeffreys smoothing
-        # rather than an arbitrary constant -- see
-        # word_order.entropy.default_leaf_threshold's docstring for why
-        # (a fixed 0.12 silently required ~30-sample leaves to ever pass,
-        # regardless of purity, orphaning min_samples_leaf's own 10-29
-        # range). Pass an explicit value to override.
+        # None (default): DEFAULT_LEAF_MIN_ACCURACY (0.95). A pure leaf of
+        # the default min_samples_leaf=10 has smoothed accuracy 0.955, so it
+        # passes; a smaller min_samples_leaf could never reach 0.95. Pass an
+        # explicit value to override.
         self.leaf_threshold = (
             threshold if threshold is not None
-            else default_leaf_threshold(self.min_samples_leaf)
+            else DEFAULT_LEAF_MIN_ACCURACY
         )
         self.simplify = simplify  # collapse +-/-- to "unk" for decision tree
         # If False, unk-labeled rows stay in the DT fit instead of being
@@ -223,6 +284,12 @@ class Pipeline:
         # *why* a row is unk is a debugging question most default-mode
         # viewers don't need.
         self.detailed_unk = detailed_unk
+        # False: skip this run's own diagnostics table + deprel index (a
+        # multi-condition sweep builds them once, in parallel, afterwards via
+        # scripts/overview/generate_html_indexes.py).
+        self.build_index = build_index
+        if head_label:
+            self.head_label = head_label
 
     def _worker_mem_bytes(self):
         if self.max_worker_mem_gb is not None:
@@ -299,60 +366,18 @@ class Pipeline:
                     print(f"  FAILED: {lang}: {e}")
                     traceback.print_exc()
 
-        for deprel in self.target.child_deprels:
-            pairs_dir = os.path.join(OUTPUT_MINIMAL_PAIRS_DIR, self.target_id, f"{self.target_id}_{deprel}")
-            decision_trees_dir = os.path.join(OUTPUT_DECISION_TREES_DIR, self.target_id, f"{self.target_id}_{deprel}")
-
-            # Data-debugging mode: no pairs were ever created, so there's
-            # nothing for the pairs-derived diagnostics table to summarize --
-            # generate_html_deprel_index still runs below (pairs_dir=None,
-            # diagnostics_by_lang=None), just without the pairs/diagnostics
-            # columns and panel, so the entropy-scatter overview keeps working.
-            diagnostics_by_lang = None
-            if self.generate_pairs:
-                print("Generating diagnostics table for", deprel)
-                diagnostics_df = generate_diagnostics_table(pairs_dir)
-                write_diagnostics_csv(
-                    diagnostics_df,
-                    os.path.join(OUTPUT_DIAGNOSTICS_DIR, self.target_id, f"{self.target_id}_{deprel}.csv"),
+        if self.build_index:
+            for deprel in self.target.child_deprels:
+                refresh_deprel_index(
+                    self.target_id, deprel, self.predictor_var,
+                    head_label=self.head_label, simplify=self.simplify,
+                    leaf_threshold=self.leaf_threshold, has_pairs=self.generate_pairs,
                 )
-                # Reshaped here (not inside word_order.viz_deprel) so that
-                # module doesn't need to depend on sva_trees.
-                diagnostics_by_lang = {
-                    row["Language"]: diagnostics_row_to_json(
-                        row, lang_dir=os.path.join(pairs_dir, row["Language"])
-                    )
-                    for _, row in diagnostics_df.iterrows()
-                }
-
-            subject_label, nsubj_label = _DEPREL_ROLE_LABELS.get(deprel, ("subject", deprel))
-            # self.target_id is e.g. "svNa"/"spGa"/"ovPa" -- prefix (all but
-            # the last 2 chars) selects the group, suffix (the last 2) the
-            # feature, so this naturally covers every prefix length ("sv"/
-            # "sp"/"ov" at 2 chars, "iov" at 3) without hardcoding either.
-            condition_id = self.target_id.removesuffix("_single")
-            group_label = _TARGET_PREFIX_GROUP_LABELS.get(condition_id[:-2], "Subject-Verb")
-            feature_label = FEATURE_SUFFIXES.get(condition_id[-2:], "")
-            agreement_label = f"{group_label} {feature_label}".strip()
-            print("Generating deprel index for", deprel)
-            generate_html_deprel_index(data_dir=decision_trees_dir,
-                            html_directory=os.path.join(HTML_DECISION_TREES_DIR, self.target_id),
-                            target_col=self.predictor_var,
-                            exclude_labels={"unk"} if self.simplify else {"--", "+-"},
-                            leaf_threshold=self.leaf_threshold,
-                            pairs_dir=pairs_dir if self.generate_pairs else None,
-                            diagnostics_by_lang=diagnostics_by_lang,
-                            head_role_label=self.head_label,
-                            agreement_label=agreement_label,
-                            subject_label=subject_label,
-                            nsubj_label=nsubj_label,
-                            debug_view=not self.generate_pairs,
-                            )
         # Cross-pipeline overview index (word_order.viz_overview.
         # generate_html_overview_index) is no longer rebuilt here -- it
         # rescans every condition's index.html recursively, so doing it once
         # per condition run is wasted work across a multi-condition sweep.
-        # scripts/generate_html_indexes.py now does this exactly once, after
+        # scripts/overview/generate_html_indexes.py now does this exactly once, after
         # all conditions are (re)built.
 
     def _is_done(self, lang):

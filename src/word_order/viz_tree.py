@@ -10,8 +10,11 @@ import pandas as pd
 
 from matplotlib.colors import to_hex
 
-from .entropy import order_entropy, calculate_base_entropy, calculate_tree_entropy
-from .utils import get_all_orders, build_grew_link, split_pairwise_predictor
+from .entropy import (
+    order_entropy, smoothed_accuracy, calculate_base_entropy, calculate_tree_entropy,
+    calculate_base_accuracy, calculate_tree_accuracy,
+)
+from .utils import get_all_orders, build_grew_link, split_pairwise_predictor, is_agreement_predictor
 from .process_treebank import resolve_layered_head_key
 from .html.html_tree import create_html, write_placeholder_html, write_html_v2
 
@@ -795,6 +798,8 @@ def _finalize_tree_html(
                 rule_map[left_child] = (rule_text, False)  # False branch (left)
                 rule_map[right_child] = (rule_text, True)  # True branch (right)
 
+    # agreement pages report/keep on smoothed accuracy; word-order pages stay on entropy
+    use_acc = meta.get("measure") == "accuracy"
     for i in node_ids:
         # Get the predicted class name from the model
         predicted_class_name = predicted_class[i]
@@ -814,6 +819,8 @@ def _finalize_tree_html(
         n_right = max(dist_i_fitted)
         n_wrong = sum(dist_i_fitted) - n_right
         binary_entropy = order_entropy(n_right, n_wrong)
+        node_acc = smoothed_accuracy(n_right, n_right + n_wrong)
+        node_measure = f"acc={node_acc:.3f}" if use_acc else f"H={binary_entropy:.2f}"
         node_color = interpolate_color(node_color, "#ffffff", relative_entropy * 0.72)
 
         total_node = sum(dist_i_fitted) or 1
@@ -842,7 +849,7 @@ def _finalize_tree_html(
             label = (
                 f"<b>{rule}{corr_note}</b><br>"
                 f"<span style='{meta_style}'>"
-                f"<b>[{i}]</b>  n={n_samples[i]}  H={binary_entropy:.2f}</span>"
+                f"<b>[{i}]</b>  n={n_samples[i]}  {node_measure}</span>"
             )
             hover_corr = list(corr)
         else:
@@ -863,7 +870,7 @@ def _finalize_tree_html(
             label = (
                 f"{leaf_label}<br>"
                 f"<span style='{meta_style}'>"
-                f"<b>[{i}]</b>  n={n_samples[i]}  H={binary_entropy:.2f}</span>"
+                f"<b>[{i}]</b>  n={n_samples[i]}  {node_measure}</span>"
             )
             hover_corr = []
 
@@ -903,6 +910,7 @@ def _finalize_tree_html(
             # re-deriving or re-parsing anything.
             "n": int(n_samples[i]),
             "H": float(binary_entropy),
+            "acc": float(node_acc),
             # This node's OWN split rule (internal nodes only) -- distinct
             # from "rule" above, which is the *incoming* branch condition
             # from the parent. v1's own annotation label recomputes this
@@ -1083,9 +1091,9 @@ def tree2html(
                 "Training samples": 4486,
             }
         If not provided, these values are computed automatically where possible.
-    leaf_threshold: the entropy cutoff sva_trees.create_pairs.create_pairs uses to
-        decide "keep" (leaf_top1_entropy < leaf_threshold) -- shown in the info
-        panel next to base/reduced entropy so it's visible right where it's
+    leaf_threshold: the accuracy floor sva_trees.create_pairs.create_pairs uses to
+        decide "keep" (leaf_top1_acc > leaf_threshold) -- shown in the info
+        panel next to the root/train accuracy so it's visible right where it's
         needed, without cross-referencing the create_pairs run that produced
         this language's N Keep/minimal pairs. None omits the row (e.g. callers
         that don't know it, or aren't showing agreement diagnostics at all).
@@ -1113,13 +1121,13 @@ def tree2html(
     strict_leaf_threshold: the pipeline's own strict leaf_threshold, passed
         regardless of whether a sva_trees.second_chance retry happened.
         leaf_threshold is the lax bar on a successful retry, so any kept leaf
-        with entropy above this value only passed because of the retry --
+        with accuracy at or below this value only passed because of the retry --
         the v2 page tags those leaves and shows the strict bar next to the
         lax one. None (default, or equal to leaf_threshold) tags nothing.
     """
     if leaf_threshold is not None and not isinstance(leaf_threshold, dict):
         meta = dict(meta or {})
-        meta["Keep threshold"] = f"entropy &lt; {leaf_threshold:g}"
+        meta["Keep threshold"] = f"leaf accuracy &gt; {leaf_threshold:g}"
 
     if not full_tree_html:
         write_placeholder_html(
@@ -1213,6 +1221,7 @@ def tree2html(
     if excluded:
         meta["excludedClasses"] = excluded
 
+    meta["measure"] = "accuracy" if is_agreement_predictor(predictor_var) else "entropy"
     accuracy = pipeline_model.score(dt_df, dt_df[predictor_var])
     meta["accuracy"] = f"{accuracy * 100:.1f}%"
     # Held-out accuracy of this same tree, from the test split it was fit with
@@ -1223,12 +1232,16 @@ def tree2html(
         meta["testAccuracy"] = f"{test_acc * 100:.1f}%"
         meta["testN"] = int(len(test_eval))
 
-    base_ent = calculate_base_entropy(dt_df, predictor_var, binary=True)
-    reduced_ent = calculate_tree_entropy(
-        pipeline_model, dt_df, predictor_var, binary=True
-    )
-    meta["base entropy"] = f"{base_ent:.3f}"
-    meta["reduced entropy"] = f"{reduced_ent:.3f}"
+    if meta["measure"] == "accuracy":
+        meta["root accuracy"] = f"{calculate_base_accuracy(dt_df, predictor_var) * 100:.1f}%"
+        meta["train accuracy (smoothed)"] = f"{calculate_tree_accuracy(pipeline_model, dt_df, predictor_var) * 100:.1f}%"
+    else:
+        base_ent = calculate_base_entropy(dt_df, predictor_var, binary=True)
+        reduced_ent = calculate_tree_entropy(
+            pipeline_model, dt_df, predictor_var, binary=True
+        )
+        meta["base entropy"] = f"{base_ent:.3f}"
+        meta["reduced entropy"] = f"{reduced_ent:.3f}"
 
     tree_depth = clf.get_depth()
     n_leaves = clf.get_n_leaves()

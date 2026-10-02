@@ -63,6 +63,12 @@ class Condition:
         return self.aux_target is not None
 
     @property
+    def head_label(self):
+        if self.is_aux:
+            return "Aux"
+        return "Participle" if self.verb_form == "part" else "Verb"
+
+    @property
     def swap_feat(self):
         return FEATURES[self.feature_suffix]
 

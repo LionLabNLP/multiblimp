@@ -8,7 +8,7 @@ from npa.agreement import run_agreement_pipeline, canonical_target_col
 from npa.npa_config import load_npa_config, config_langs_for
 from multiblimp.languages import get_ud_langs, gblang2udlang
 from multiblimp.config import TREEBANK_FEATURES_DIR, DEBUG_MODE
-from word_order.entropy import default_leaf_threshold
+from word_order.entropy import DEFAULT_LEAF_MIN_ACCURACY
 from sva_trees.second_chance import add_cli_args as add_second_chance_args, config_from_args as second_chance_config_from_args
 from agreement_candidates import scan_qualifying_langs
 from np_types import process_one_language, MAX_TREEBANK_LEN
@@ -66,7 +66,7 @@ if __name__ == "__main__":
     parser.add_argument("--refit", action="store_true",
                         help="Redo everything downstream of the cached np_instances "
                              "parquet -- refit the decision tree, regenerate minimal "
-                             "pairs (and any --second_chance retry) and HTML -- without "
+                             "pairs (and any second-chance retry) and HTML -- without "
                              "re-extracting from the treebank. Same as sva_trees' --refit.")
     parser.add_argument("--no_extract", action="store_true",
                         help="Never extract np_instances here: a language with no "
@@ -98,9 +98,14 @@ if __name__ == "__main__":
     parser.add_argument("--min_samples_leaf", type=int, default=10)
     parser.add_argument("--test_size", type=float, default=0.1)
     parser.add_argument("--leaf_threshold", type=float, default=None,
-                        help="Leaf-keep entropy cutoff. Default: derived from "
-                             "--min_samples_leaf via word_order.entropy."
-                             "default_leaf_threshold, same as sva_trees/subj_aux.")
+                        help="Leaf-keep floor on smoothed leaf accuracy (leaves with "
+                             "accuracy above it are kept). Default: 0.95, same as "
+                             "sva_trees/subj_aux.")
+    parser.add_argument("--no_index", action="store_true",
+                        help="Skip this run's diagnostics table + deprel index.html "
+                             "(fit_all.py passes this and builds every condition's "
+                             "index once, in parallel, via scripts/overview/"
+                             "generate_html_indexes.py afterwards).")
     parser.add_argument("--no_pairs", action="store_true",
                         help="Stop at tree-fitting -- skip create_npa_pairs_for_target_col "
                              "and the diagnostics/index-generation stage")
@@ -198,11 +203,12 @@ if __name__ == "__main__":
         min_samples_leaf=args.min_samples_leaf,
         test_size=args.test_size,
         leaf_threshold=(args.leaf_threshold if args.leaf_threshold is not None
-                        else default_leaf_threshold(args.min_samples_leaf)),
+                        else DEFAULT_LEAF_MIN_ACCURACY),
         build_pairs=not (args.no_pairs or args.debug),
         per_treebank=not args.no_per_treebank,
         include_excluded=args.include_excluded,
         second_chance=second_chance_config_from_args(args),
+        build_index=not args.no_index,
         detailed_unk=args.debug,
         incl_unk=args.incl_unk_trees,
     )
