@@ -267,6 +267,7 @@ class UnimorphInflector:
         remove_diacritics: bool = False,
         remove_multiples: bool = False,
         remove_multiword_forms: bool = False,
+        skip_load: bool = False,
     ):
         """
         UnimorphInflector loads in a UniMorph file and provides utility
@@ -313,6 +314,9 @@ class UnimorphInflector:
         multiple words. For example, in German the UM entries for verbs+
         prepositions are encoded as a single entry, but these are not
         suitable for inflecting.
+        :param skip_load: Don't read any table (unimorph_df stays None); for
+        callers that only use the processing methods, see
+        pickle_unimorph_streaming.
         """
         self.langcode = langcode
         self.resource_dir = resource_dir or "."
@@ -336,11 +340,15 @@ class UnimorphInflector:
         self.remove_multiword_forms = remove_multiword_forms
 
         self.ud_inflector = None
-        self.unimorph_df = self.load_unimorph(
-            remove_diacritics,
-            filter_entries,
-            remove_multiples,
-            load_from_pickle=load_from_pickle,
+        self.unimorph_df = (
+            None
+            if skip_load
+            else self.load_unimorph(
+                remove_diacritics,
+                filter_entries,
+                remove_multiples,
+                load_from_pickle=load_from_pickle,
+            )
         )
         self.lemma_groups, self.form_groups = self.create_df_groups()
 
@@ -546,6 +554,15 @@ class UnimorphInflector:
 
                 df = pd.concat([df, df_seg], ignore_index=True).drop_duplicates()
 
+        return self._build_df(df, remove_diacritics, filter, remove_multiples)
+
+    def _build_df(
+        self,
+        df: pd.DataFrame,
+        remove_diacritics: bool,
+        filter: Dict[str, List[str]],
+        remove_multiples: bool,
+    ) -> pd.DataFrame:
         if remove_diacritics:
             df.lemma = [unidecode(lemma) for lemma in df.lemma]
             df.form = [unidecode(lemma) for lemma in df.form]
@@ -669,6 +686,62 @@ class UnimorphInflector:
         for pos in df["upos"].unique():
             lookup[pos] = df[df["upos"] == pos].dropna(axis=1, how="all")
         return lookup
+
+    def pickle_unimorph_streaming(
+        self,
+        pickle_path: str,
+        remove_diacritics: bool,
+        remove_multiples: bool,
+        chunk_rows: int = 1_000_000,
+    ) -> int:
+        """pickle_unimorph_df's split layout for a UniMorph text file too big to
+        parse in one go (load_unimorph holds a dict per row plus a copy of the
+        frame): parse `chunk_rows` rows at a time -- every step of _build_df
+        is row-wise -- and assemble one pickle per UPOS at the end.
+        Returns the row count."""
+        path = os.path.join(
+            self.resource_dir, f"unimorph/{self.langcode}/{self.langcode}"
+        )
+        split_dir = pickle_path[: -len(".pickle")] + ".split"
+        tmp_dir = split_dir + ".tmp"
+        shutil.rmtree(tmp_dir, ignore_errors=True)
+        os.makedirs(tmp_dir)
+
+        columns: List[str] = []
+        parts: Dict[str, List[str]] = {}
+        num_rows = 0
+        reader = pd.read_csv(
+            path, sep="\t", names=["lemma", "form", "ufeat"], dtype=str,
+            chunksize=chunk_rows,
+        )
+        for chunk_idx, chunk in enumerate(reader):
+            df = self._build_df(chunk, remove_diacritics, {}, remove_multiples)
+            columns += [c for c in df.columns if c not in columns]
+            # category -> object shares one string object per distinct value
+            for column in df.columns:
+                if column not in ("lemma", "form", "ufeat"):
+                    df[column] = df[column].astype("category").astype(object)
+            for upos, group in df.groupby("upos"):
+                part = os.path.join(
+                    tmp_dir, f"{quote(str(upos), safe='')}.{chunk_idx}.pickle"
+                )
+                group.to_pickle(part)
+                parts.setdefault(str(upos), []).append(part)
+            num_rows += len(df)
+            del df, chunk
+
+        if os.path.isfile(pickle_path):
+            os.remove(pickle_path)
+        shutil.rmtree(split_dir, ignore_errors=True)
+        os.makedirs(split_dir)
+        for upos, files in parts.items():
+            piece = pd.concat(
+                [pd.read_pickle(f) for f in files], ignore_index=True
+            ).reindex(columns=columns)
+            piece.to_pickle(self._split_pickle_file(split_dir, upos))
+            del piece
+        shutil.rmtree(tmp_dir)
+        return num_rows
 
     def pickle_unimorph_df(self, path: str) -> None:
         """Pickle to `path`; tables over SPLIT_PICKLE_MIN_ROWS rows are written
