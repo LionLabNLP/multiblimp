@@ -139,17 +139,16 @@ if __name__ == "__main__":
     parser.add_argument("--langs", "-l", nargs="*", default=[])
     parser.add_argument("--recache", action="store_true",
                         help="Re-count languages even if a cached CSV exists")
-    parser.add_argument("--max_treebank_len", "-m", type=int, default=30_000)
+    parser.add_argument("--max_treebank_len", "-m", type=int, default=10_000)
     parser.add_argument("--top_n", "-n", type=int, default=20,
                         help="Number of top types to print for the macro summary")
-    parser.add_argument("--streaming", action="store_true",
+    parser.add_argument("--streaming", action=argparse.BooleanOptionalAction, default=True,
                         help="Use build_np_data_streaming (flush every --chunk_size "
                              "NP-instance records to disk, ~constant peak memory per "
                              "language) instead of build_np_data (holds the whole "
                              "language's records in memory at once -- can reach tens "
                              "of GB for a large, morphologically rich language). "
-                             "Recommended whenever --max_treebank_len is raised much "
-                             "above the ~1000-3000 range, or removed entirely.")
+                             "On by default; pass --no-streaming for the in-memory path.")
     parser.add_argument("--chunk_size", type=int, default=500,
                         help="Records per flush under --streaming (ignored otherwise).")
     parser.add_argument("--n_jobs", type=int, default=1,
