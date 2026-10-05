@@ -12,10 +12,13 @@ multiblimp.unimorph) -- neither sva_trees nor subj_aux/word_order/npa "owns"
 this, so neither should host it as a private helper the others reach into.
 """
 
+import ctypes
 import math
 import os
 import subprocess
 import json
+import threading
+import time
 
 
 def total_system_memory_bytes():
@@ -122,6 +125,39 @@ def limit_process_memory(max_bytes):
         resource.setrlimit(resource.RLIMIT_AS, (max_bytes, max_bytes))
     except (ImportError, ValueError, OSError):
         pass
+
+
+def guard_process_memory(max_bytes, poll_s=0.5, grace_s=10.0):
+    """limit_process_memory plus an RSS watchdog, for platforms where
+    RLIMIT_AS isn't enforced (macOS). A daemon thread polls this process's
+    resident set; past max_bytes it raises MemoryError in the main thread
+    (caught per language by the caller, so the run continues), and if usage
+    is still over the cap grace_s later it hard-exits the process instead.
+    Needs psutil; without it only the RLIMIT_AS cap applies.
+    """
+    limit_process_memory(max_bytes)
+    try:
+        import psutil
+    except ImportError:
+        return
+    proc = psutil.Process()
+    main_id = threading.main_thread().ident
+
+    def watch():
+        over_since = None
+        while True:
+            time.sleep(poll_s)
+            if proc.memory_info().rss < max_bytes:
+                over_since = None
+                continue
+            if over_since is None:
+                over_since = time.monotonic()
+                ctypes.pythonapi.PyThreadState_SetAsyncExc(
+                    ctypes.c_ulong(main_id), ctypes.py_object(MemoryError))
+            elif time.monotonic() - over_since > grace_s:
+                os._exit(1)
+
+    threading.Thread(target=watch, daemon=True).start()
 
 
 def match_casing(original: str, reinflected: str) -> str:

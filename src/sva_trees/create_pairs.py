@@ -667,8 +667,12 @@ def process_item(
         # match_casing, not swap_form itself -- swap_form stays the raw
         # lexicon-cased string used for every lookup below (get_form_features
         # is a case-sensitive lexicon lookup); only what lands in item/
-        # wrong_item is recased for display.
-        item[f"swap_{take_features_from}"] = match_casing(form, swap_form)
+        # wrong_item is recased for display. "_form" itself is lowercased
+        # upstream, so the casing reference is "_form_orig".
+        orig_form = item.get(f"{take_features_from}_form_orig")
+        if not isinstance(orig_form, str):
+            orig_form = form
+        item[f"swap_{take_features_from}"] = match_casing(orig_form, swap_form)
         item["swap_ufeat"] = ufeat
 
         if swap_form == form:
@@ -744,13 +748,13 @@ def process_item(
                     return "undefined_features", item
             elif len(feature_vals & swap_feature_vals) > 0:
                 wrong_item = dict(item)
-                wrong_item[f"swap_{take_features_from}"] = match_casing(form, swap_form)
+                wrong_item[f"swap_{take_features_from}"] = match_casing(orig_form, swap_form)
                 wrong_item["feature_vals"] = feature_key
 
                 return "same_features", wrong_item
             else:
                 wrong_item = dict(item)
-                wrong_item[f"swap_{take_features_from}"] = match_casing(form, swap_form)
+                wrong_item[f"swap_{take_features_from}"] = match_casing(orig_form, swap_form)
                 wrong_item["feature_vals"] = feature_key
 
                 return "undefined_features", wrong_item
@@ -926,7 +930,7 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
             col for col in columns
             if col in (f"{child_deprel}_form", f"{child_deprel}_Case")
             or any(
-                col == f"{kind}_form"
+                col in (f"{kind}_form", f"{kind}_form_orig")
                 or (col.startswith(f"{kind}_") and feature_col.fullmatch(col[len(kind) + 1:]))
                 for kind in swap_target
             )

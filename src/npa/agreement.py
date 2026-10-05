@@ -359,7 +359,7 @@ def create_npa_pairs(dt_df: pd.DataFrame, target_col: str, inflector,
     # sva_trees.create_pairs.create_pairs uses) keeps the real column names
     # regardless of identifier-safety.
     needed = [col for col, _ in feat_cols] + [col for col, _ in fixed_feat_cols]
-    needed += [c for c in (f"{swap_role}_form", f"{fixed_role}_form") if c in swap_df.columns]
+    needed += [c for c in (f"{swap_role}_form", f"{fixed_role}_form", f"{swap_role}_form_orig") if c in swap_df.columns]
     columns = list(dict.fromkeys(needed))
     row_iter = enumerate(swap_df[columns].itertuples(index=False, name=None))
     for pos, row_tuple in (tqdm(row_iter, total=len(swap_df)) if verbose else row_iter):
@@ -388,7 +388,9 @@ def create_npa_pairs(dt_df: pd.DataFrame, target_col: str, inflector,
             # lexicon-cased string used for every lookup below
             # (get_form_features is a case-sensitive lexicon lookup); only
             # what lands in item is recased for display.
-            item[f"swap_{swap_role}"] = match_casing(form, swap_form)
+            orig_form = row_dict.get(f"{swap_role}_form_orig")
+            item[f"swap_{swap_role}"] = match_casing(
+                orig_form if isinstance(orig_form, str) else form, swap_form)
             for feat, vals in swap_feats.get(swap_form, {}).items():
                 item[f"after_{swap_role}_{feat}"] = "/".join(sorted(vals))
 

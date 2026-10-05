@@ -5,6 +5,7 @@ import re
 import numpy as np
 import pandas as pd
 
+from multiblimp.agreement_pipeline_utils import match_casing
 from ..utils import build_grew_link
 from ..process_treebank import resolve_layered_head_key, slot_suffixes
 
@@ -1432,7 +1433,7 @@ def _v2_pair_from_row(row, raw_role_a, raw_role_b, decisive_feat):
 
     swap_form = row.get(f"swap_{swap_prefix}")
     swapped_sen = list(sen)
-    swapped_sen[int(idx) - 1] = swap_form
+    swapped_sen[int(idx) - 1] = match_casing(sen[int(idx) - 1], swap_form)
 
     href, name = _v2_pair_treebank_link(row)
     # create_pairs.py's swap_bundle often has no plain

@@ -12,7 +12,7 @@ sys.path.append("../../src/")
 from npa.np_types import build_np_data, build_np_data_streaming
 from multiblimp.languages import get_ud_langs, gblang2udlang
 from multiblimp.agreement_pipeline_utils import (
-    available_system_memory_bytes, find_other_running_instances, limit_process_memory,
+    available_system_memory_bytes, find_other_running_instances, guard_process_memory,
 )
 from multiblimp.config import TREEBANK_FEATURES_DIR
 
@@ -158,15 +158,15 @@ if __name__ == "__main__":
                              "to keep total memory (n_jobs x per-language peak) in "
                              "check -- see --max_worker_mem_gb.")
     parser.add_argument("--max_worker_mem_gb", type=float, default=None,
-                        help="Per-worker RLIMIT_AS cap, in GB (only with --n_jobs>1). "
+                        help="Per-worker RLIMIT_AS cap, in GB (applies at any --n_jobs, incl. 1). "
                              "None (default) auto-derives from available system RAM / "
                              "n_jobs x --mem_headroom, same as sva_trees.pipeline.Pipeline.")
     parser.add_argument("--mem_headroom", type=float, default=0.8,
                         help="Fraction of available RAM to divide across workers when "
-                             "auto-deriving the per-worker cap (only with --n_jobs>1 "
+                             "auto-deriving the per-worker cap (at any --n_jobs "
                              "and --max_worker_mem_gb unset).")
     parser.add_argument("--force", action="store_true",
-                        help="Skip the already-running-instance check (only with --n_jobs>1).")
+                        help="Skip the already-running-instance check (applies at any --n_jobs, incl. 1).")
     parser.add_argument("--report", action="store_true",
                         help=f"Also write the per-language np_type counts CSVs and the "
                              f"pooled _macro.csv to {REPORT_DIR} (and print the macro "
@@ -185,69 +185,60 @@ if __name__ == "__main__":
     macro_counts = Counter()
     processed, skipped, empty, failed = [], [], [], []
 
-    if args.n_jobs > 1:
-        if not args.force:
-            script_name = os.path.basename(sys.argv[0])
-            other_pids = find_other_running_instances(sys.argv[0])
-            if other_pids:
-                raise RuntimeError(
-                    f"Another instance of {script_name} appears to already be "
-                    f"running (PID(s): {other_pids}). If they're stale, kill them "
-                    f"first: kill {' '.join(map(str, other_pids))} "
-                    f"Else, pass --force."
-                )
-
-        if args.max_worker_mem_gb is not None:
-            worker_mem_bytes = int(args.max_worker_mem_gb * 1024**3)
-        else:
-            available_mem = available_system_memory_bytes()
-            worker_mem_bytes = (
-                int(available_mem * args.mem_headroom / args.n_jobs)
-                if available_mem is not None else None
+    if not args.force:
+        script_name = os.path.basename(sys.argv[0])
+        other_pids = find_other_running_instances(sys.argv[0])
+        if other_pids:
+            raise RuntimeError(
+                f"Another instance of {script_name} appears to already be "
+                f"running (PID(s): {other_pids}). If they're stale, kill them "
+                f"first: kill {' '.join(map(str, other_pids))} "
+                f"Else, pass --force."
             )
 
-        if worker_mem_bytes is not None:
-            print(f"Capping each of {args.n_jobs} worker(s) to "
-                  f"{worker_mem_bytes / 1024**3:.1f} GB RAM")
-            initializer, initargs = limit_process_memory, (worker_mem_bytes,)
-        else:
-            print("Could not detect system RAM; running without a memory cap")
-            initializer, initargs = None, ()
-
-        results = {}
-        # max_tasks_per_child=1: a fresh process per language, not a
-        # long-lived one reused across the whole corpus -- matches
-        # sva_trees.pipeline.Pipeline's own reasoning (pandas/NumPy buffers
-        # and heap fragmentation don't reliably get handed back to the OS
-        # between languages, so a language deep into a long run can hit
-        # even a large fixed memory cap purely from what earlier languages
-        # left behind; a fresh process per language avoids that entirely).
-        with ProcessPoolExecutor(max_workers=args.n_jobs, max_tasks_per_child=1,
-                                  initializer=initializer, initargs=initargs) as executor:
-            future_to_lang = {
-                executor.submit(
-                    process_one_language, lang, resource_dir, out_dir, instances_dir,
-                    args.max_treebank_len, args.streaming, args.chunk_size, args.recache,
-                ): lang
-                for lang in langs
-            }
-            for future in as_completed(future_to_lang):
-                lang = future_to_lang[future]
-                try:
-                    _, status, counts = future.result()
-                except Exception as e:
-                    print(f"  FAILED: {lang}: {e}")
-                    traceback.print_exc()
-                    status, counts = "failed", None
-                results[lang] = (status, counts)
+    if args.max_worker_mem_gb is not None:
+        worker_mem_bytes = int(args.max_worker_mem_gb * 1024**3)
     else:
-        results = {
-            lang: process_one_language(
-                lang, resource_dir, out_dir, instances_dir,
+        available_mem = available_system_memory_bytes()
+        worker_mem_bytes = (
+            int(available_mem * args.mem_headroom / args.n_jobs)
+            if available_mem is not None else None
+        )
+
+    if worker_mem_bytes is not None:
+        print(f"Capping each of {args.n_jobs} worker(s) to "
+              f"{worker_mem_bytes / 1024**3:.1f} GB RAM")
+        initializer, initargs = guard_process_memory, (worker_mem_bytes,)
+    else:
+        print("Could not detect system RAM; running without a memory cap")
+        initializer, initargs = None, ()
+
+    results = {}
+    # max_tasks_per_child=1: a fresh process per language, not a
+    # long-lived one reused across the whole corpus -- matches
+    # sva_trees.pipeline.Pipeline's own reasoning (pandas/NumPy buffers
+    # and heap fragmentation don't reliably get handed back to the OS
+    # between languages, so a language deep into a long run can hit
+    # even a large fixed memory cap purely from what earlier languages
+    # left behind; a fresh process per language avoids that entirely).
+    with ProcessPoolExecutor(max_workers=args.n_jobs, max_tasks_per_child=1,
+                              initializer=initializer, initargs=initargs) as executor:
+        future_to_lang = {
+            executor.submit(
+                process_one_language, lang, resource_dir, out_dir, instances_dir,
                 args.max_treebank_len, args.streaming, args.chunk_size, args.recache,
-            )[1:]
+            ): lang
             for lang in langs
         }
+        for future in as_completed(future_to_lang):
+            lang = future_to_lang[future]
+            try:
+                _, status, counts = future.result()
+            except Exception as e:
+                print(f"  FAILED: {lang}: {e}")
+                traceback.print_exc()
+                status, counts = "failed", None
+            results[lang] = (status, counts)
 
     for lang in langs:
         status, counts = results[lang]
