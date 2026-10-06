@@ -1287,6 +1287,7 @@ class UnimorphInflector:
     def lemma2form(self, row_features: Dict[str, str], return_bundle: bool = False):
         lemma = row_features.pop("lemma")
         sub_df = self.partial_df_match(self.lemma_groups, lemma, row_features)
+        sub_df = sub_df[sub_df.form.map(lambda f: isinstance(f, str))]
         inflected_forms = set(sub_df.form)
 
         if self.verbose:

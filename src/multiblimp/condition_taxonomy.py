@@ -11,6 +11,8 @@ module existed; it's the single source of truth for it now, so the two
 pages can't drift apart on what a condition id means.
 """
 
+import re
+
 GROUP_PREFIXES = {
     "sv": "Subject–Verb",
     "sp": "Subject–Participle",
@@ -51,6 +53,24 @@ FLAT_CONDITION_META = {
     for prefix, group in GROUP_PREFIXES.items()
     for suffix in FEATURE_SUFFIXES
 }
+
+
+_FLAT_ID_RE = re.compile(
+    rf"^({'|'.join(sorted(GROUP_PREFIXES, key=len, reverse=True))})([A-Z][A-Za-z]*)(?:_(.+))?$"
+)
+_CANDIDATE_ORDER = len(FEATURE_ORDER)
+
+
+def classify_flat_condition(cid: str):
+    """(group, feature label, sort order, variant) for a fixed (svNa, spGa_keepunk)
+    or ad-hoc candidate (svCase, saNounClass) condition id, else None."""
+    match = _FLAT_ID_RE.match(cid)
+    if not match:
+        return None
+    prefix, suffix, variant = match.groups()
+    if suffix in FEATURE_SUFFIXES:
+        return GROUP_PREFIXES[prefix], FEATURE_SUFFIXES[suffix], FEATURE_ORDER[suffix], variant
+    return GROUP_PREFIXES[prefix], suffix, _CANDIDATE_ORDER, variant
 
 
 def npa_subgroup_label(subgroup: str) -> str:

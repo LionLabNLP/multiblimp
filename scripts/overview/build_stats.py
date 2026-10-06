@@ -34,7 +34,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fi
 # whatever the caller's cwd happens to be instead.
 sys.path.append(os.path.join(REPO_ROOT, "src"))
 from multiblimp.condition_taxonomy import (  # noqa: E402
-    FLAT_CONDITION_META, NPA_ROLE_PROSE, NPA_FEATURE_NAMES, npa_subgroup_label,
+    FLAT_CONDITION_META, classify_flat_condition, NPA_ROLE_PROSE, NPA_FEATURE_NAMES, npa_subgroup_label,
 )
 from multiblimp.languages import get_lang_treebanks  # noqa: E402
 from multiblimp.config import (  # noqa: E402
@@ -84,6 +84,14 @@ CONDITION_META = {
     **FLAT_CONDITION_META,
     "npa": ("Noun Phrase", "Agreement (all role pairs)"),
 }
+
+
+def _flat_meta(cond: str) -> tuple[str, str]:
+    """(group, label) for a fixed or ad-hoc candidate flat condition id."""
+    if cond in FLAT_CONDITION_META:
+        return FLAT_CONDITION_META[cond]
+    flat = classify_flat_condition(cond)
+    return (flat[0], flat[1]) if flat else ("Other", cond)
 
 
 # diag.buckets keys in the published site's embedded JSON (see
@@ -288,7 +296,7 @@ def treebank_samples() -> list[dict]:
     flat_conditions, npa_subgroups = _discover_conditions()
     out = []
     for cond in flat_conditions:
-        group, label = FLAT_CONDITION_META.get(cond, ("Other", cond))
+        group, label = _flat_meta(cond)
         for path in _parquet_paths(cond, is_npa_sub=False):
             lang = NAME_ALIASES.get(
                 os.path.splitext(os.path.basename(path))[0].replace("_", " "),
@@ -322,7 +330,7 @@ def build():
     # "Other") rather than silently dropping real data.
     unknown = sorted(set(r["cond"] for r in records) - set(CONDITION_META))
     for cond in unknown:
-        CONDITION_META[cond] = ("Other", cond)
+        CONDITION_META[cond] = _flat_meta(cond)
     conditions += unknown
 
     total_samples = sum(r["samples"] for r in records)

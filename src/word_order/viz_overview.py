@@ -6,8 +6,7 @@ from urllib.parse import quote, unquote
 from .html.html_overview import create_html
 from multiblimp.condition_taxonomy import (
     GROUP_PREFIXES as _GROUP_PREFIXES,
-    FEATURE_SUFFIXES as _FEATURE_SUFFIXES,
-    FEATURE_ORDER as _FEATURE_ORDER,
+    classify_flat_condition,
     NPA_ROLE_PROSE as _NPA_ROLE_PROSE,
     NPA_ROLE_ORDER as _NPA_ROLE_ORDER,
     NPA_FEATURE_NAMES as _NPA_FEATURE_NAMES,
@@ -83,9 +82,6 @@ def _localize_plot_data(data: dict, deprel: str, prefix: str = "") -> dict:
 # nothing guarantees that stays true -- can never shadow it) rather than
 # hardcoded here a second time, so a new prefix only ever needs adding in
 # condition_taxonomy.py.
-_DEPREL_RE = re.compile(
-    rf"^({'|'.join(sorted(_GROUP_PREFIXES, key=len, reverse=True))})(Na|Ga|Pa)(?:_(.+))?$"
-)
 _NPA_LEAF_RE = re.compile(r"^([A-Z]+)-([A-Z]+)_([A-Za-z]+)$")
 
 
@@ -129,13 +125,12 @@ def _classify_deprel(deprel: str) -> tuple[str, str, int, tuple | None]:
     shares a non-None subgroup key; role_order_tuple (not used for display)
     sorts those subheaders by role priority instead of alphabetically.
     """
-    match = _DEPREL_RE.match(deprel)
-    if match:
-        prefix, feature, variant = match.groups()
-        label = _FEATURE_SUFFIXES[feature]
+    flat = classify_flat_condition(deprel)
+    if flat:
+        group, label, order, variant = flat
         if variant:
             label += f" ({variant.replace('_', ' ')})"
-        return _GROUP_PREFIXES[prefix], label, _FEATURE_ORDER[feature], None
+        return group, label, order, None
 
     axes = _npa_axes(deprel)
     if axes:

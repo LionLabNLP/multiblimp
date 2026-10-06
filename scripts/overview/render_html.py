@@ -191,7 +191,7 @@ def _category_tab_html(data: dict, group: str, lang_idx: dict, npa_lang_idx: dic
     def picker_button(it, text, active):
         return (
             f'<button class="picker-btn{" active" if active else ""}" role="radio" '
-            f'aria-checked="{"true" if active else "false"}" aria-label="{it["label"]}" '
+            f'aria-checked="{"true" if active else "false"}" aria-label="{it["label"]}" title="{it["label"]}" '
             f'data-cond="{it["id"]}" data-npasub="{"true" if it["isNpaSub"] else "false"}">'
             f'<span>{text}</span>'
             f'<span class="picker-spark"><span class="picker-spark-fill" '
@@ -727,12 +727,15 @@ def render(data: dict) -> str:
            cells take part in the one shared grid. */
         .picker-matrix {{
             display: grid;
-            grid-template-columns: max-content max-content max-content repeat(var(--cols, 4), minmax(6.5rem, 1fr));
-            gap: 0.4rem 0.5rem;
+            grid-template-columns: max-content max-content max-content repeat(var(--cols, 4), minmax(1.6rem, 2.6rem));
+            gap: 0.3rem;
+            justify-content: start;
+            max-width: 100%;
             align-items: stretch;
         }}
         .picker-matrix .picker-group {{ display: contents; }}
-        .picker-matrix .picker-btn {{ min-width: 0; padding: 0.3rem 0.7rem 0.4rem; }}
+        .picker-matrix .picker-btn {{ min-width: 0; padding: 0.55rem 0.3rem; justify-content: center; border-radius: 6px; }}
+        .picker-matrix .picker-btn > span:first-child {{ display: none; }}
         .picker-colhead, .picker-group-label {{
             font-size: 0.72rem;
             font-weight: 700;
@@ -740,7 +743,7 @@ def render(data: dict) -> str:
             text-transform: uppercase;
             color: var(--text-muted);
         }}
-        .picker-colhead {{ padding: 0 0.25rem 0.1rem; align-self: end; }}
+        .picker-colhead {{ padding: 0 0 0.1rem; align-self: end; justify-self: center; writing-mode: vertical-rl; transform: rotate(180deg); white-space: nowrap; }}
         .picker-group-label {{ align-self: center; }}
         .picker-group-label.rp-first {{ justify-self: end; padding-left: 0.25rem; }}
         .picker-group-label.rp-dash {{ padding: 0 0.15rem; }}
@@ -1415,16 +1418,6 @@ def render(data: dict) -> str:
             return `rgb(${{m[0]}},${{m[1]}},${{m[2]}})`;
         }}
 
-        // One direct label on the extreme bar only (never every bar -- see
-        // dataviz skill's mark spec), so the headline value reads without a
-        // hover. xshift nudges it clear of the bar end.
-        function endLabelAnnotation(x, y, text) {{
-            return {{
-                x, y, text, xanchor: 'left', yanchor: 'middle', showarrow: false,
-                font: {{ size: 10, color: THEME.text }}, xshift: 8,
-            }};
-        }}
-
         // Samples vs. minimal pairs is the one series distinction every bar
         // chart on this page makes, so it gets one fixed, high-contrast
         // color pair everywhere rather than an opacity variant of a single
@@ -1752,7 +1745,6 @@ def render(data: dict) -> str:
                 type: 'bar', orientation: 'h', marker: {{ color: SERIES_COLORS.pairs, cornerradius: 3 }},
                 hovertemplate: '<b>%{{y}}</b><br>Pairs: %{{x:,}}<br><i>click to open &#8599;</i><extra></extra>',
             }};
-            const topEntry = top[top.length - 1];
             const maxX = Math.max(...top.map(l => Math.max(l.samples, l.pairs)));
             Plotly.newPlot('language-chart', [traceSamples, tracePairs], {{
                 ...BASE_LAYOUT,
@@ -1766,7 +1758,6 @@ def render(data: dict) -> str:
                 xaxis: {{ title: {{ text: 'Count' }}, gridcolor: THEME.grid, range: [0, maxX * 1.18] }},
                 yaxis: {{ automargin: true }},
                 legend: {{ orientation: 'h', x: 0, y: 1, yanchor: 'top', yref: 'container' }},
-                annotations: [endLabelAnnotation(topEntry.pairs, topEntry.name, topEntry.pairs.toLocaleString())],
             }}, CONFIG);
             wireClickThrough('language-chart', pt => {{
                 const l = top[pt.pointIndex];
@@ -2659,9 +2650,6 @@ def render(data: dict) -> str:
             const maxX = top.length
                 ? Math.max(...top.map(r => Math.max(r.samples, r.pairs, ...extraKeys.map(k => r[k]))))
                 : 1;
-            const annotations = top.length
-                ? [endLabelAnnotation(top[top.length - 1].pairs, top[top.length - 1].name, top[top.length - 1].pairs.toLocaleString())]
-                : [];
             const traces = [
                 {{
                     y: top.map(r => r.name), x: top.map(r => r.samples), name: 'Samples', type: 'bar', orientation: 'h',
@@ -2698,7 +2686,6 @@ def render(data: dict) -> str:
                 xaxis: {{ title: {{ text: 'Count' }}, gridcolor: THEME.grid, range: [0, maxX * 1.18] }},
                 yaxis: {{ automargin: true }},
                 legend: {{ orientation: 'h', x: 0, y: 1, yanchor: 'top', yref: 'container' }},
-                annotations,
             }}, CONFIG);
             wireClickThrough(`cat-${{slug}}-chart`, pt => {{
                 const r = top[pt.pointIndex];
