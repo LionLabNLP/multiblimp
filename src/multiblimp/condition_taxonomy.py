@@ -63,14 +63,15 @@ _CANDIDATE_ORDER = len(FEATURE_ORDER)
 
 def classify_flat_condition(cid: str):
     """(group, feature label, sort order, variant) for a fixed (svNa, spGa_keepunk)
-    or ad-hoc candidate (svCase, saNounClass) condition id, else None."""
+    or ad-hoc candidate (svCase, saNounClass) condition id, else None. Candidates
+    go in the "Other" group, labelled with their family ("Subject–Verb Case")."""
     match = _FLAT_ID_RE.match(cid)
     if not match:
         return None
     prefix, suffix, variant = match.groups()
     if suffix in FEATURE_SUFFIXES:
         return GROUP_PREFIXES[prefix], FEATURE_SUFFIXES[suffix], FEATURE_ORDER[suffix], variant
-    return GROUP_PREFIXES[prefix], suffix, _CANDIDATE_ORDER, variant
+    return "Other", f"{GROUP_PREFIXES[prefix]} {suffix}", _CANDIDATE_ORDER, variant
 
 
 def npa_subgroup_label(subgroup: str) -> str:

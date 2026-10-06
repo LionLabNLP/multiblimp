@@ -25,8 +25,8 @@ OUT_PATH = os.path.join(HTML_DIR, "index.html")
 # stats.json but never appeared as a tab here at all. "Noun Phrase" is
 # appended separately since it isn't a GROUP_PREFIXES entry (see that
 # dict's own docstring -- NPA has no single flat prefix).
-GROUP_ORDER = list(dict.fromkeys(GROUP_PREFIXES.values())) + ["Noun Phrase"]
-GROUP_SLUGS = {label: prefix for prefix, label in GROUP_PREFIXES.items()} | {"Noun Phrase": "npa"}
+GROUP_ORDER = list(dict.fromkeys(GROUP_PREFIXES.values())) + ["Noun Phrase", "Other"]
+GROUP_SLUGS = {label: prefix for prefix, label in GROUP_PREFIXES.items()} | {"Noun Phrase": "npa", "Other": "other"}
 
 
 def _category_items(data: dict, group: str) -> list[dict]:
