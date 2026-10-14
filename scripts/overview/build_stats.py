@@ -1,17 +1,8 @@
-"""Aggregate samples/minimal-pair counts across every condition into a
-single JSON blob, consumed by overview.html.
-
-Source: this repo's own html/decision_trees/ output, read straight from
-each condition's rendered index.html LANGUAGES blob (the same
-per-language diagnostics dict sva_trees.diagnostics.diagnostics_row_to_json
-produces -- nRaw/nPairs/diag.buckets map directly onto this script's
-samples/pairs/bucket fields). Conditions/subgroups are discovered from
-whatever's actually on disk under HTML_DECISION_TREES_DIR (see
-_discover_conditions), not a hardcoded list, so a newly (re)built condition
-shows up automatically -- the same tree whether that's this checkout or the
-one the site deploys from, since both are built by the same pipeline. See
-scripts/overview/generate_html_indexes.py to (re)build those pages from cached
-model/pairs data without refitting.
+"""Aggregate samples / minimal-pair counts across every condition into one JSON blob (output/overview/stats.json)
+for the dataset overview. The source is html/decision_trees/: each condition's index.html LANGUAGES blob, the
+per-language diagnostics dict of agreement_trees.pairs.diagnostics.diagnostics_row_to_json. Conditions and NP subgroups are
+discovered from what is on disk (_discover_conditions), so a rebuilt condition appears automatically;
+scripts/overview/generate_html_indexes.py (re)builds those pages without refitting.
 
 Run from the repo root: python scripts/overview/build_stats.py
 """
@@ -28,39 +19,26 @@ import pandas as pd
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# Absolute (not the other scripts' relative "../../src/") since this
-# script's own docstring has it run from the repo root, not from
-# scripts/overview/ -- a relative sys.path entry would resolve against
-# whatever the caller's cwd happens to be instead.
 sys.path.append(os.path.join(REPO_ROOT, "src"))
-from multiblimp.condition_taxonomy import (  # noqa: E402
+from agreement_trees.taxonomy import (  # noqa: E402
     FLAT_CONDITION_META, classify_flat_condition, NPA_ROLE_PROSE, NPA_FEATURE_NAMES, npa_subgroup_label,
 )
 from multiblimp.languages import get_lang_treebanks  # noqa: E402
+from agreement_trees.pairs.diagnostics import BUCKET_JSON_KEYS  # noqa: E402
 from multiblimp.config import (  # noqa: E402
-    OUTPUT_OVERVIEW_DIR, HTML_DECISION_TREES_DIR, OUTPUT_DECISION_TREES_DIR,
+    OUTPUT_OVERVIEW_DIR, HTML_DECISION_TREES_DIR, OUTPUT_DECISION_TREES_DIR, RESOURCE_DIR,
 )
 
 OUT_PATH = os.path.join(OUTPUT_OVERVIEW_DIR, "stats.json")
 
-RESOURCE_DIR = os.path.join(REPO_ROOT, "resources")
 
-# Where the real per-language pages/index.html this script reads live --
-# tree2html/generate_html_deprel_index's own output, same tree the site
-# deploys from.
+# the rendered pages this script reads (the tree the site deploys from)
 HTML_ROOT = HTML_DECISION_TREES_DIR
 
-# Model/pairs-cache output (not the rendered HTML above) -- used for exactly
-# one thing: the raw per-sample "treebank" column LANGUAGES.six never
-# carries (see treebank_samples() below).
+# fitted frames, used only for the per-sample "treebank" column that LANGUAGES never carries (treebank_samples)
 PARQUET_ROOT = OUTPUT_DECISION_TREES_DIR
 
-# The rendered pages themselves are inconsistent about this one language's
-# name across condition dumps (ASCII "aa" digraph vs. the real "å"), which
-# otherwise splits Norwegian Bokmål's counts into two separate rows
-# everywhere downstream (language table, heatmap, scatter). Checked every
-# other language name for the same aa/oe/ae-digraph collision -- this is the
-# only one that occurs in the current data.
+# one language's name differs across condition pages (ASCII "aa" vs "å"), which would split its counts
 NAME_ALIASES = {
     "Norwegian Bokmaal": "Norwegian Bokmål",
 }
@@ -68,6 +46,7 @@ NAME_ALIASES = {
 BUCKET_LABELS = {
     "no_candidates": "No candidate",
     "no_inflections": "No inflection",
+    "ambiguous_readings": "Ambiguous reading",
     "same_forms": "Same inflection",
     "same_features": "Same feature",
     "undefined_features": "Undefined feature",
@@ -75,11 +54,8 @@ BUCKET_LABELS = {
     "conflicting_features": "Conflicting features",
 }
 
-# (group, label) per condition this page covers -- the flat
-# sv/sp/sa x Na/Ga/Pa conditions from the shared taxonomy, plus NPA's own
-# aggregate condition (no single flat id there; see FLAT_CONDITION_META's
-# own docstring). Mirrors src/word_order/viz_overview.py's _classify_deprel,
-# which classifies the same condition ids from the same shared module.
+# (group, label) per condition: the flat VP conditions of the shared taxonomy plus NPA's aggregate (as
+# agreement_trees.report.viz_overview._classify_deprel classifies them)
 CONDITION_META = {
     **FLAT_CONDITION_META,
     "npa": ("Noun Phrase", "Agreement (all role pairs)"),
@@ -94,18 +70,8 @@ def _flat_meta(cond: str) -> tuple[str, str]:
     return (flat[0], flat[1]) if flat else ("Other", cond)
 
 
-# diag.buckets keys in the published site's embedded JSON (see
-# sva_trees.diagnostics._BUCKET_JSON_KEYS, which produced them) -> this
-# script's own bucket keys.
-PUBLISHED_BUCKET_KEYS = {
-    "no_match": "no_candidates",
-    "no_inflection": "no_inflections",
-    "same_inflection": "same_forms",
-    "same_feature": "same_features",
-    "undefined_feature": "undefined_features",
-    "ambiguous_subject": "ambiguous_subjects",
-    "conflicting_features": "conflicting_features",
-}
+# diag.buckets keys of the pages' embedded JSON -> bucket keys (the inverse of diagnostics.BUCKET_JSON_KEYS)
+PUBLISHED_BUCKET_KEYS = {v: k for k, v in BUCKET_JSON_KEYS.items()}
 
 LANGUAGES_RE = re.compile(r"const LANGUAGES = (\[.*?\]);\s*const plotData\b", re.S)
 
@@ -121,18 +87,8 @@ def _load_languages_six(index_html_path: str) -> list[dict] | None:
 
 
 def _nan_to_none(x):
-    # viz_deprel.py deliberately emits a real float("nan") (not None) for a
-    # language's accuracy when no tree was fit for it at all -- a sentinel
-    # its own per-language JS table already special-cases into a blank cell
-    # (see that file's own comment on why: None would crash a ":.4f"
-    # f-string, but NaN prints harmlessly either way). This script's
-    # aggregation only ever checked "is not None" to skip a missing
-    # accuracy, which NaN sails straight past -- poisoning any weighted
-    # average it's summed into (nan * n is nan, and nan propagates through
-    # everything downstream, including json.dumps emitting the literal
-    # non-standard `NaN` token that then renders as the text "NaN%" in the
-    # page). Normalized to real None right at ingestion, once, rather than
-    # teaching every downstream sum/format call to also check isnan().
+    # viz_deprel emits NaN (not None) for a language's accuracy without a tree; "is not None" checks pass it and it
+    # would poison weighted averages and render as "NaN%", so it is normalised to None once, here
     return None if isinstance(x, float) and math.isnan(x) else x
 
 
@@ -147,30 +103,15 @@ def _record(entry: dict, cond: str, subgroup: str, dir_rel: str) -> dict:
     return dict(
         cond=cond, subgroup=subgroup, lang=NAME_ALIASES.get(entry["name"], entry["name"]),
         samples=entry.get("nRaw") or 0, pairs=entry.get("nPairs") or 0,
-        # Decision-tree accuracy for this language x condition -- from the
-        # same deprel/"Language Overview" pages this script's sibling
-        # index-overview page links out to (see viz_deprel.py/html_deprel.py).
-        # None (not 0) when the site never reports one, so weighted averages
-        # below can skip it rather than silently treating "no accuracy" as
-        # "zero accuracy".
+        # tree accuracy (None, not 0, when absent, so weighted averages skip it)
         acc=_nan_to_none(entry.get("acc")),
-        # langUrl is just the language page's bare filename (e.g.
-        # "German.html"), relative to its own condition's index.html.
-        # dir_rel is that condition's directory relative to
-        # HTML_ROOT (html/decision_trees), e.g. "svNa" or NPA's
-        # "npa/HEAD-DET_N" -- joined here into an actual path from
-        # html/index.html (this page's own location) to the real .html
-        # file on disk, so links work when browsing html/ directly.
+        # langUrl is the bare filename relative to the condition's index.html; dir_rel is that condition's
+        # directory under HTML_ROOT: joined into a path from html/index.html
         url=(f"decision_trees/{dir_rel}/{lang_url}" if lang_url else None),
-        # Distinct lemmas/surface forms seen for this language x condition --
-        # a rough lexical-diversity/treebank-richness signal, independent of
-        # how many of those forms actually became usable minimal pairs.
+        # distinct lemmas / forms: a rough treebank-richness signal
         n_lemma=diag.get("nLemma") or 0, n_form=diag.get("nForm") or 0,
-        # Rows dropped *before* the decision tree was even fit, because the
-        # target feature was missing on the head, the subject, or both (see
-        # sva_trees.create_pairs's head_unk/nsubj_unk/both_unk) -- a
-        # different, earlier population than the six outcome buckets above,
-        # which only cover rows that made it to an attempted swap.
+        # rows dropped before the tree fit because the feature was missing on the head, the subject or both (an
+        # earlier population than the outcome buckets, which only cover attempted swaps)
         head_unk=diag.get("headUnk") or 0, nsubj_unk=diag.get("nsubjUnk") or 0,
         both_unk=diag.get("bothUnk") or 0,
         buckets=buckets,
@@ -178,15 +119,9 @@ def _record(entry: dict, cond: str, subgroup: str, dir_rel: str) -> dict:
 
 
 def _tried_languages(dir_path: str) -> set[str]:
-    """Every language the pipeline actually attempted for one condition/
-    NPA-subgroup directory: one <Language>.html per language it ran
-    (index.html aside), whether or not that run produced anything -- a
-    language with zero raw candidates still gets a "placeholder" page (see
-    word_order.viz_deprel), just without an entry in LANGUAGES.six. That
-    page-per-language count is the only way to recover the true
-    attempted-but-empty set; LANGUAGES.six alone undercounts (e.g. svNa: 186
-    pages tried, only 131 made it into the blob).
-    """
+    """Every language attempted for one condition directory: one <Language>.html per run, including the
+    placeholder page of a language without candidates (which has no LANGUAGES entry; svNa: 186 tried, 131 in
+    the blob)."""
     if not os.path.isdir(dir_path):
         return set()
     return {
@@ -201,11 +136,7 @@ def _tried_languages(dir_path: str) -> set[str]:
 
 
 def _discover_conditions() -> tuple[list[str], list[str]]:
-    """(flat_condition_ids, npa_subgroup_ids) -- every condition/subgroup
-    that currently has a real index.html under HTML_ROOT, discovered
-    fresh each build rather than a hardcoded list, so a newly (re)built
-    condition (see scripts/overview/generate_html_indexes.py) shows up here without
-    editing this file."""
+    """(flat_condition_ids, npa_subgroup_ids) that currently have an index.html under HTML_ROOT, discovered each build."""
     if not os.path.isdir(HTML_ROOT):
         return [], []
 

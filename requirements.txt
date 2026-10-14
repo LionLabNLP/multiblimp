@@ -11,6 +11,7 @@ minicons
 numpy
 pandas
 plotly
+psutil
 pyarrow
 scikit-learn
 scipy

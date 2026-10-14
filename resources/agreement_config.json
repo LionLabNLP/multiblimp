@@ -1,0 +1,92 @@
+{
+  "modes": [
+    "vp",
+    "np"
+  ],
+  "langs": [],
+  "workers": {
+    "n_jobs": 1,
+    "max_tasks_per_child": 1,
+    "max_worker_mem_gb": null,
+    "mem_headroom": 0.8
+  },
+  "vp": {
+    "families": [
+      "sv",
+      "ov",
+      "iov",
+      "sp",
+      "op",
+      "iop",
+      "sa",
+      "oa",
+      "ioa"
+    ],
+    "max_treebank_len": null
+  },
+  "np": {
+    "max_treebank_len": 10000,
+    "streaming": true,
+    "chunk_size": 500,
+    "report": false
+  },
+  "scan": {
+    "wilson_floor": 0.01,
+    "min_both": 10,
+    "min_yes": 10,
+    "yes_rate_floor": 0.15,
+    "min_langs": 1,
+    "split_head_upos": false,
+    "exclude_features": [
+      "PronType",
+      "NumType",
+      "Poss",
+      "Reflex",
+      "Abbr",
+      "Typo",
+      "Foreign",
+      "ExtPos",
+      "NameType",
+      "AdpType",
+      "VerbType",
+      "PartType",
+      "ConjType",
+      "AdvType",
+      "AdjType",
+      "NounType",
+      "PunctType",
+      "PunctSide",
+      "Hyph",
+      "Compound",
+      "Derivation",
+      "Variant",
+      "Style",
+      "Form",
+      "Clitic",
+      "Subcat",
+      "InflClass",
+      "NumForm",
+      "Proper",
+      "Nomzr"
+    ]
+  },
+  "fit": {
+    "targets": [],
+    "max_depth": 12,
+    "min_samples_leaf": 10,
+    "test_size": 0.1,
+    "leaf_threshold": 0.95,
+    "impurity": {
+      "min_n": 300,
+      "max_n": 4000,
+      "max_val": 0.1,
+      "min_val": 0.01
+    },
+    "second_chance": {
+      "enabled": true,
+      "lax_threshold": 0.9,
+      "min_keep_frac": 0.5,
+      "max_unk_frac": 0.5
+    }
+  }
+}

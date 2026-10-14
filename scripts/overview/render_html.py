@@ -11,35 +11,22 @@ import sys
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.append(os.path.join(REPO_ROOT, "src"))
-from multiblimp.condition_taxonomy import GROUP_PREFIXES  # noqa: E402
+from agreement_trees.taxonomy import GROUP_PREFIXES  # noqa: E402
 from multiblimp.config import HTML_DIR, OUTPUT_OVERVIEW_DIR  # noqa: E402
 
 STATS_PATH = os.path.join(OUTPUT_OVERVIEW_DIR, "stats.json")
 OUT_PATH = os.path.join(HTML_DIR, "index.html")
 
-# Category tabs, in display order. Derived from GROUP_PREFIXES (the same
-# shared taxonomy CONDITION_META/build_stats.py assigns each condition
-# from) rather than a second hardcoded list here -- a prefix added there
-# (e.g. "ov"/"iov") used to need a matching manual edit in this file too,
-# and didn't get one, so its conditions were computed correctly into
-# stats.json but never appeared as a tab here at all. "Noun Phrase" is
-# appended separately since it isn't a GROUP_PREFIXES entry (see that
-# dict's own docstring -- NPA has no single flat prefix).
+# category tabs in display order, from GROUP_PREFIXES (the taxonomy build_stats assigns conditions from) plus
+# "Noun Phrase", which has no flat prefix
 GROUP_ORDER = list(dict.fromkeys(GROUP_PREFIXES.values())) + ["Noun Phrase", "Other"]
 GROUP_SLUGS = {label: prefix for prefix, label in GROUP_PREFIXES.items()} | {"Noun Phrase": "npa", "Other": "other"}
 
 
 def _category_items(data: dict, group: str) -> list[dict]:
-    """Pickable conditions for one category tab, pairs-descending.
-
-    Every group picks among its own top-level conditions (data["conditions"])
-    except Noun Phrase: the matrix only tracks NPA down to the aggregate
-    "npa" condition (summed over all role pairs), so a meaningful
-    "pick a specific condition, e.g. Number" experience there means picking
-    among data["npa_subgroups"] instead (each backed by its own
-    language x role-pair breakdown in data["npa_matrix"]) -- "npa" itself is
-    left out of the picker since its subgroups replace it.
-    """
+    """Pickable conditions for one category tab, pairs-descending: the group's top-level conditions, except
+    Noun Phrase, where the matrix only tracks the aggregate "npa", so the picker offers data["npa_subgroups"]
+    (each with its own language x role-pair breakdown in data["npa_matrix"]) instead."""
     if group == "Noun Phrase":
         items = [dict(s, isNpaSub=True) for s in data["npa_subgroups"]]
     else:
@@ -401,7 +388,7 @@ def render(data: dict) -> str:
             --grid-line: #e7e5e4;
             --hover: #f5f5f5;
         }}
-        /* Same palette as decision_trees/index.html (word_order.html.html_overview),
+        /* Same palette as decision_trees/index.html (agreement_trees.report.html.html_overview),
            for a consistent look across every page in the site. */
         :root[data-theme="dark"] {{
             color-scheme: dark;

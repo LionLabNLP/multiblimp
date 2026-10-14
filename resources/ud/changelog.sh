@@ -1,3 +1,13 @@
+#!/usr/bin/env bash
+# One-time, in-place edits to the downloaded data; skipped once the marker exists.
+set -eu
+cd "$(dirname "$0")"
+MARKER="ud-treebanks-v2.18/.changelog_applied"
+if [ -e "$MARKER" ]; then
+  echo "changelog already applied ($MARKER), skipping"
+  exit 0
+fi
+
 # Rename UD_Norwegian-Bokmaal -> UD_Norwegian_Bokmål-NDT 
 mv ud-treebanks-v2.18/UD_Norwegian-Bokmaal ud-treebanks-v2.18/UD_Norwegian_Bokmaal-NDT 
 
@@ -18,3 +28,5 @@ for split in train dev test; do
         ud-treebanks-v2.18/UD_Polish-LFG/pl_lfg-ud-$split.conllu tmp.conllu
     mv tmp.conllu ud-treebanks-v2.18/UD_Polish-LFG/pl_lfg-ud-$split.conllu
 done
+
+touch "$MARKER"

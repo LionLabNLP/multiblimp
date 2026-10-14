@@ -1,5 +1,4 @@
 import os
-import re
 import unicodedata
 
 from glob import glob
@@ -7,6 +6,7 @@ from glob import glob
 from iso639 import Lang
 
 from .config import UD_PATH
+from .excluded_treebanks import is_treebank_excluded, SIGN_LANGUAGES
 
 
 def lang2langcode(name: str):
@@ -35,9 +35,6 @@ def lang2langcode(name: str):
             "Old_Occitan": name,
             "Pomak": "poma",
             "Shanghainese": name,
-            "Telugu_English": name,
-            "Turkish_English": name,
-            "Turkish_German": name,
             }.get(name, name)
 
 udlang2iso639 = {
@@ -102,205 +99,6 @@ gblang2udlang = {
 
 add_langs = {"Aromanian": "UD_Romanian-ArT"}
 
-# Normalised exclusion reasons (the only values excluded_treebanks may use).
-EXCLUSION_REASONS = (
-    "spoken",
-    "historical",
-    "learner data",
-    "social media",
-    "poetry",
-    "code switching",
-    "child language",
-    "niche genre",
-    "nonstandard",
-    #"regional variety",
-    "non-Latin script",
-    "duplicate",
-    "too small",
-    "low quality",
-    "incompatible annotation",
-  #  "pending review",  # no reason on record yet
-)
-
-# Treebanks excluded per language (UD language folder name -> {treebank id:
-# reason}, reasons drawn from EXCLUSION_REASONS). Every other treebank of a
-# language is used; a language whose treebanks are all excluded drops out
-# entirely.
-# Comments keep the provenance of each entry: "<version excluded since> [-f]:
-# <original note>". A "?" on the version means unsure, "-f" means the
-# treebank is also caught by flag_treebanks.
-excluded_treebanks = {
-    # "Arabic": {
-    #     "NYUAD": "pending review",  # v2?: ?
-    # },
-    "Chinese": {
-        "CFL": "learner data",  # v2? -f
-    },
-    "Classical_Chinese": {
-        "TueCL": "too small",  # v1: comparatively small
-    },
-    "Czech": {
-       # "PDTC": "pending review",  # filter out PDT sentences via sent_id
-        "Poetry": "poetry",  # v1: poetry/genre
-    },
-    "English": {
-        "Atis": "spoken",  # v2?: ?
-       # "GENTLE": "pending review",  # v2?: ?
-       # "LittlePrince": "pending review",  # v2?: ?
-        "CHILDES": "child language",  # v2: child-adult spoken language
-        "GUMReddit": "duplicate",  # v2?: duplication of GUM
-        "ESLSpok": "spoken",  # v1
-        "GUM": "spoken",  # v1: spoken (among others)
-        "CTeTex": "niche genre",  # v1: technical genre
-        "Pronouns": "niche genre",  # v1: niche
-    },
-    "Faroese": {
-        "FarPaHC": "historical",  # v1
-    },
-    "French": {
-        "ALTS": "historical",  # v2
-        "PoitevinDIVITAL": "nonstandard",  # v2: poitevin-saintongeais
-        "ParisStories": "spoken",  # v1
-        "Rhapsodie": "spoken",  # v1
-    },
-    "Frisian_Dutch": {
-        "Fame": "code switching",  # -f
-    },
-    "Galician": {
-        "CTG": "low quality",  # v1: low star rating
-    },
-    "German": {
-        "LIT": "historical",  # v1
-    },
-    "Gheg": {
-        "GPS": "code switching",  # v2? -f: but is only gheg treebank
-    },
-    "Greek": {
-        "GLCII": "learner data",  # v2? -f
-    },
-    "Guarani": {
-        "OldTuDeT": "historical",  # v2? -f: old language variant, but is only guarani treebank
-    },
-    "Hebrew": {
-        "IAHLTwiki": "incompatible annotation",  # v1?: not included, "IAHLT" as "incompatible"
-        "IAHLTknesset": "spoken",  # v1
-        "PostRab": "historical",  # v2?: post-Rabbinic
-    },
-    "Icelandic": {
-        "IcePaHC": "historical",  # v1
-    },
-    "Irish": {
-        "TwittIrish": "social media",  # v2? -f: tweets (also code switching)
-    },
-    "Italian": {
-        "Old": "historical",  # v1
-        "Valico": "learner data",  # v1: learner corpus
-        "KIParlaForest": "spoken",  # v2?
-        "PoSTWITA": "social media",  # v2? -f: tweets
-        "TWITTIRO": "social media",  # v2? -f: tweets
-    },
-    "Japanese": {
-        "BCCWJLUW": "duplicate",  # -: no version/reason given
-        "GSDLUW": "duplicate",  # -: no version/reason given
-        "PUDLUW": "duplicate",  # -: no version/reason given
-    },
-    "Korean": {
-        "KSL": "learner data",  # v2? -f
-    },
-    "Latvian": {
-        "Cairo": "too small",  # v1: only 20 sentences
-    },
-    "Maghrebi_Arabic_French": {
-        "Arabizi": "code switching",  # -f
-    },
-    "Portuguese": {
-        "DANTEStocks": "social media",  # v2? -f: tweets
-    },
-    "Romanian": {
-        "MolDoRo": "non-Latin script",  # v2?: in cyrillic
-       # "ArT": "regional variety",  # v2: included as Aromanian via add_langs (previously excluded as "dialect")
-        "Nonstandard": "nonstandard",  # v1
-        "TueCL": "social media",  # v2? -f: tweets
-    },
-    "Russian": {
-        "Poetry": "poetry",  # v1: poetry/genre
-    },
-    "Sanskrit": {
-        "UFAL": "too small",  # v1: comparatively small
-    },
-    "Slovenian": {
-        "SST": "spoken",  # v1
-    },
-    "Spanish": {
-        "COSER": "spoken",  # v1
-    },
-    "Swedish": {
-        "Old": "historical",  # v2
-        "SweLL": "learner data",  # v2? -f
-    },
-    "Telugu_English": {
-        "TECT": "code switching",  # -f
-    },
-    "Turkish_English": {
-        "BUTR": "code switching",  # -f
-    },
-    "Turkish_German": {
-        "SAGT": "code switching",  # -f
-    },
-    "Vietnamese": {
-        "TueCL": "spoken",  # v1
-    },
-}
-
-assert all(r in EXCLUSION_REASONS for d in excluded_treebanks.values() for r in d.values())
-
-def is_treebank_excluded(lang: str, treebank_id: str) -> bool:
-    """treebank_id is the part after the last "-" of a UD folder name."""
-    return treebank_id in excluded_treebanks.get(lang, ())
-
-
-def treebank_exclusion_reason(lang: str, treebank_id: str) -> str | None:
-    """Normalised reason (see EXCLUSION_REASONS) or None if not excluded."""
-    return excluded_treebanks.get(lang, {}).get(treebank_id)
-
-
-def _split_treebank_row(tb: str) -> tuple[str, str]:
-    """"UD_Turkish_German-SAGT" -> ("Turkish_German", "SAGT") -- same shape
-    as multiblimp.treebank._split_treebank_folder, duplicated here (not
-    imported) since treebank.py already imports from this module and the
-    reverse import would cycle.
-
-    This is the language actually embedded in a "treebank" column value /
-    tree.metadata["treebank"] string, which is NOT always the language
-    whose pickle/parquet it was read from: a handful of bilingual/code-
-    switched treebanks (e.g. UD_Turkish_German-SAGT, UD_Turkish_English-
-    BUTR, UD_Telugu_English-TECT) are bundled into a DIFFERENT language's
-    own pickle (Turkish's, Telugu's) at build time, but are registered in
-    excluded_treebanks under their OWN embedded name ("Turkish_German",
-    not "Turkish"). Checking is_treebank_excluded(current_lang, treebank_id)
-    against the pickle's own language -- as every caller used to -- silently
-    never matches these, so SAGT/BUTR/TECT rows leak into the pooled fit
-    and the per-treebank page shows them as ordinary, unflagged tiles
-    instead of excluded ones (see conversation)."""
-    lang_part, _, treebank_id = tb.removeprefix("UD_").rpartition("-")
-    return lang_part, treebank_id
-
-
-def is_treebank_row_excluded(tb: str) -> bool:
-    """is_treebank_excluded, but keyed off the treebank's OWN embedded
-    language (see _split_treebank_row) rather than the caller's current
-    language -- the correct check for a "treebank" column value / raw
-    tree.metadata["treebank"] string, which may embed a different
-    language than the one it was bundled/pickled under."""
-    return is_treebank_excluded(*_split_treebank_row(tb))
-
-
-def treebank_row_exclusion_reason(tb: str) -> str | None:
-    """treebank_exclusion_reason, but keyed off the treebank's OWN embedded
-    language -- see is_treebank_row_excluded."""
-    return treebank_exclusion_reason(*_split_treebank_row(tb))
-
-
 # Some UD treebanks merge several originally-distinct sub-corpora into one
 # release, where we only want a subset -- unlike excluded_treebanks, which
 # drops a treebank entirely, this keeps only the sentences whose sent_id
@@ -338,17 +136,31 @@ lang2unimorph_lang = {
     "North Azerbaijani": "Azerbaijani",
 }
 
+# UD-derived tables are keyed by the UD code; these UD codes name a different file in resources/unimorph
+UNIMORPH_CODE_ALIASES = {
+    "arb": "ara",  # Standard Arabic -> Arabic macrolanguage file
+    "glg": "gal",  # Galician
+    "hrv": "hbs",  # Croatian and Serbian share the Serbo-Croatian file
+    "srp": "hbs",
+    "swa": "swc",  # Standard Swahili -> Congo Swahili (verbs only)
+}
+
+
+def unimorph_code(langcode: str) -> str:
+    """The resources/unimorph/<code> directory holding the UniMorph data for a UD language code."""
+    return UNIMORPH_CODE_ALIASES.get(langcode, langcode)
+
+
 remove_diacritics_langs = {
-    "Latin",
-    "Slovenian",
-    "Western Farsi",
-    # "Northern Uzbek",
-    # "Kazakh",
+    "Latin", # is principled bc it's annotated for pronunciation
+    "Slovenian", #TODO?
 }
 
 remove_multiples_langs = {
     "Modern Greek",
+    "Greek",
     "Ancient Greek",
+    "Ancient_Greek",
 }
 
 convert_arabic_to_latin_langs = {
@@ -361,9 +173,7 @@ skip_langs = {
     "Maghrebi_Arabic_French",
     "Telugu_English",
     "Turkish_English",
-    "Spanish_Sign_Language",
-    "Swedish_Sign_Language",
-}
+} | SIGN_LANGUAGES
 
 
 def latin_to_cyrillic(text):
@@ -543,6 +353,3 @@ def get_lang_treebanks(resource_dir, ud_dir=None):
 
     return by_lang
 
-
-if __name__=="__main__":
-    print(get_ud_langs("../../resources"))

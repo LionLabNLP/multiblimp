@@ -1,3 +1,13 @@
+#!/usr/bin/env bash
+# One-time, in-place edits to the downloaded data; skipped once the marker exists.
+set -eu
+cd "$(dirname "$0")"
+MARKER=".changelog_applied"
+if [ -e "$MARKER" ]; then
+  echo "changelog already applied ($MARKER), skipping"
+  exit 0
+fi
+
 # Italian
 echo -e "essere\tè\tV|IND;PRS;3;SG\tessere|X" >> ita/ita.segmentations
 
@@ -105,3 +115,24 @@ sed -E "/\tV;/s/;SG//" swe/swe > swe/swe2; mv swe/swe2 swe/swe
 sed -E "/\tV;/s/;PL//" swe/swe > swe/swe2; mv swe/swe2 swe/swe
 awk -F'\t' -v OFS='\t' '{gsub(/[;|]SG/,"",$3); gsub(/[;|]PL/,"",$3); print}' swe/swe.segmentations > swe/swe.segmentations2
 mv swe/swe.segmentations2 swe/swe.segmentations
+
+# Southern Kurdish: every line starts with a tab and ends in CRLF
+perl -pe 's/^\t//; s/\r$//' sdh/sdh > sdh/sdh2; mv sdh/sdh2 sdh/sdh
+
+# Whitespace around tags (Livvi/Veps/Karelian "PRIV ", Tajik, Chukchi, Ket, Bhojpuri)
+for f in olo/olo vep/vep krl/krl tgk/tgk ckt/ckt ket/ket bra/bra; do
+  perl -F'\t' -lane '$F[2] =~ s/\s*([;|])\s*/$1/g; $F[2] =~ s/^\s+|\s+$//g; print join("\t", @F)' "$f" > "$f.tmp" && mv "$f.tmp" "$f"
+done
+
+# Central Kurdish: only script-specific files exist; use the Latin-script gold + silver data (files lack final newlines; drop malformed rows)
+awk -F'\t' 'NF==3 && !seen[$0]++' ckb/latn/ckb-latn.tsv ckb/latn/ckb-latn-large.tsv > ckb/ckb
+# the silver data writes argument marking as ArgAB3P next to ARGAB3P
+perl -pe 's/\bArg(AB|ER|NO|AC|DA)([123][SP])\b/ARG$1$2/g' ckb/ckb > ckb/ckb2; mv ckb/ckb2 ckb/ckb
+
+# Swahili: INDF1/2/3 is the -a- present with person 1/2/3
+perl -pe 's/\bINDF([123])\b/$1;PRS/g' swc/swc > swc/swc2; mv swc/swc2 swc/swc
+
+# Old French: "not{NOM}" and "non{NOM}" are the same tag
+perl -pi -e 's/\bnot\{NOM\}/non{NOM}/g' fro/fro
+
+touch "$MARKER"

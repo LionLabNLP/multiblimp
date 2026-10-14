@@ -1,0 +1,6 @@
+{
+  "ud_tables": {
+    "dup_form_threshold": 3.0,
+    "dup_feat_threshold": 10.0
+  }
+}

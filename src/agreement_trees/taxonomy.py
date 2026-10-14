@@ -1,0 +1,94 @@
+"""Naming convention shared by every agreement condition this project runs:
+sv/sp/sa + Na/Ga/Pa for subject-verb/participle/auxiliary agreement,
+ov/op/oa for object-verb/participle/auxiliary, iov/iop/ioa for indirect-
+object-verb/participle/auxiliary agreement (e.g. "svNa" = Subject-Verb, Number), and
+npa/{ROLE1}-{ROLE2}_{FeatAbbrev} for noun-phrase agreement role pairs
+(e.g. "npa/HEAD-DET_N" = Head-Determiner Number). Both
+scripts/overview/build_stats.py (the stats-overview aggregator) and
+agreement_trees.report.viz_overview.py (the local decision-tree index page)
+independently classified conditions by this same convention before this
+module existed; it's the single source of truth for it now, so the two
+pages can't drift apart on what a condition id means.
+"""
+
+import re
+
+from multiblimp.config import DEBUG_MODE
+
+GROUP_PREFIXES = {
+    "sv": "Subject–Verb",
+    "sp": "Subject–Participle",
+    "sa": "Subject–Auxiliary",
+    "ov": "Object–Verb",
+    "op": "Object–Participle",
+    "oa": "Object–Auxiliary",
+    "iov": "Indirect Object–Verb",
+    "iop": "Indirect Object–Participle",
+    "ioa": "Indirect Object–Auxiliary",
+}
+if DEBUG_MODE:
+    # data-debugging builds also cover every verb form that is neither finite nor a participle
+    GROUP_PREFIXES = {
+        **{k: v for k, v in GROUP_PREFIXES.items() if k in ("sv", "sp")},
+        "sx": "Subject–Other verb forms",
+        **{k: v for k, v in GROUP_PREFIXES.items() if k not in ("sv", "sp")},
+    }
+FEATURE_SUFFIXES = {
+    "Na": "Number",
+    "Ga": "Gender",
+    "Pa": "Person",
+}
+FEATURE_ORDER = {"Na": 0, "Ga": 1, "Pa": 2}
+
+NPA_ROLE_PROSE = {
+    "HEAD": "Head", "DET": "Determiner", "NUM": "Numeral",
+    "ADJ": "Adjective", "ADP": "Adposition", "PRON": "Pronoun",
+}
+NPA_ROLE_ORDER = {"HEAD": 0, "DET": 1, "NUM": 2, "ADJ": 3, "ADP": 4, "PRON": 5}
+NPA_FEATURE_NAMES = {
+    "N": "Number", "G": "Gender", "P": "Person", "C": "Case",
+    "Def": "Definite", "Deg": "Degree", "PT": "PronType",
+    "NT": "NumType", "Pos": "Poss",
+}
+NPA_FEATURE_ORDER = {"N": 0, "G": 1, "P": 2, "C": 3}
+
+# (group, label) for every flat sv/sp/sa condition, in GROUP_PREFIXES x
+# FEATURE_SUFFIXES reading order (svNa, svGa, svPa, spNa, ..., saPa) --
+# callers that also track NPA's own aggregate condition (e.g.
+# build_stats.py's "npa": ("Noun Phrase", "Agreement (all role pairs)"))
+# add that entry themselves, since NPA has no single flat id here.
+FLAT_CONDITION_META = {
+    f"{prefix}{suffix}": (group, FEATURE_SUFFIXES[suffix])
+    for prefix, group in GROUP_PREFIXES.items()
+    for suffix in FEATURE_SUFFIXES
+}
+
+
+_FLAT_ID_RE = re.compile(
+    rf"^({'|'.join(sorted(GROUP_PREFIXES, key=len, reverse=True))})([A-Z][A-Za-z]*)(?:_(.+))?$"
+)
+_CANDIDATE_ORDER = len(FEATURE_ORDER)
+
+
+def classify_flat_condition(cid: str):
+    """(group, feature label, sort order, variant) for a fixed (svNa, spGa_keepunk)
+    or ad-hoc candidate (svCase, saNounClass) condition id, else None. Candidates
+    go in the "Other" group, labelled with their family ("Subject–Verb Case")."""
+    match = _FLAT_ID_RE.match(cid)
+    if not match:
+        return None
+    prefix, suffix, variant = match.groups()
+    if suffix in FEATURE_SUFFIXES:
+        return GROUP_PREFIXES[prefix], FEATURE_SUFFIXES[suffix], FEATURE_ORDER[suffix], variant
+    return "Other", f"{GROUP_PREFIXES[prefix]} {suffix}", _CANDIDATE_ORDER, variant
+
+
+def npa_subgroup_label(subgroup: str) -> str:
+    # e.g. "HEAD-DET_N" -> "Head–Determiner (Number)"
+    try:
+        roles, feat = subgroup.split("_", 1)
+        role1, role2 = roles.split("-")
+        role_label = f"{NPA_ROLE_PROSE.get(role1, role1)}–{NPA_ROLE_PROSE.get(role2, role2)}"
+        return f"{role_label} ({NPA_FEATURE_NAMES.get(feat, feat)})"
+    except ValueError:
+        return subgroup

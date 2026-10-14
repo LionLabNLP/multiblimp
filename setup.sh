@@ -10,16 +10,16 @@ git clone https://github.com/LionLabNLP/um2ud_annotation.git resources/um2ud_ann
   cd resources/ud
   bash download_all.sh
   bash download_afrisud.sh
-  cd ud-treebanks-v2.18/UD_Polish-LFG
-  for f in train dev test; do
-    python3 ../../fix_polish_subgender_animacy.py pl_lfg-ud-$f.conllu
-  done
+  bash changelog.sh
 )
 
-# UD pickles, then UD-derived UniMorph
-(cd scripts/pickle && python3 pickle_treebanks.py)
-python3 scripts/ud2um.py
+# Compare UD flags (scraped + README) against the exclusion lists; review any output
+python3 scripts/agreement_trees/supplementary/flag_treebanks_report.py
 
-# UniMorph (needs a GitHub SSH key)
+# UD pickles, then UD-derived tables
+(cd scripts/pickle && python3 pickle_treebanks.py)
+python3 scripts/ud_tables.py
+
+# UniMorph (needs a GitHub SSH key), then its UD-notation tables (needs the UD-derived tables above)
 (cd resources/unimorph && bash download_all.sh && bash changelog.sh)
-(cd scripts/pickle && python3 pickle_unimorph.py)
+python3 scripts/um2ud.py

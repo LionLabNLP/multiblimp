@@ -1,7 +1,7 @@
+import functools
 import os
 import pickle
 import re
-from functools import lru_cache
 from glob import glob
 import urllib.request
 from pathlib import Path
@@ -12,11 +12,10 @@ from indic_transliteration.sanscript import IAST, DEVANAGARI, transliterate
 from unidecode import unidecode
 from bs4 import BeautifulSoup
 
-from .config import UD_PATH
-from .languages import (
-    is_treebank_excluded, is_treebank_row_excluded, convert_arabic_to_latin_langs, add_langs,
-    sent_id_prefix_keep,
-)
+from .config import RESOURCE_DIR, UD_PATH
+from .excluded_treebanks import is_treebank_excluded, is_treebank_row_excluded, split_treebank_folder
+from .script_log import append_log
+from .languages import convert_arabic_to_latin_langs, add_langs, sent_id_prefix_keep
 
 _SENT_ID_PREFIX_RE = re.compile(r"^[a-z]+")
 
@@ -31,7 +30,6 @@ def has_typo(item):
 
     misc = item.get("misc") or {}
     misc_has_correction = any("Correct" in misc_key for misc_key in misc.keys())
-    # misc_has_lang = ("Lang" in misc) or ("OrigLang" in misc)
 
     if (
         is_reparandum
@@ -39,7 +37,6 @@ def has_typo(item):
         or feats_has_style
         or feats_has_foreign
         or misc_has_correction
-        # or misc_has_lang
     ):
         return True
 
@@ -57,18 +54,12 @@ def tree_is_malformed(tree):
     return False
 
 
-def _split_treebank_folder(folder: str) -> tuple[str, str]:
-    """"UD_Old_East_Slavic-TOROT" -> ("Old_East_Slavic", "TOROT")."""
-    parts = folder.removeprefix("UD_").split("-")
-    return "_".join(parts[:-1]), parts[-1]
-
-
 def _iter_treebank_dirs(resource_dir: str, ud_dir: str):
     for path in sorted(glob(os.path.join(resource_dir, ud_dir, "UD_*"))):
         if not os.path.isdir(path):
             continue
         folder = os.path.basename(path)
-        language, treebank_id = _split_treebank_folder(folder)
+        language, treebank_id = split_treebank_folder(folder)
         yield path, folder, language, treebank_id
 
 
@@ -286,26 +277,6 @@ def flag_treebanks(
     return results
 
 
-LOCAL_FLAG_TYPES = ("old variant", "poetry only", "learner", "twitter", "code switching")
-
-
-@lru_cache(maxsize=None)
-def get_excluded_treebanks(
-    resource_dir: str = ".",
-    ud_dir: str | None = None,
-) -> frozenset[str]:
-    """Union of every LOCAL_FLAG_TYPES category's treebank folders -- the
-    treebanks Treebank() (and, via it, every UD data-pickling / ud2um /
-    data-caching stage) skips loading. Cached, since scanning the full UD
-    checkout and re-reading every README is expensive and every pipeline
-    stage instantiates Treebank() once per language."""
-    excluded = set()
-    for flag_type in LOCAL_FLAG_TYPES:
-        for treebanks in flag_treebanks(flag_type, resource_dir=resource_dir, ud_dir=ud_dir).values():
-            excluded.update(treebanks)
-    return frozenset(excluded)
-
-
 class Treebank:
     def __new__(
         cls,
@@ -323,46 +294,22 @@ class Treebank:
         if resource_dir is None:
             resource_dir = "."
 
-        # only_excluded reads the raw files of just the excluded treebanks (the
-        # pickles are SUPPOSED to omit them -- built that way at pickle-
-        # creation time). That invariant silently breaks the moment
-        # excluded_treebanks (multiblimp.languages) gains a new entry
-        # without every existing pickle being regenerated: the pickle keeps
-        # whatever treebanks it had when it was built, so a treebank excluded
-        # AFTER that still ships in every load_from_pickle=True call forever,
-        # invisibly corrupting the main (non-excluded) dataset -- caught via
-        # UD_Greek-GLCII ("learner data") and UD_Italian-PoSTWITA/TWITTIRO
-        # showing up in BOTH the regular full_df (from this pickle) and the
-        # correctly-filtered extra_df (only_excluded=True always re-reads
-        # raw files, so it never has this problem), which collided on the
-        # SAME per-treebank cache path in sva_trees.pipeline/word_order.
-        # per_treebank -- the included entry's dt_df got silently overwritten
-        # by the excluded entry's fit, and the next read-back raised a
-        # pandas KeyError the first time anyone noticed at all. Re-filtered
-        # here defensively (cheap -- a few hundred list comprehension checks,
-        # not a re-read) rather than requiring a full pickle-rebuild sweep
-        # every time the exclusion list changes.
+        # Pickles are built without excluded treebanks, but the exclusion list
+        # can grow after a pickle was built, so rows are re-filtered on load.
         if load_from_pickle and not only_excluded:
             pickle_path = os.path.join(resource_dir, pickle_path, f"{lang}.pickle")
-            # TODO: if no pickle, run pickle script
             if os.path.exists(pickle_path):
                 with open(pickle_path, "rb") as f:
                     treebank = pickle.load(f)
                 if use_selected_treebanks:
-                    # is_treebank_row_excluded, not is_treebank_excluded(lang, ...):
-                    # a few bilingual/code-switched treebanks (e.g. UD_Turkish_
-                    # German-SAGT) are bundled into a DIFFERENT language's own
-                    # pickle than the one their excluded_treebanks entry is
-                    # registered under -- see multiblimp.languages.
-                    # _split_treebank_row's docstring.
+                    # keyed on the row's own embedded language, which can differ
+                    # from the pickle's (e.g. Turkish_German-SAGT in Turkish's pickle)
                     treebank = [
                         tree for tree in treebank
                         if not is_treebank_row_excluded(tree.metadata.get("treebank", "").split("/")[0])
                     ]
                 return treebank
-            else:
-                with open("error_log.txt", "a") as f:
-                    f.write(f"Pickle not found for {lang} at {pickle_path}\n")
+            append_log("missing_pickles", f"{lang}\t{pickle_path}")
 
         match_on = f"UD_{lang}-*" if lang not in add_langs else add_langs[lang]
         if test_files_only:
@@ -453,3 +400,59 @@ class Treebank:
                     item["lemma"] = remove_hebrew_cantillation(item["lemma"])
 
         return treebank
+
+
+# ---- line numbers in the UD .conllu files, for locating an extracted instance in its source file ----
+@functools.lru_cache(maxsize=2)
+def _index(rel_path: str) -> dict:
+    """{sent_id: (first line of the sentence block, first token line, raw token ids or None)}.
+    Raw ids are kept only for sentences whose token lines are not plainly 1..n (multiword
+    ranges, empty nodes), where a token's line is not first + id - 1."""
+    out = {}
+    path = os.path.join(RESOURCE_DIR, UD_PATH, rel_path)
+    if not os.path.exists(path):
+        return out
+    sent_id = block = first_token = None
+    ids = []
+
+    def close():
+        if sent_id is not None and first_token is not None:
+            plain = ids == [str(i) for i in range(1, len(ids) + 1)]
+            out.setdefault(sent_id, (block, first_token, None if plain else tuple(ids)))
+
+    with open(path, encoding="utf-8") as f:
+        for n, line in enumerate(f, 1):
+            if not line.strip():
+                close()
+                sent_id = block = first_token = None
+                ids = []
+                continue
+            if block is None:
+                block = n
+            if line.startswith("#"):
+                if line.startswith("# sent_id"):
+                    sent_id = line.split("=", 1)[1].strip()
+                continue
+            if first_token is None:
+                first_token = n
+            ids.append(line.split("\t", 1)[0])
+    close()
+    return out
+
+
+def sentence_line(rel_path: str, sent_id: str) -> int | None:
+    """First line of the sentence's block (its comment header) in the file."""
+    entry = _index(rel_path).get(sent_id)
+    return entry[0] if entry else None
+
+
+def token_line(rel_path: str, sent_id: str, token_id) -> int | None:
+    """Line of the token with this id (an int, or a "1-2" / "8.1" string) in the file."""
+    entry = _index(rel_path).get(sent_id)
+    if entry is None:
+        return None
+    _, first, ids = entry
+    if ids is None:
+        return first + int(token_id) - 1 if isinstance(token_id, int) else None
+    key = str(token_id)
+    return first + ids.index(key) if key in ids else None
