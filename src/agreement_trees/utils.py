@@ -1,16 +1,9 @@
 import html as html_lib
-import itertools
 import re
 from urllib.parse import quote
 
 import pandas as pd
 
-from agreement_trees.extract.prediction_target import PredictionTarget
-
-
-ALL_CORE_ARGS = ["vos", "vso", "ovs", "svo", "osv", "sov"]   # LEGACY: only get_all_orders reads it
-
-MAX_TREEBANK_LEN = 30_000   # LEGACY: unused
 
 # A predictor_var names an agreement relation either as VP's "head_{deprel}_{Feature}_agreement" or as the
 # pairwise "{Role1}-{Role2}_{Feature}" of NPA ("yes" = the agreement holds). VP names never contain "-",
@@ -30,13 +23,6 @@ def is_agreement_predictor(predictor_var: str) -> bool:
     return bool(predictor_var) and (
         "agreement" in predictor_var or split_pairwise_predictor(predictor_var) is not None
     )
-
-
-def capitalize_first(word: str) -> str:
-    """LEGACY (only the dead word_order create_pairs/create_tree_pairs use it)."""
-    if len(word) == 0:
-        return ""
-    return word[0].upper() + word[1:]
 
 
 def shorten_cls(cls, target):
@@ -97,21 +83,3 @@ def build_grew_url(treebank, sent_id, form_values) -> str | None:
         f"https://universal.grew.fr/?corpus={quote(corpus_value, safe='')}"
         f"&request={quote(request_value, safe='')}"
     )
-
-
-def get_all_orders(predictor_var: str, target: PredictionTarget):
-    """LEGACY (word-order block of decision_tree.set_dt_features_in_df, dead create_pairs): every order of
-    the target's deprels and head, shortened."""
-    if predictor_var == "core_args":
-        all_orders = ALL_CORE_ARGS
-    else:
-        deprels = target.child_deprels + ["head"]
-        all_orders = [
-            shorten_cls("_".join(permutation), target)
-            for permutation in sorted(
-                itertools.permutations(deprels, len(deprels)),
-                key=lambda p: (p.index("head"), "_".join(p)),
-            )
-        ]
-
-    return all_orders

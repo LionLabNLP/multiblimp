@@ -15,10 +15,9 @@ from agreement_trees.utils import build_grew_link
 from agreement_trees.fit.decision_tree import MISSING, UNK_LABELS
 from agreement_trees.fit.entropy import DEFAULT_LEAF_MIN_ACCURACY
 from agreement_trees.pipeline_utils import match_casing
+from agreement_trees.pairs.attractors import add_attractors_if_stored
+from agreement_trees.pairs.sentence_text import add_sentence_strings
 from multiblimp.script_log import append_log
-
-
-UNDEFINED="UNDEFINED"
 
 
 def coverage_stats(df, form_cols, inflector):
@@ -99,8 +98,8 @@ def _fallback_join(tokens, highlight_idx=frozenset()) -> str:
 def _detect_swap_col(row):
     """Find the swap_<kind> column process_item set on this row, if any.
 
-    Only matches scalar string values, since the source df already has unrelated
-    columns sharing the "swap_" prefix (e.g. swap_order_candidates, a list)."""
+    Only matches scalar string values: older cached fits carry list-valued "swap_" columns
+    (swap_order_candidates)."""
     for col in row.index:
         if col.startswith("swap_") and isinstance(row.get(col), str) and row[col]:
             return col, col[len("swap_"):]
@@ -589,10 +588,7 @@ def process_item(
                     else:
                         add_item = None
 
-            # LEGACY: UNDEFINED is the old UnimorphInflector's placeholder; UDInflector never returns it
-            if (len(feature_vals & swap_feature_vals) == 0) and (
-                UNDEFINED not in swap_feature_vals
-            ):
+            if len(feature_vals & swap_feature_vals) == 0:
                 if (len(swap_feature_vals) > 0) and add_item:
                     # the fixed role's own form could also carry the swapped value
                     if len(context_features & swap_feature_vals) > 0:
@@ -866,6 +862,10 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
     print(f"items_seen={items_seen} correct_swaps={len(diagnostics['correct_swaps'])} coverage={coverage}%")
 
     diagnostic_dfs = {item_type: bucket_frame(swap_df, items) for item_type, items in diagnostics.items()}
+    if len(diagnostic_dfs["correct_swaps"]):
+        diagnostic_dfs["correct_swaps"] = add_sentence_strings(diagnostic_dfs["correct_swaps"])
+        diagnostic_dfs["correct_swaps"] = add_attractors_if_stored(
+            diagnostic_dfs["correct_swaps"], f"{child_deprel}_attractor_slots", child_deprel)
     # unk rows are never modified: keep their dtypes, skip the records round trip
     for item_type, unk_df in (("head_unk", head_unk_df), ("nsubj_unk", nsubj_unk_df),
                               ("both_unk", both_unk_df)):

@@ -1,14 +1,14 @@
 """Annotation coverage statistics, one entry per language in annotation_coverage.json
 (next to the scan results; annotation_coverage_overview.tsv is the readable summary):
 
-  ud        token counts from the UD treebanks, written by scripts/ud_tables.py: tokens and
+  ud        token counts from the UD treebanks, written by scripts/data_caching/ud_tables.py: tokens and
             tokens with any feats; per UPOS the tokens and, per feature, how many carry
             it; tokens skipped when building the UD-derived table, by reason; feature
             values with no UniMorph tag; per treebank the tokens with feats
-  um_table  the UniMorph-derived table (resources/um_tables), written by scripts/um2ud.py:
+  um_table  the UniMorph-derived table (resources/um_tables), written by scripts/data_caching/um2ud.py:
             rows per UD upos and, per feature, the rows that state a real value, i.e.
             what annotation filling can supply
-  ud_table  the same for the UD-derived table (resources/ud_tables), written by scripts/ud_tables.py
+  ud_table  the same for the UD-derived table (resources/ud_tables), written by scripts/data_caching/ud_tables.py
 """
 import json
 import os

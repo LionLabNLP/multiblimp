@@ -5,6 +5,25 @@ import pandas as pd
 
 from sklearn.pipeline import Pipeline
 
+TRANSFORM_CHUNK_ROWS = 50_000
+
+
+def chunked_leaf_ids(dt: Pipeline, X: pd.DataFrame, y=None):
+    """(leaf ids of every row of X, number of rows whose prediction equals y or None without y).
+
+    Transforms in row chunks: the one-hot matrix of a whole large treebank can raise MemoryError."""
+    pre, clf = dt.named_steps["preprocessor"], dt.named_steps["clf"]
+    parts, hits = [], 0
+    for start in range(0, len(X), TRANSFORM_CHUNK_ROWS):
+        whole = len(X) <= TRANSFORM_CHUNK_ROWS    # no slice, which would copy a wide frame
+        X_t = pre.transform(X if whole else X.iloc[start:start + TRANSFORM_CHUNK_ROWS])
+        parts.append(clf.apply(X_t))
+        if y is not None:
+            y_part = y if whole else y.iloc[start:start + TRANSFORM_CHUNK_ROWS]
+            hits += int((clf.predict(X_t) == y_part.to_numpy()).sum())
+    leaf_ids = np.concatenate(parts) if parts else np.empty(0, dtype=np.intp)
+    return leaf_ids, (hits if y is not None else None)
+
 
 def order_entropy(
     n_ab: float,
@@ -26,12 +45,6 @@ def order_entropy(
         return -p * math.log2(p) if p > 0 else 0.0
 
     return safe_term(p_ab) + safe_term(p_ba)
-
-
-def default_leaf_threshold(min_samples_leaf: int, smoothing_a: float = 0.5) -> float:
-    """LEGACY (unused, superseded by DEFAULT_LEAF_MIN_ACCURACY): the entropy of a unanimous leaf of
-    exactly `min_samples_leaf` samples, the entropy-era floor for keeping a leaf."""
-    return order_entropy(min_samples_leaf, 0, smoothing_a)
 
 
 def calculate_base_entropy(
@@ -63,11 +76,9 @@ def calculate_tree_entropy(
     smoothing: float = 0.5,
 ) -> float:
     """Leaf-weighted entropy of `target_col` over the fitted pipeline's leaves for `df`."""
-    tree_model = dt.named_steps["clf"]
-
     X = df.drop(columns=[target_col])
 
-    leaf_ids = tree_model.apply(dt.named_steps["preprocessor"].transform(X))
+    leaf_ids, _ = chunked_leaf_ids(dt, X)
 
     return leaf_weighted_entropy(
         leaf_ids, df, target_col, binary=binary, smoothing=smoothing
@@ -134,5 +145,5 @@ def pooled_leaf_accuracy(leaf_ids: np.ndarray, df: pd.DataFrame, target_col: str
 def calculate_tree_accuracy(dt: Pipeline, df: pd.DataFrame, target_col: str,
                             smoothing: float = 0.5) -> float:
     X = df.drop(columns=[target_col])
-    leaf_ids = dt.named_steps["clf"].apply(dt.named_steps["preprocessor"].transform(X))
+    leaf_ids, _ = chunked_leaf_ids(dt, X)
     return pooled_leaf_accuracy(leaf_ids, df, target_col, smoothing=smoothing)

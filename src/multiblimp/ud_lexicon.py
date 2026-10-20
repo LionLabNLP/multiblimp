@@ -126,30 +126,31 @@ def collect_ud_rows(
             if stored:
                 ud_keys.append((lemma.lower(), form.lower(), upos, tuple(sorted(stored.items()))))
 
-    # duplicate removal on "<UM upos>;upos=<UPOS>;Feat=Val;..." strings
+    # duplicate removal on (lemma, form, ("upos=<UPOS>", "Feat=Val", ...), frequency)
     ud_freqs = [
-        (lemma, form, ";".join([upos_to_um_tag(upos), f"upos={upos}"] + [f"{f}={v}" for f, v in feats]), freq)
+        (lemma, form, (f"upos={upos}",) + tuple(f"{f}={v}" for f, v in feats), freq)
         for (lemma, form, upos, feats), freq in Counter(ud_keys).items()
     ]
     rows = []
     for lemma, form, encoded, freq in remove_duplicate_features(ud_freqs, dup_form_threshold, dup_feat_threshold):
-        feats = dict(part.split("=", 1) for part in encoded.split(";")[1:])
-        rows.append((lemma, form, feats.pop("upos"), feats, freq))
+        feats = dict(part.split("=", 1) for part in encoded[1:])
+        rows.append((lemma, form, encoded[0][len("upos="):], feats, freq))
     if coverage is not None:
         coverage["rows_raw"], coverage["rows"] = len(ud_freqs), len(rows)
     return rows
 
 
-def _upos_tag(features: str) -> str:
-    """The upos of a ";"-joined UM tag string (its first tag, minus a fused ".PTCP" etc.)."""
-    return features.split(";")[0].split(".")[0]
+def _pos_class(features: tuple) -> str:
+    """The UniMorph POS class of a row's UPOS (NOUN and PROPN are both N): rows of one class are compared as
+    the same word class."""
+    return upos_to_um_tag(features[0][len("upos="):]).split(".")[0]
 
 
 def remove_duplicate_features(
-    row_freqs: List[Tuple[str, str, str, int]],
+    row_freqs: List[Tuple[str, str, tuple, int]],
     dup_form_threshold: float,
     dup_feat_threshold: float,
-) -> List[Tuple[str, str, str, int]]:
+) -> List[Tuple[str, str, tuple, int]]:
     """
     Form mismatch might indicate annotation error, since we can expect
     a lemma+feat combination to usually map to a single form
@@ -194,29 +195,31 @@ def remove_duplicate_features(
             features, freq = all_features[0]
             dedup_feats.append((lemma, form, features, freq))
         else:
-            sorted_feats: List[Tuple[str, int]] = sorted(
+            sorted_feats: List[Tuple[tuple, int]] = sorted(
                 all_features, key=lambda x: x[1], reverse=True
             )
             most_common_feat = sorted_feats[0]
             # If the most frequent feature is _n_ times more frequent we remove that item
             dedup_feats.append((lemma, form, most_common_feat[0], most_common_feat[1]))
             for next_common_feat in sorted_feats[1:]:
-                most_common_feat_set = set(most_common_feat[0].split(";"))
-                next_common_feat_set = set(next_common_feat[0].split(";"))
-                mismatching_feats = set(next_common_feat_set).symmetric_difference(
-                    most_common_feat_set
-                )
+                mismatching_feats = set(next_common_feat[0]).symmetric_difference(most_common_feat[0])
 
                 if (
                     ((most_common_feat[1] / next_common_feat[1]) <= dup_feat_threshold)
                     or (len(mismatching_feats) > 2)
                     or (next_common_feat[1] > 1)
-                    or (_upos_tag(most_common_feat[0]) != _upos_tag(next_common_feat[0]))
+                    or (_pos_class(most_common_feat[0]) != _pos_class(next_common_feat[0]))
                 ):
                     dedup_feats.append(
                         (lemma, form, next_common_feat[0], next_common_feat[1])
                     )
 
-    dedup_rows = sorted(set(dedup_forms) & set(dedup_feats), key=repr)
+    # the table's row order is part of its content (ties in lookups), so the sort key keeps the order the rows
+    # had as ";"-joined "<UniMorph POS tag>;upos=<UPOS>;Feat=Val" strings
+    def sort_key(row):
+        lemma, form, features, freq = row
+        return repr((lemma, form, ";".join((upos_to_um_tag(features[0][len("upos="):]),) + features), freq))
+
+    dedup_rows = sorted(set(dedup_forms) & set(dedup_feats), key=sort_key)
 
     return dedup_rows

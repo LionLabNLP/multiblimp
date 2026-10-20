@@ -11,7 +11,7 @@ import json
 from agreement_trees.extract.process_treebank import (
     create_word_order_df, read_df, load_treebank,
 )
-from agreement_trees.fit.decision_tree import fit_dt, FIT_EXCLUDED_FEATS, fit_excluded_for_display, split_unk_reasons
+from agreement_trees.fit.decision_tree import fit_dt, FIT_EXCLUDED_FEATS, fit_excluded_for_display
 from agreement_trees.fit.entropy import DEFAULT_LEAF_MIN_ACCURACY
 from agreement_trees.report.viz_tree import tree2html
 from agreement_trees.extract.per_treebank import (
@@ -24,6 +24,7 @@ from multiblimp.languages import lang2langcode, gblang2udlang
 from multiblimp.ud_inflector import load_ud_inflector
 from multiblimp.ud_table import ud_lookup_table, um_lookup_table
 from agreement_trees.pipeline_utils import parquet_current, sentinel_current, write_sentinel
+from agreement_trees.config import lexical_features
 from agreement_trees.taxonomy import FEATURE_SUFFIXES
 from multiblimp.config import (
     HTML_DECISION_TREES_DIR, OUTPUT_DECISION_TREES_DIR, OUTPUT_MINIMAL_PAIRS_DIR,
@@ -79,30 +80,26 @@ def get_impurity(n, min_n=300, max_n=4000, max_val=0.1, min_val=0.01):
 
 
 def refresh_deprel_index(target_id, deprel, predictor_var, head_label="Verb",
-                         simplify=True, leaf_threshold=DEFAULT_LEAF_MIN_ACCURACY,
-                         has_pairs=True):
+                         leaf_threshold=DEFAULT_LEAF_MIN_ACCURACY):
     """Rebuild one condition x deprel's diagnostics CSV and deprel index.html from the
     on-disk output (no fitting); NPA's counterpart is agreement_trees.npa.agreement.refresh_deprel_index.
-    has_pairs=False (data-debugging mode) renders the index without the pairs columns.
     """
     pairs_dir = os.path.join(OUTPUT_MINIMAL_PAIRS_DIR, target_id, f"{target_id}_{deprel}")
     decision_trees_dir = os.path.join(OUTPUT_DECISION_TREES_DIR, target_id, f"{target_id}_{deprel}")
 
-    diagnostics_by_lang = None
-    if has_pairs:
-        print("Generating diagnostics table for", deprel)
-        diagnostics_df = generate_diagnostics_table(pairs_dir)
-        write_diagnostics_csv(
-            diagnostics_df,
-            os.path.join(OUTPUT_DIAGNOSTICS_DIR, target_id, f"{target_id}_{deprel}.csv"),
+    print("Generating diagnostics table for", deprel)
+    diagnostics_df = generate_diagnostics_table(pairs_dir)
+    write_diagnostics_csv(
+        diagnostics_df,
+        os.path.join(OUTPUT_DIAGNOSTICS_DIR, target_id, f"{target_id}_{deprel}.csv"),
+    )
+    # reshaped here so agreement_trees.report.viz_deprel needn't depend on sva_trees
+    diagnostics_by_lang = {
+        row["Language"]: diagnostics_row_to_json(
+            row, lang_dir=os.path.join(pairs_dir, row["Language"])
         )
-        # reshaped here so agreement_trees.report.viz_deprel needn't depend on sva_trees
-        diagnostics_by_lang = {
-            row["Language"]: diagnostics_row_to_json(
-                row, lang_dir=os.path.join(pairs_dir, row["Language"])
-            )
-            for _, row in diagnostics_df.iterrows()
-        }
+        for _, row in diagnostics_df.iterrows()
+    }
 
     subject_label, nsubj_label = _DEPREL_ROLE_LABELS.get(deprel, ("subject", deprel))
     condition_id = target_id.removesuffix("_single")
@@ -114,15 +111,14 @@ def refresh_deprel_index(target_id, deprel, predictor_var, head_label="Verb",
     generate_html_deprel_index(data_dir=decision_trees_dir,
                     html_directory=os.path.join(HTML_DECISION_TREES_DIR, target_id),
                     target_col=predictor_var,
-                    exclude_labels={"unk"} if simplify else {"--", "+-"},
+                    exclude_labels={"unk"},
                     leaf_threshold=leaf_threshold,
-                    pairs_dir=pairs_dir if has_pairs else None,
+                    pairs_dir=pairs_dir,
                     diagnostics_by_lang=diagnostics_by_lang,
                     head_role_label=head_label,
                     agreement_label=agreement_label,
                     subject_label=subject_label,
                     nsubj_label=nsubj_label,
-                    debug_view=not has_pairs,
                     )
 
 
@@ -134,15 +130,14 @@ class Pipeline:
                  deprel_dir, resource_dir, word_order_dir,
                  max_treebank_len, never_skip=False, never_skip_fit=False, rm_columns=[],
                  target_id=False,
-                 threshold=None, min_samples_leaf=10, simplify=False, n_jobs=1,
+                 threshold=None, min_samples_leaf=10, n_jobs=1,
                  max_worker_mem_gb=None, mem_headroom=0.8, force=False,
                  agreement_feats=None, drop_unk=True, max_tasks_per_child=1,
                  second_chance=None, per_treebank=True, include_excluded=False,
-                 generate_pairs=True, fetch_all=True, incl_unk=False,
-                 detailed_unk=False, build_index=True, head_label=None,
-                 max_depth=12, test_size=0.1, impurity=None, only_treebanks=(), block_dep_feat=False):
+                 fetch_all=True, incl_unk=False,
+                 build_index=True, head_label=None,
+                 max_depth=12, test_size=0.1, impurity=None, only_treebanks=()):
         self.only_treebanks = list(only_treebanks)
-        self.block_dep_feat = block_dep_feat
         self.target = target
         self.predictor_var = predictor_var
         # all agreement features are extracted so one cache serves every target
@@ -171,7 +166,6 @@ class Pipeline:
             threshold if threshold is not None
             else DEFAULT_LEAF_MIN_ACCURACY
         )
-        self.simplify = simplify  # collapse +-/-- to "unk" for decision tree
         # False keeps unk-labeled rows in the fit
         self.drop_unk = drop_unk
         self.n_jobs = n_jobs # parallelise language computation across this many processes; 1=serial, >1=parallel
@@ -188,14 +182,10 @@ class Pipeline:
         self.per_treebank = per_treebank
         # with per_treebank: also trees for excluded treebanks (never reach the pooled tree or pairs)
         self.include_excluded = include_excluded
-        # False: no minimal pairs or pairs-derived diagnostics (data-debugging mode)
-        self.generate_pairs = generate_pairs
         # False skips expand_anno's annotation filling
         self.fetch_all = fetch_all
         # with per_treebank: also the incl.-unk tree (see agreement_trees.extract.per_treebank)
         self.incl_unk = incl_unk
-        # incl_unk granularity: False = one merged unk class, True = Head/Subject/Both unknown
-        self.detailed_unk = detailed_unk
         # False: leave the diagnostics table and deprel index to scripts/overview/generate_html_indexes.py
         self.build_index = build_index
         if head_label:
@@ -247,15 +237,15 @@ class Pipeline:
             for deprel in self.target.child_deprels:
                 refresh_deprel_index(
                     self.target_id, deprel, self.predictor_var,
-                    head_label=self.head_label, simplify=self.simplify,
-                    leaf_threshold=self.leaf_threshold, has_pairs=self.generate_pairs,
+                    head_label=self.head_label,
+                    leaf_threshold=self.leaf_threshold,
                 )
 
     def _is_done(self, lang):
-        # done = pairs (if generated), tree HTML and per-treebank summaries exist for every deprel
+        # done = pairs, tree HTML and per-treebank summaries exist for every deprel
         return not self.never_skip and not self.never_skip_fit and all(
-            (not self.generate_pairs or os.path.isdir(os.path.join(
-                OUTPUT_MINIMAL_PAIRS_DIR, self.target_id, f"{self.target_id}_{deprel}", lang)))
+            os.path.isdir(os.path.join(
+                OUTPUT_MINIMAL_PAIRS_DIR, self.target_id, f"{self.target_id}_{deprel}", lang))
             and os.path.exists(os.path.join(HTML_DECISION_TREES_DIR, self.target_id, f"{lang}.html"))
             and (not self.per_treebank or self._treebanks_done(
                 os.path.join(OUTPUT_DECISION_TREES_DIR, self.target_id, f"{self.target_id}_{deprel}",
@@ -264,7 +254,7 @@ class Pipeline:
             )
 
     def _treebanks_done(self, summary_fn):
-        return treebanks_done(summary_fn, self.include_excluded, self.incl_unk, self.detailed_unk)
+        return treebanks_done(summary_fn, self.include_excluded, self.incl_unk)
 
     def _process_language(self, lang):
         # per-language lookup slices are dropped once the language is done
@@ -273,40 +263,16 @@ class Pipeline:
         finally:
             gc.collect()
 
-    def _unk_split_config(self):
-        """unk_split config for agreement_trees.extract.per_treebank.fit_treebank_trees: an incl.-unk tree
-        splits "unk" into "{Verb}'s {feature} unknown" / "{Subject,Object,Indirect object}'s
-        {feature} unknown" ("{feature} unknown on both" when neither side has it annotated)."""
-        feat, deprel = self.target.swap_feat, self.target.child_deprels[0]
-        head_label = f"{self.head_label}'s {feat} unknown"
-        dep_prose = _DEPREL_ROLE_LABELS.get(deprel, ("subject", deprel))[0]
-        dep_label = f"{dep_prose[0].upper()}{dep_prose[1:]}'s {feat} unknown"
-        both_label = f"{feat} unknown on both"
-        grey = "#94a1b2"
-        return {
-            "col_a": f"head_{feat}", "label_a": head_label,
-            "col_b": f"{deprel}_{feat}", "label_b": dep_label,
-            "both_label": both_label, "other_label": "unknown (other)",
-            # "unknown (other)" is left out of the palette so its always-empty swatch
-            # does not appear in every legend
-            "palette": {
-                "yes": "#31cb9f", "no": "#f16393",
-                head_label: "#f6c453", dep_label: "#5aa9e6",
-                both_label: grey,
-            },
-        }
-
     def _swap_feat_cols(self, df):
         """Columns kept out of the fit: every plain or bracketed column of the
         swap feature (head_Number, head_Number[abs], sibling/child variants...),
         which is what the label is computed from, except the dependent's own
-        (nsubj_Number / obj_Number / iobj_Number), which stays a predictor unless
-        block_dep_feat (debug mode) blocks it too."""
+        (nsubj_Number / obj_Number / iobj_Number), which stays a predictor."""
         feat, deprel = self.target.swap_feat, self.target.child_deprels[0]
         pattern = re.compile(rf"_{feat}(\[[^\]]+\])?$")
         swap_cols = {col for col in df if pattern.search(col)
                      and not col.startswith("swap_")
-                     and (self.block_dep_feat or col != f"{deprel}_{feat}")}
+                     and col != f"{deprel}_{feat}"}
         # plus the head token's xpos (see agreement_trees.fit.decision_tree.FIT_EXCLUDED_FEATS)
         return swap_cols | {col for col in FIT_EXCLUDED_FEATS if col in df}
 
@@ -324,12 +290,12 @@ class Pipeline:
             if any(col.startswith(y) for y in self.rm_columns):
                 full_df = full_df[~full_df[col]]
 
-        if self.simplify:
-            full_df[self.predictor_var] = (
-                full_df[self.predictor_var]
-                .astype(str)
-                .replace({"+-": "unk", "--": "unk"})
-            )
+        # collapse +-/-- to "unk" for the decision tree
+        full_df[self.predictor_var] = (
+            full_df[self.predictor_var]
+            .astype(str)
+            .replace({"+-": "unk", "--": "unk"})
+        )
         return full_df
 
     def _build_df(self, lang, save_to, inflector, treebank=None):
@@ -380,14 +346,17 @@ class Pipeline:
 
     def _columns_ok(self, names):
         """A cache is valid if it has this pipeline's agreement column and, for every
-        feature on both head and child, that feature's agreement column."""
+        feature on both head and child, that feature's agreement column. Lexical features
+        (scan.exclude_features) never get one, so they are not checked."""
         names = set(names)
         if self.predictor_var not in names:
             return False
+        lexical = lexical_features()
         for deprel in self.target.child_deprels:
             for col in names:
                 feat = col[len("head_"):]
                 if (col.startswith("head_") and re.fullmatch(r"[A-Z][a-zA-Z]*", feat)
+                        and feat not in lexical
                         and f"{deprel}_{feat}" in names
                         and f"head_{deprel}_{feat}_agreement" not in names):
                     return False
@@ -496,14 +465,12 @@ class Pipeline:
 
         self._clear_no_data_markers(lang)
 
-        inflector, num_lemma, num_form = None, 0, 0
-        if self.fetch_all or self.generate_pairs:
-            inflector, num_lemma, num_form = load_ud_inflector(
-                lang=lang,
-                langcode=lang2langcode(lang),
-                unimorph_args=self.unimorph_args,
-                inflection_map=self.inflection_map,
-                resource_dir=self.resource_dir,)
+        inflector, num_lemma, num_form = load_ud_inflector(
+            lang=lang,
+            langcode=lang2langcode(lang),
+            unimorph_args=self.unimorph_args,
+            inflection_map=self.inflection_map,
+            resource_dir=self.resource_dir,)
 
         df = self._extract_df(lang, inflector)
 
@@ -527,13 +494,7 @@ class Pipeline:
 
         min_impurity_decrease = self.impurity_fn(len(full_df))
         # label distribution over all of full_df (before fit_dt drops unk rows)
-        unk_split_cfg = self._unk_split_config() if self.detailed_unk else None
-        shown_labels = full_df[self.predictor_var]
-        if unk_split_cfg:
-            shown_labels = split_unk_reasons(
-                full_df, self.predictor_var,
-                **{k: unk_split_cfg[k] for k in ("col_a", "label_a", "col_b", "label_b", "both_label", "other_label")})
-        label_distribution = {str(k): int(v) for k, v in shown_labels.value_counts().items()}
+        label_distribution = {str(k): int(v) for k, v in full_df[self.predictor_var].value_counts().items()}
 
         swap_feat_cols = self._swap_feat_cols(full_df)
 
@@ -569,7 +530,7 @@ class Pipeline:
                         if os.path.exists(stale):
                             os.remove(stale)
                     model = None
-                    dt_df = full_df.assign(**{self.predictor_var: shown_labels}) if unk_split_cfg else full_df
+                    dt_df = full_df
                     learn_dt = False
             else:
                 dt_df = read_df(lang, word_order_dir=decision_trees_dir)
@@ -580,55 +541,47 @@ class Pipeline:
             # before tree2html so the page can join this run's correct_swaps rows by leaf_id
             correct_swaps_df = None
             leaf_threshold = self.leaf_threshold
-            if self.generate_pairs:
-                pairs_kwargs = dict(
-                    swap_feat=self.predictor_var, inflector=inflector,
-                    target=self.target,
-                    save_to=os.path.join(OUTPUT_MINIMAL_PAIRS_DIR, self.target_id, f"{self.target_id}_{deprel}", lang),
-                    num_lemma=num_lemma,
-                    num_form=num_form,
-                    full_df=full_df,
-                    unk_counts=unk_counts,
-                    label_distribution=label_distribution,
-                    head_label=self.head_label)
-                try:
-                    diagnostic_dfs = create_pairs(dt_df, leaf_threshold=leaf_threshold, **pairs_kwargs)
-                    if self.second_chance is not None:
-                        retry, lax, info = second_chance_decision(
-                            dt_df, self.predictor_var, label_distribution,
-                            strict_threshold=leaf_threshold,
-                            min_samples_leaf=self.min_samples_leaf, cfg=self.second_chance)
-                        print(f"{lang} {deprel}: second chance: {info['reason']}")
-                        if retry:
-                            # adopted even with zero correct_swaps: the lax pass's numbers are the ones to record
-                            second_dfs = create_pairs(
-                                dt_df, leaf_threshold=lax,
-                                extra_meta={"second_pass": True, "second_chance_info": info},
-                                second_chance_threshold=leaf_threshold,
-                                **pairs_kwargs)
-                            leaf_threshold, diagnostic_dfs = lax, second_dfs
-                            if not len(second_dfs["correct_swaps"]):
-                                print(f"{lang} {deprel}: retry attempted, yielded no pairs")
-                    correct_swaps_df = diagnostic_dfs.get("correct_swaps")
-                except MissingColumnError as err:
-                    print(f"Skipping {lang} for {deprel}, missing column {err}")
+            pairs_kwargs = dict(
+                swap_feat=self.predictor_var, inflector=inflector,
+                target=self.target,
+                save_to=os.path.join(OUTPUT_MINIMAL_PAIRS_DIR, self.target_id, f"{self.target_id}_{deprel}", lang),
+                num_lemma=num_lemma,
+                num_form=num_form,
+                full_df=full_df,
+                unk_counts=unk_counts,
+                label_distribution=label_distribution,
+                head_label=self.head_label)
+            try:
+                diagnostic_dfs = create_pairs(dt_df, leaf_threshold=leaf_threshold, **pairs_kwargs)
+                if self.second_chance is not None:
+                    retry, lax, info = second_chance_decision(
+                        dt_df, self.predictor_var, label_distribution,
+                        strict_threshold=leaf_threshold,
+                        min_samples_leaf=self.min_samples_leaf, cfg=self.second_chance)
+                    print(f"{lang} {deprel}: second chance: {info['reason']}")
+                    if retry:
+                        # adopted even with zero correct_swaps: the lax pass's numbers are the ones to record
+                        second_dfs = create_pairs(
+                            dt_df, leaf_threshold=lax,
+                            extra_meta={"second_pass": True, "second_chance_info": info},
+                            second_chance_threshold=leaf_threshold,
+                            **pairs_kwargs)
+                        leaf_threshold, diagnostic_dfs = lax, second_dfs
+                        if not len(second_dfs["correct_swaps"]):
+                            print(f"{lang} {deprel}: retry attempted, yielded no pairs")
+                correct_swaps_df = diagnostic_dfs.get("correct_swaps")
+            except MissingColumnError as err:
+                print(f"Skipping {lang} for {deprel}, missing column {err}")
 
             tree_html_kwargs = dict(
                     discounted_classes=[c for c in label_distribution if c not in ("yes", "no")] if self.drop_unk else None,
                     predictor_var=self.predictor_var,
                     target=self.target,
                     max_rows=15,
-                    only_show_real_orders=True,
                     correlate_features=True,
                     show_features=True,
                     full_tree_html=learn_dt,
-                    palette_map = (
-                        {"yes": "#31cb9f", "no": "#f16393", "unk": "#b893de"}
-                        if self.simplify else
-                        unk_split_cfg["palette"] if unk_split_cfg else
-                        {"yes": "#31cb9f", "no": "#f16393",
-                        "+-": "#e5c64d", "--": "#b893de"}
-                    ),
+                    palette_map={"yes": "#31cb9f", "no": "#f16393", "unk": "#b893de"},
                     leaf_threshold=leaf_threshold,
                     # the strict bar even after a second-chance retry, to tag leaves that only cleared the lax one
                     strict_leaf_threshold=self.leaf_threshold,
@@ -643,7 +596,6 @@ class Pipeline:
             if (self.per_treebank and (learn_dt or self.incl_unk) and "treebank" in full_df.columns
                     and (full_df["treebank"].nunique() > 1 or extra_df is not None or self.incl_unk)):
                 tb_cache_dir = os.path.join(decision_trees_dir, "treebanks")
-                unk_split = self._unk_split_config() if self.detailed_unk else None
                 tb_summary, treebanks_fresh = fit_treebank_trees(
                     full_df, lang, model, self.predictor_var, self.target, tb_cache_dir,
                     fit_kwargs=dict(min_samples_leaf=self.min_samples_leaf, max_depth=self.max_depth,
@@ -653,20 +605,19 @@ class Pipeline:
                     drop_unk=self.drop_unk, never_skip=self.never_skip or self.never_skip_fit,
                     extra_df=extra_df, include_excluded=self.include_excluded,
                     reason_fn=treebank_row_exclusion_reason,
-                    unk_split=unk_split, incl_unk=self.incl_unk)
+                    incl_unk=self.incl_unk)
                 tb_html_dir = os.path.join(HTML_DECISION_TREES_DIR, self.target_id)
                 if (treebanks_fresh or self.never_skip or self.never_skip_fit
                         or not os.path.isdir(os.path.join(tb_html_dir, lang))):
                     render_treebank_pages(tb_summary, lang, full_df, tb_cache_dir, tb_html_dir,
-                                          tree_html_kwargs, extra_df=extra_df,
-                                          unk_split=unk_split)
+                                          tree_html_kwargs, extra_df=extra_df)
                 treebank_nav = build_nav(tb_summary, lang)
                 lang_html_file = os.path.join(HTML_DECISION_TREES_DIR, self.target_id,
-                                              f"{pooled_page_stem(lang, tb_summary)}.html")
+                                              f"{pooled_page_stem(lang)}.html")
             elif self.per_treebank:
                 # marks the language as handled (see _is_done)
                 write_treebanks_marker(os.path.join(decision_trees_dir, "treebanks", f"{lang}.json"),
-                                       self.include_excluded, self.incl_unk, self.detailed_unk)
+                                       self.include_excluded, self.incl_unk)
 
             if (self.never_skip or self.never_skip_fit or treebanks_fresh
                     or not os.path.exists(lang_html_file)):

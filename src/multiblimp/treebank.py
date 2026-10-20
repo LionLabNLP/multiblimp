@@ -6,7 +6,6 @@ from glob import glob
 import urllib.request
 from pathlib import Path
 
-from arabic2latin import arabic_to_latin
 from conllu import parse_incr
 from indic_transliteration.sanscript import IAST, DEVANAGARI, transliterate
 from unidecode import unidecode
@@ -15,7 +14,7 @@ from bs4 import BeautifulSoup
 from .config import RESOURCE_DIR, UD_PATH
 from .excluded_treebanks import is_treebank_excluded, is_treebank_row_excluded, split_treebank_folder
 from .script_log import append_log
-from .languages import convert_arabic_to_latin_langs, add_langs, sent_id_prefix_keep
+from .languages import add_langs, sent_id_prefix_keep
 
 _SENT_ID_PREFIX_RE = re.compile(r"^[a-z]+")
 
@@ -361,19 +360,6 @@ class Treebank:
         # dependency tree at all, so drop the whole sentence rather than let
         # None reach downstream head/child comparisons.
         treebank = [tree for tree in treebank if all(tok["head"] is not None for tok in tree)]
-
-        if lang in convert_arabic_to_latin_langs:
-            for tree in treebank:
-                for item in tree:
-                    if item.get("misc", {}).get("Translit"):
-                        item["form"] = item["misc"]["Translit"]
-                    else:
-                        item["form"] = arabic_to_latin(item["form"])
-
-                    if item.get("misc", {}).get("LTranslit"):
-                        item["lemma"] = item["misc"]["LTranslit"]
-                    else:
-                        item["lemma"] = arabic_to_latin(item["lemma"])
 
         if remove_diacritics:
             for tree in treebank:

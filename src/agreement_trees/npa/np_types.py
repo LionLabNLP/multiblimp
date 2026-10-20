@@ -6,15 +6,15 @@ from collections import Counter
 from itertools import combinations
 
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 
 from agreement_trees.extract.process_treebank import (
     load_treebank, get_all_feats, records_to_df, extract_node_features, _build_tree_maps,
-    tree2sen, tree_no_space_after, values_overlap, filled_feats, conllu_sentence_meta,
+    tree2sen, tree_no_space_after, values_overlap, filled_feats, conllu_sentence_meta, attractor_cols,
 )
 from agreement_trees.config import lexical_features
-from multiblimp.config import DEBUG_MODE
-from agreement_trees.pipeline_utils import write_table
+from agreement_trees.pipeline_utils import CACHE_VERSION, _KEY as _CACHE_KEY
 from agreement_trees.taxonomy import NPA_ROLE_ORDER
 from multiblimp.excluded_treebanks import is_treebank_row_excluded
 from multiblimp.languages import lang2langcode
@@ -59,18 +59,6 @@ def np_upos_type(tree, noun_token, qualifying_deps=QUALIFYING_DEPS) -> str:
             span.append((token["id"], token["upos"]))
     span.sort(key=lambda x: x[0])
     return " ".join(upos for _, upos in span)
-
-
-def count_np_types(lang: str, resource_dir: str, max_treebank_len: int | None = None,
-                    head_pos=("NOUN", "PROPN", "PRON"), qualifying_deps=QUALIFYING_DEPS) -> Counter:
-    """LEGACY (unused): Counter of NP UPOS-type string -> occurrence count for one language."""
-    treebank = load_treebank(lang, resource_dir, max_treebank_len=max_treebank_len)
-    counts = Counter()
-    for tree in treebank:
-        for token in tree:
-            if token["upos"] in head_pos:
-                counts[np_upos_type(tree, token, qualifying_deps)] += 1
-    return counts
 
 
 # Canonical role order of an NP's tokens: head first, then det, nummod, amod, case, nmod:poss (role "PRON").
@@ -147,8 +135,7 @@ def np_instance(tree, noun_token, all_feats: set, all_deprel: set, all_pos: set,
     roles_with_person = {role for role, _ in roles if "Person" in role_feats[role]}
     for role, token in roles:
         if (
-            not DEBUG_MODE   # debug mode assumes no values
-            and token["upos"] in ("NOUN", "PROPN")
+            token["upos"] in ("NOUN", "PROPN")
             and role not in roles_with_person
             and roles_with_person
         ):
@@ -157,12 +144,16 @@ def np_instance(tree, noun_token, all_feats: set, all_deprel: set, all_pos: set,
             assumed_person.append(f"{role}:Person")
     instance["filled_feats"] = filled_feats(dict(roles), assumed_person)
 
-    for (role1, _), (role2, _) in combinations(roles, 2):
+    for (role1, tok1), (role2, tok2) in combinations(roles, 2):
         feats1, feats2 = role_feats[role1], role_feats[role2]
         for feat in (feats1.keys() | feats2.keys()) - lexical_features():
             instance[f"{role1}-{role2}_{feat}"] = pairwise_agreement(
                 feats1.get(feat), feats2.get(feat)
             )
+        refs = {feat: feats1.get(feat) if feats1.get(feat) is not None else feats2.get(feat)
+                for feat in (feats1.keys() | feats2.keys()) - lexical_features()}
+        instance.update(attractor_cols(tree, tok1["id"], tok2["id"], refs, f"{role1}-{role2}",
+                                         all_feats - lexical_features(), um_data, ud_data, fetch_all))
 
     return instance
 
@@ -253,7 +244,10 @@ def _resolve_field_types(schemas: list["pa.Schema"]) -> dict[str, "pa.DataType"]
     for schema in schemas:
         for field in schema:
             current = resolved.get(field.name)
-            if current is None or (
+            if current is not None and current != field.type and all(
+                    pa.types.is_integer(t) or pa.types.is_floating(t) for t in (current, field.type)):
+                resolved[field.name] = pa.float64()
+            elif current is None or (
                 current != field.type
                 and (pa.types.is_null(current) or pa.types.is_floating(current))
             ):
@@ -261,28 +255,109 @@ def _resolve_field_types(schemas: list["pa.Schema"]) -> dict[str, "pa.DataType"]
     return resolved
 
 
+BATCH_ROWS = 50_000
+
+
+def _as_type(column: "pa.ChunkedArray", target: "pa.DataType") -> "pa.ChunkedArray":
+    """The column as `target`; a column of another type that cannot be cast has to be all-empty (a placeholder)
+    and becomes nulls."""
+    if column.type == target:
+        return column
+    try:
+        return column.cast(target)
+    except (pa.ArrowInvalid, pa.ArrowNotImplementedError):
+        if column.null_count < len(column):
+            raise
+        return pa.nulls(len(column), type=target)
+
+
+def _leaf_to_column(path: str) -> str:
+    return path.removesuffix(".list.element")
+
+
+def _nonempty_columns(part_paths: list[str]) -> set[str]:
+    """Names of the columns with at least one value in some part, read off the parts' row-group statistics
+    (no data is loaded). A column without statistics counts as non-empty, except null-typed ones, which never
+    have any. The NP schema is rows x (role x child relation x feature): Czech has ~14k columns of which ~9k
+    are empty in every part, and keeping those through the merge made it need tens of GB."""
+    keep: set[str] = set()
+    for path in part_paths:
+        parquet_file = pq.ParquetFile(path)
+        meta = parquet_file.metadata
+        null_typed = {f.name for f in parquet_file.schema_arrow if pa.types.is_null(f.type)}
+        for i in range(meta.num_columns):
+            name = _leaf_to_column(meta.schema.column(i).path)
+            if name in keep or name in null_typed:
+                continue
+            for g in range(meta.num_row_groups):
+                group = meta.row_group(g)
+                stats = group.column(i).statistics
+                if stats is None or not stats.has_null_count or stats.null_count < group.num_rows:
+                    keep.add(name)
+                    break
+    return keep
+
+
+def _decoded_schema(schema: "pa.Schema", keep: set[str]) -> "pa.Schema":
+    """The part's schema as _decode_dictionary_columns leaves it, restricted to the non-empty columns."""
+    return pa.schema(
+        [pa.field(f.name, f.type.value_type if pa.types.is_dictionary(f.type) else f.type)
+         for f in schema if f.name in keep],
+        metadata=schema.metadata)
+
+
+def _true_only_columns(part_paths: list[str], resolved_types: dict) -> set[str]:
+    """Boolean columns that hold True and no False in any part. Their gaps are filled with False, as
+    process_treebank._categorize does on a whole frame; a part alone cannot decide that."""
+    candidates = [n for n, t in resolved_types.items() if pa.types.is_boolean(t)]
+    has_false: set[str] = set()
+    for path in part_paths:
+        present = set(pq.read_schema(path).names)
+        names = [n for n in candidates if n in present and n not in has_false]
+        if not names:
+            continue
+        table = _decode_dictionary_columns(pq.read_table(path, columns=names))
+        has_false.update(n for n in names if pc.any(pc.invert(table[n])).as_py())
+    return set(candidates) - has_false
+
+
 def _consolidate_parts(part_paths: list[str], out_path: str) -> None:
     """Merge the per-chunk parquet files into the single `out_path` file the other npa modules read.
     A plain dataset read gets three things wrong: chunks can have different column sets (the first file's
     schema would drop columns), dictionary columns need decoding first, and an all-empty column can differ
-    in type between chunks (replaced by a null array of the resolved type). Peak memory is about the
-    size of the full table; see build_np_data_streaming's consolidate flag."""
-    tables = [_decode_dictionary_columns(pq.read_table(p)) for p in part_paths]
-    resolved_types = _resolve_field_types([t.schema for t in tables])
+    in type between chunks (replaced by a null array of the resolved type). Columns empty in every part are
+    dropped first (see _nonempty_columns) and the output is written part by part in row groups, so the
+    peak is one batch of parts, not the whole consolidated table (Czech needed tens of GB for that)."""
+    keep = _nonempty_columns(part_paths)
+    schemas = [_decoded_schema(pq.read_schema(p), keep) for p in part_paths]
+    resolved_types = _resolve_field_types(schemas)
     all_names = list(resolved_types)
+    true_only = _true_only_columns(part_paths, resolved_types)
+    target = pa.schema([(name, resolved_types[name]) for name in all_names],
+                       metadata={**(schemas[0].metadata or {}), _CACHE_KEY: str(CACHE_VERSION).encode()})
 
-    fixed_tables = []
-    for table in tables:
-        existing = dict(zip(table.column_names, table.columns))
-        columns = [
-            existing[name] if name in existing and existing[name].type == resolved_types[name]
-            else pa.nulls(len(table), type=resolved_types[name])
-            for name in all_names
-        ]
-        fixed_tables.append(pa.Table.from_arrays(columns, names=all_names))
-
-    combined = pa.concat_tables(fixed_tables)
-    write_table(combined, out_path)
+    tmp_path = out_path + ".tmp"
+    pending, pending_rows = [], 0
+    with pq.ParquetWriter(tmp_path, target) as writer:
+        for path in part_paths:
+            present = set(pq.read_schema(path).names)
+            table = _decode_dictionary_columns(pq.read_table(path, columns=[n for n in all_names if n in present]))
+            existing = dict(zip(table.column_names, table.columns))
+            columns = [
+                _as_type(existing[name], resolved_types[name]) if name in existing
+                else pa.nulls(len(table), type=resolved_types[name])
+                for name in all_names
+            ]
+            columns = [pc.fill_null(column, False) if name in true_only else column
+                       for name, column in zip(all_names, columns)]
+            pending.append(pa.Table.from_arrays(columns, schema=target))
+            pending_rows += len(table)
+            if pending_rows >= BATCH_ROWS:
+                writer.write_table(pa.concat_tables(pending))
+                pending, pending_rows = [], 0
+        if pending:
+            writer.write_table(pa.concat_tables(pending))
+    os.replace(tmp_path, out_path)
 
 
 def build_np_data_streaming(lang: str, resource_dir: str, out_path: str,
@@ -312,7 +387,7 @@ def build_np_data_streaming(lang: str, resource_dir: str, out_path: str,
     def flush():
         if not chunk_records:
             return
-        chunk_df = records_to_df(chunk_records)
+        chunk_df = records_to_df(chunk_records, fill_true_only=False)
         part_path = os.path.join(parts_dir, f"part-{len(part_paths):05d}.parquet")
         chunk_df.to_parquet(part_path, index=False)
         part_paths.append(part_path)

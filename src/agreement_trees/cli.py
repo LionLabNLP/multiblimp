@@ -8,9 +8,9 @@ import subprocess
 import sys
 
 from agreement_trees.config import (
-    AGREEMENT_CONFIG_PATH, load_agreement_config, parse_vp_target, vp_scan_key,
+    AGREEMENT_CONFIG_PATH, load_agreement_config, parse_vp_target, vp_scan_key, vp_target_id,
 )
-from multiblimp.config import DEBUG_MODE, RESOURCE_DIR
+from multiblimp.config import RESOURCE_DIR
 from multiblimp.languages import get_ud_langs
 from agreement_trees.pairs.second_chance import SecondChanceConfig
 
@@ -53,10 +53,6 @@ def parse_fit_args(argv=None):
     parser.add_argument("--include_excluded", action="store_true",
                         help="Also fit/render trees for the language's excluded treebanks (never used "
                              "for the pooled tree or minimal pairs). Needs per-treebank trees.")
-    parser.add_argument("--debug", action="store_true",
-                        help="Data-debugging mode: no minimal pairs, no UM/UD annotation filling, unk "
-                             "rows broken down by cause, +-/-- labels kept apart (verb phrase). "
-                             "Requires MULTIBLIMP_DEBUG_MODE=1 in the environment.")
     parser.add_argument("--no_index", action="store_true",
                         help="Skip this run's diagnostics table and deprel index.html (fit_all.py "
                              "builds them once afterwards).")
@@ -70,18 +66,7 @@ def parse_fit_args(argv=None):
     parser.add_argument("--single_aux_only", action="store_true",
                         help="Auxiliary targets: only single-aux instances, not stacked aux.")
     args = parser.parse_args(argv)
-    check_debug_mode(args.debug)
-    args.incl_unk_trees = args.incl_unk_trees or args.debug
     return args, config
-
-
-def check_debug_mode(debug: bool) -> None:
-    if debug != DEBUG_MODE:
-        raise SystemExit(
-            f"--debug was {'passed' if debug else 'not passed'} but MULTIBLIMP_DEBUG_MODE="
-            f"{'1' if DEBUG_MODE else '0'} in the environment -- export MULTIBLIMP_DEBUG_MODE=1 "
-            "before starting Python for a debug run (output paths are fixed at import time), "
-            "or drop --debug.")
 
 
 def second_chance_config(fit_cfg: dict):
@@ -114,19 +99,21 @@ def extract_missing(mode: str, langs: list[str], args) -> None:
 
 
 def target_langs(mode: str, target: str, args, config: dict) -> list[str]:
-    """--langs, else the languages that qualify for this target: those without a
-    current cache are extracted first, the rest judged from the saved scan where
-    valid (a scan now, saved, for the others). Raises TargetSkipped when none
-    qualifies."""
+    """--langs, else the languages that qualify for this target: out-of-date caches (and, for languages
+    listed in the config, missing ones) are extracted first, the rest judged from the saved scan where
+    valid (a scan now, saved, for the others). Raises TargetSkipped when none qualifies."""
     from agreement_trees.fit.scan import cache_state, resolve_target_langs
     if args.langs:
         return args.langs
     universe = config["langs"] or get_ud_langs(RESOURCE_DIR)
     key = vp_scan_key(*parse_vp_target(target)) if mode == "vp" else target
     family = parse_vp_target(target)[0] if mode == "vp" else None
-    missing = [lang for lang in universe if cache_state(mode, family, lang) in ("missing", "outdated")]
-    if missing:
-        extract_missing(mode, missing, args)
+    # languages named in the config are extracted when uncached; with no list, only out-of-date caches
+    # are refreshed (an uncached language is simply not considered)
+    to_extract = ("missing", "outdated") if config["langs"] else ("outdated",)
+    stale = [lang for lang in universe if cache_state(mode, family, lang) in to_extract]
+    if stale:
+        extract_missing(mode, stale, args)
     langs, info = resolve_target_langs(mode, target, universe, config["scan"])
     if not info["n_cached"]:
         raise TargetSkipped(f"no {mode} feature caches found to check {key} against")
@@ -186,7 +173,6 @@ def run_vp(target: str, args, config: dict) -> None:
         rm_columns=list(base.rm_columns),
         head_label=base.head_label,
         target_id=target_id,
-        simplify=not args.debug,
         n_jobs=args.n_jobs,
         max_worker_mem_gb=args.max_worker_mem_gb,
         mem_headroom=config["workers"]["mem_headroom"],
@@ -195,14 +181,11 @@ def run_vp(target: str, args, config: dict) -> None:
         max_tasks_per_child=args.max_tasks_per_child,
         per_treebank=not args.skip_per_treebank,
         include_excluded=args.include_excluded,
-        generate_pairs=not args.debug,
-        fetch_all=not args.debug,
+        fetch_all=True,
         incl_unk=args.incl_unk_trees,
-        detailed_unk=args.debug,
         second_chance=second_chance_config(fit),
         build_index=not args.no_index,
         only_treebanks=args.treebanks,
-        block_dep_feat=args.debug,
         threshold=fit["leaf_threshold"],
         min_samples_leaf=fit["min_samples_leaf"],
         max_depth=fit["max_depth"],
@@ -229,19 +212,17 @@ def run_np(target: str, args, config: dict) -> None:
         never_skip=args.recache_data or args.refit_trees,
         recache_data=args.recache_data,
         extract=dict(max_treebank_len=np_cfg["max_treebank_len"], streaming=np_cfg["streaming"],
-                     chunk_size=np_cfg["chunk_size"], fetch_all=not args.debug),
+                     chunk_size=np_cfg["chunk_size"], fetch_all=True),
         drop_unk=not args.keep_unk,
         max_depth=fit["max_depth"],
         min_samples_leaf=fit["min_samples_leaf"],
         test_size=fit["test_size"],
         leaf_threshold=fit["leaf_threshold"],
         impurity=fit["impurity"],
-        build_pairs=not args.debug,
         per_treebank=not args.skip_per_treebank,
         include_excluded=args.include_excluded,
         second_chance=second_chance_config(fit),
         build_index=not args.no_index,
-        detailed_unk=args.debug,
         incl_unk=args.incl_unk_trees,
         n_jobs=args.n_jobs,
         max_worker_mem_gb=args.max_worker_mem_gb,

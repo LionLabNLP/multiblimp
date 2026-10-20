@@ -20,7 +20,8 @@
       "iop",
       "sa",
       "oa",
-      "ioa"
+      "ioa",
+      "sx"
     ],
     "max_treebank_len": null
   },
@@ -49,6 +50,7 @@
       "NameType",
       "AdpType",
       "VerbType",
+      "VerbForm",
       "PartType",
       "ConjType",
       "AdvType",

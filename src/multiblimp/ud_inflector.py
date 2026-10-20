@@ -1,7 +1,5 @@
-"""Reinflection on UD-notation tables (multiblimp.ud_table), the counterpart of
-UnimorphInflector.inflect / get_form_features: the same lookups, but features and values are UD's
-(Number=Sing, not SG) and a row is a bit-mask vector, so matching a lemma's paradigm is a few array
-operations.
+"""Reinflection on UD-notation tables (multiblimp.ud_table): features and values are UD's (Number=Sing,
+not SG) and a row is a bit-mask vector, so matching a lemma's paradigm is a few array operations.
 
 inflect(form, ud_features):
   1. rows for `form` that agree with the token's features (tightest only);
@@ -146,14 +144,19 @@ class UDInflector:
         return self._vocabulary["forms"]
 
     @property
+    def own_lemmas(self) -> Set[str]:
+        """The lemmas of this inflector's own table, without the fallback's."""
+        if "lemmas" not in self._vocabulary:
+            self._vocabulary["lemmas"] = self._own_strings("lemmas")
+        return self._vocabulary["lemmas"]
+
+    @property
     def unique_forms(self) -> Set[str]:
         return self.own_forms | (self.fallback.unique_forms if self.fallback else set())
 
     @property
     def unique_lemmas(self) -> Set[str]:
-        if "lemmas" not in self._vocabulary:
-            self._vocabulary["lemmas"] = self._own_strings("lemmas")
-        return self._vocabulary["lemmas"] | (self.fallback.unique_lemmas if self.fallback else set())
+        return self.own_lemmas | (self.fallback.unique_lemmas if self.fallback else set())
 
     @property
     def num_forms(self) -> int:
@@ -193,11 +196,10 @@ class UDInflector:
         return query
 
     def _form_rows(self, form: str, query: Dict[str, str], lemma: Optional[str] = None):
-        """[(slice, row indices)] of the tightest rows for `form` (and `lemma`, unless the
-        lexicon has none for it) that agree with `query`."""
-        found = self._agreeing_rows(form, query, lemma) if lemma else []
-        if not found:
-            found = self._agreeing_rows(form, query, None)
+        """[(slice, row indices)] of the tightest rows for `form` and `lemma` that agree with `query`;
+        the lemma is ignored only if the token has none or this table holds no lemmas."""
+        use_lemma = bool(lemma) and bool(self.own_lemmas)
+        found = self._agreeing_rows(form, query, lemma if use_lemma else None)
         if not found:
             return []
         if not self.prefer_tight_match:

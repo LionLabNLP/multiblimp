@@ -22,14 +22,14 @@ import pandas as pd
 from .config import REPO_ROOT, RESOURCE_DIR
 
 sys.path.append(REPO_ROOT)
-from resources.um2ud_annotation.UM2UD_mapper import UM2UD_values
+from resources.um2ud_annotation.UM2UD_mapper import LGSPEC_UD_FEATURES, UM2UD_values
 
 UD_TABLE_DIR = os.path.join(RESOURCE_DIR, "ud_tables")
 META_COLUMNS = ("lemma", "form", "upos", "frequency")
 UNMAPPED_PREFIX = "UM:"   # value: a UniMorph code with no UD value, see multiblimp.um2ud
 SHADOW_PREFIX = "UM-code:"   # feature: the original UniMorph codes of a feature whose values UD merges
 MAX_VALUES = 63   # values per feature that fit one uint64 mask
-STORED_FEATURES = {feat for ud in UM2UD_values.values() for feat in ud} - {"upos"}
+STORED_FEATURES = ({feat for ud in UM2UD_values.values() for feat in ud} | LGSPEC_UD_FEATURES) - {"upos"}
 # Features whose being stated or not does not make one row a closer match for a token without
 # them (the UniMorph tables fill these in as UNDEFINED/BASE, which counts as stated)
 UNSCORED_UNLESS_QUERIED = {"Number", "Gender", "Person", "Degree"}

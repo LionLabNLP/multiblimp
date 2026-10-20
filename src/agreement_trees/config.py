@@ -11,12 +11,12 @@ import json
 import os
 
 from agreement_trees.taxonomy import FEATURE_SUFFIXES, GROUP_PREFIXES
-from multiblimp.config import DEBUG_MODE, DEBUG_SUFFIX, RESOURCE_DIR, SCAN_RESULTS_DIR
+from multiblimp.config import RESOURCE_DIR, SCAN_RESULTS_DIR
 
 AGREEMENT_CONFIG_PATH = os.path.join(RESOURCE_DIR, "agreement_config.json")
 LANGS_PATH = {
-    "vp": os.path.join(SCAN_RESULTS_DIR, f"agreement_langs_vp{DEBUG_SUFFIX}.json"),
-    "np": os.path.join(SCAN_RESULTS_DIR, f"agreement_langs_np{DEBUG_SUFFIX}.json"),
+    "vp": os.path.join(SCAN_RESULTS_DIR, "agreement_langs_vp.json"),
+    "np": os.path.join(SCAN_RESULTS_DIR, "agreement_langs_np.json"),
 }
 
 VP_FAMILIES = list(GROUP_PREFIXES)
@@ -49,8 +49,6 @@ def load_agreement_config(path: str | None = None) -> dict:
     if bad_modes:
         raise SystemExit(f"{path}: modes must be 'vp' and/or 'np', got {sorted(bad_modes)}")
     config["vp"]["families"] = expand_families(config["vp"]["families"])
-    if DEBUG_MODE and "sx" not in config["vp"]["families"]:
-        config["vp"]["families"].append("sx")   # debug builds also cover the "other" verb forms
     return config
 
 

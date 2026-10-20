@@ -6,7 +6,11 @@ import os
 import traceback
 from collections import Counter
 
-from agreement_trees.pipeline_utils import parquet_current, sentinel_current, write_parquet, write_sentinel
+import pyarrow as pa
+
+from agreement_trees.pipeline_utils import (
+    drop_empty_columns, parquet_current, sentinel_current, write_sentinel, write_table,
+)
 from multiblimp.config import NP_INSTANCES_DIR, RESOURCE_DIR
 from multiblimp.languages import gblang2udlang
 from multiblimp.script_log import log_cache_error
@@ -83,7 +87,7 @@ def cache_np_language(lang: str, report_dir: str | None, max_treebank_len: int |
         if csv_path:
             save_counts(counts, csv_path)
         if not streaming:
-            write_parquet(df, instances_path)
+            write_table(drop_empty_columns(pa.Table.from_pandas(df, preserve_index=False)), instances_path)
     else:
         print(f"  no NOUN/PROPN/PRON heads found for {lang}", flush=True)
         if os.path.exists(instances_path):

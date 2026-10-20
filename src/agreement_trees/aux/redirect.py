@@ -32,11 +32,6 @@ iobj_aux_target = PredictionTarget(
 )
 
 
-def redirect_nsubj_to_aux(treebank) -> None:
-    """LEGACY (unused): redirect_to_aux for nsubj only."""
-    redirect_to_aux(treebank, ("nsubj",))
-
-
 def redirect_to_aux(treebank, deprels=("nsubj",)) -> None:
     """Re-point every `deprels` dependent (nsubj by default; obj/iobj work the same) of a predicate that has an
     aux, aux:pass or cop child at that auxiliary, so the ordinary head-vs-child extraction compares the

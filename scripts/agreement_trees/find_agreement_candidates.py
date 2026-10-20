@@ -5,8 +5,7 @@ languages worth fitting for each target.
       "sp:Case", ... (family:feature)
   np  the np_instances parquets; targets "HEAD-DET_Number", ...
 
-Run after cache_treebank_features.py (under MULTIBLIMP_DEBUG_MODE=1 it scans
-the debug caches and writes debug results). A (target, language) clears the bar when
+Run after cache_treebank_features.py. A (target, language) clears the bar when
 agreement_trees.pipeline_utils.passes_agreement_bar says so; thresholds
 and the modes to scan are in the "scan" block and top-level "modes" of
 resources/agreement_config.json.

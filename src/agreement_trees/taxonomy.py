@@ -13,11 +13,10 @@ pages can't drift apart on what a condition id means.
 
 import re
 
-from multiblimp.config import DEBUG_MODE
-
 GROUP_PREFIXES = {
     "sv": "Subject–Verb",
     "sp": "Subject–Participle",
+    "sx": "Subject–Other verb forms",
     "sa": "Subject–Auxiliary",
     "ov": "Object–Verb",
     "op": "Object–Participle",
@@ -26,13 +25,6 @@ GROUP_PREFIXES = {
     "iop": "Indirect Object–Participle",
     "ioa": "Indirect Object–Auxiliary",
 }
-if DEBUG_MODE:
-    # data-debugging builds also cover every verb form that is neither finite nor a participle
-    GROUP_PREFIXES = {
-        **{k: v for k, v in GROUP_PREFIXES.items() if k in ("sv", "sp")},
-        "sx": "Subject–Other verb forms",
-        **{k: v for k, v in GROUP_PREFIXES.items() if k not in ("sv", "sp")},
-    }
 FEATURE_SUFFIXES = {
     "Na": "Number",
     "Ga": "Gender",

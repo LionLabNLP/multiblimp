@@ -20,7 +20,6 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from multiblimp.config import DEBUG_MODE
 
 
 def total_system_memory_bytes():
@@ -230,20 +229,9 @@ def run_in_pool(fn, tasks, n_jobs, mem_bytes=None, max_tasks_per_child=1, on_don
 
 
 def match_casing(original: str, reinflected: str) -> str:
-    """Match a reinflected/swapped token's casing to the swap candidate it
-    came from. multiblimp.unimorph.UnimorphInflector.lemma2form (what every
-    inflector.inflect() call ultimately bottoms out in) reads word forms
-    verbatim off a UniMorph/UD-derived paradigm table -- usually all
-    lowercase, regardless of how the original token was actually cased in
-    its sentence (sentence-initial capital, an all-caps acronym, ...). Left
-    alone, that silently lowercases the reinflected replacement even though
-    nothing about the swap itself should change its casing convention.
-
-    All-caps is checked first: a single-letter original (e.g. "A") makes
-    both isupper() and istitle() true, where .upper() and .capitalize()
-    happen to agree anyway, but checking isupper() first keeps a real
-    all-caps token (e.g. "NASA") from being title-cased instead.
-    """
+    """Match a reinflected token's casing to the original: the paradigm tables are lower case, whatever the
+    sentence form looked like. All-caps is checked first so a single capital ("A") or an acronym ("NASA")
+    is not title-cased."""
     if not isinstance(original, str) or not isinstance(reinflected, str):
         return reinflected
     if original.isupper():
@@ -276,8 +264,8 @@ def write_label_distribution(decision_trees_dir: str, lang: str, label_distribut
     reaches agreement_trees.report.viz_deprel.generate_html_deprel_index via the
     pairs-derived "diag" blob's meta.json (agreement_trees.pairs.diagnostics.
     _read_label_distribution) -- this file is the fallback for when that
-    doesn't exist (the data-debugging --debug mode, which never runs
-    create_pairs), read back by read_label_distribution below.
+    doesn't exist (no pairs were generated), read back by
+    read_label_distribution below.
     """
     os.makedirs(decision_trees_dir, exist_ok=True)
     fn = os.path.join(decision_trees_dir, f"{lang}_label_distribution.json")
@@ -333,8 +321,6 @@ def passes_agreement_bar(yes: int, no: int, total: int, wilson_floor: float = 0.
     is tagged on both sides constantly but almost always with different
     values ("no"), so it clears the both-based bar without being agreement."""
     both = yes + no
-    if DEBUG_MODE:
-        return both > 0
     return (both >= min_both and wilson_lower_bound(both, total) >= wilson_floor
             and yes >= min_yes and wilson_lower_bound(yes, both) >= yes_rate_floor)
 
@@ -349,6 +335,16 @@ _KEY = b"extraction_version"
 def write_table(table: pa.Table, path: str) -> None:
     metadata = {**(table.schema.metadata or {}), _KEY: str(CACHE_VERSION).encode()}
     pq.write_table(table.replace_schema_metadata(metadata), path)
+
+
+def drop_empty_columns(table: pa.Table) -> pa.Table:
+    """The table without its all-null columns. The NP cache is rows x (role x child relation x feature) columns
+    and most combinations never occur in a language: Czech is ~14k columns of which ~9k are entirely empty,
+    which pandas expands to dense float64 NaN (~17 GB). Every reader tolerates a missing column, since an
+    empty one can be neither a split nor a label."""
+    if not table.num_rows:
+        return table
+    return table.select([n for n in table.column_names if table[n].null_count < table.num_rows])
 
 
 def write_parquet(df: pd.DataFrame, path: str) -> None:

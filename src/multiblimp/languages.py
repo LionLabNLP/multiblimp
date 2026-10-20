@@ -153,8 +153,18 @@ def unimorph_code(langcode: str) -> str:
 
 remove_diacritics_langs = {
     "Latin", # is principled bc it's annotated for pronunciation
-    "Slovenian", #TODO?
 }
+
+# UniMorph marks stress (acute, grave, circumflex) where UD does not; the letters č š ž stay
+strip_um_stress_langs = {"Slovenian"}
+
+STRESS_MARKS = {"\u0300", "\u0301", "\u0302", "\u030f", "\u0311"}
+
+
+def strip_stress(text: str) -> str:
+    """text without stress marks (acute, grave, circumflex), other letters and diacritics kept."""
+    decomposed = unicodedata.normalize("NFD", text)
+    return unicodedata.normalize("NFC", "".join(ch for ch in decomposed if ch not in STRESS_MARKS))
 
 remove_multiples_langs = {
     "Modern Greek",
@@ -163,9 +173,19 @@ remove_multiples_langs = {
     "Ancient_Greek",
 }
 
-convert_arabic_to_latin_langs = {
-    "Uyghur",
-}
+# UniMorph files whose script differs from the treebank's: the table is converted once, in um2ud.read_unimorph,
+# so the whole pipeline (forms, lemmas, sentences, pairs) stays in the treebank's script.
+# Uyghur: UniMorph is Latin (ULS), the treebank Arabic (UAS).
+unimorph_script_converters = {"uig": ("ULS", "UAS")}
+
+
+def convert_unimorph_script(langcode: str):
+    """text -> text function turning a UniMorph word into the treebank's script, or None if the scripts agree."""
+    pair = unimorph_script_converters.get(langcode)
+    if pair is None:
+        return None
+    from umsc import UgMultiScriptConverter
+    return UgMultiScriptConverter(*pair)
 
 skip_langs = {
     "Frisian_Dutch",

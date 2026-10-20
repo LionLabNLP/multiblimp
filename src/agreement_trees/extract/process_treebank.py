@@ -14,7 +14,7 @@ from typing import *
 
 from agreement_trees.config import lexical_features
 from agreement_trees.pipeline_utils import write_parquet
-from multiblimp.config import DEBUG_MODE, REPO_ROOT, SEED
+from multiblimp.config import REPO_ROOT, SEED
 from multiblimp.treebank import sentence_line, token_line
 from multiblimp.ud_table import clean_lemma
 from multiblimp.ud_table import UDTable
@@ -33,6 +33,104 @@ from agreement_trees.utils import shorten_cls
 INCLUDE_XPOS = os.environ.get("SVA_DT_XPOS", "1") != "0"
 
 META_FEATURES = ["sen", "no_space_after", "treebank", "sent_id", "tree_idx", "conllu_file", "conllu_sent_line", "treebank_link", "sen_str", "filled_feats"]
+
+
+def is_attractor_col(col: str) -> bool:
+    """A "{role}_attractors_{Feat}_{bucket}" count column; metadata, never a fit predictor."""
+    return "_attractors_" in col
+
+
+def _fill_span_token(tok, feats, um_data, ud_data) -> None:
+    """Lexicon fill (as for the role tokens) for an in-between token, only if the lexicon can supply one of
+    `feats` for its UPOS and the token lacks it; tried once per token."""
+    if tok.get("attr_filled"):
+        return
+    tok["attr_filled"] = True
+    if type(tok.get("feats")) != dict:
+        tok["feats"] = dict()
+    for data in (um_data, ud_data):
+        table = data.get(tok["upos"]) if isinstance(data, UDTable) else None
+        if table is not None and any(f in table.ud_features and not tok["feats"].get(f) for f in feats):
+            fill_node_feats(tok, um_data, ud_data)
+            return
+
+
+def is_attractor_slots_col(col: str) -> bool:
+    """A "{role}_attractor_slots" list column (see attractor_cols); metadata, never a fit predictor."""
+    return col.endswith("_attractor_slots")
+
+
+ATTRACTOR_BUCKETS = ("congruent", "weakly_congruent", "incongruent")
+
+
+def attractor_bucket(ref, val) -> str:
+    """Bucket of one attractor slot value against the controller's value. A comma value is a set of readings:
+    disjoint sets are incongruent, equal single readings congruent, any other overlap weakly congruent."""
+    ref_readings, readings = set(str(ref).split(",")), set(str(val).split(","))
+    if not ref_readings & readings:
+        return "incongruent"
+    return "congruent" if len(ref_readings) == len(readings) == 1 else "weakly_congruent"
+
+
+def slot_folds_into(feat: str, key: str, filled: bool) -> bool:
+    """Whether a token's slot `key` counts as a slot of `feat`: the key itself, and for a plain feature its
+    raw layered variants (Number[iobj] for Number). [psor] is the possessor's, and a lexicon-filled layered key
+    only mirrors the plain value."""
+    if key == feat:
+        return True
+    return "[" not in feat and key.startswith(feat + "[") and not filled and not key.endswith("[psor]")
+
+
+def attractor_cols(tree, id_a: int, id_b: int, ref_vals: dict, prefix: str, features,
+                   um_data=None, ud_data=None, fetch_all: bool = False) -> dict:
+    """Attractor columns for the tokens strictly between ids `id_a` and `id_b` (either order).
+
+    "{prefix}_attractor_slots": every token of the span as "id:UPOS:Key=Value" per slot of `features` (a
+    trailing "*" marks a lexicon-filled value), or a bare "id:UPOS" for a token without any; None for an empty
+    span. Independent of the controller, so any bucketing can be recomputed from it.
+    "{prefix}_attractors_{feat}_{bucket}": counts of the slots of `feat` per attractor_bucket against
+    `ref_vals[feat]`, the controller's value; none for a feature without one.
+    With fetch_all, in-between tokens are lexicon-filled like the role tokens."""
+    lo, hi = sorted((id_a, id_b))
+    span = tree[lo:hi - 1]   # ids lo+1..hi-1
+    bases = {f.split("[", 1)[0] for f in features}
+    if fetch_all and bases:
+        for tok in span:
+            _fill_span_token(tok, bases, um_data, ud_data)
+    entries, slots = [], []
+    for tok in span:
+        filled = tok.get("enriched_feats", ())
+        found = False
+        for key, val in (tok.get("feats") or {}).items():
+            if key.split("[", 1)[0] in bases:
+                found = True
+                slots.append((key, val, key in filled))
+                entries.append(f"{tok['id']}:{tok['upos']}:{key}={val}{'*' if key in filled else ''}")
+        if not found:
+            entries.append(f"{tok['id']}:{tok['upos']}")
+    cols = {f"{prefix}_attractor_slots": entries or None}
+    for feat, ref in ref_vals.items():
+        if ref is None:
+            continue
+        counts = Counter(attractor_bucket(ref, val) for key, val, filled in slots
+                         if slot_folds_into(feat, key, filled))
+        for bucket in ATTRACTOR_BUCKETS:
+            cols[f"{prefix}_attractors_{feat}_{bucket}"] = counts[bucket]
+    return cols
+
+
+ATTRACTOR_COUNT_DTYPE = "Int16"
+
+
+def cast_attractor_cols(df: pd.DataFrame) -> pd.DataFrame:
+    """Attractor counts as nullable Int16 (NaN -> NA), set in place on `df` (an astype over the frame would copy
+    every column). A count cannot exceed a sentence's token count; the assert makes an impossible overflow
+    loud instead of wrapping."""
+    for col in [c for c in df.columns if is_attractor_col(c)]:
+        top = df[col].max()
+        assert pd.isna(top) or top <= np.iinfo(np.int16).max, f"attractor count {top} overflows Int16"
+        df[col] = df[col].astype(ATTRACTOR_COUNT_DTYPE)
+    return df
 
 
 @dataclass
@@ -61,9 +159,8 @@ def load_treebank(
         lang,
         remove_diacritics=(lang in remove_diacritics_langs),
         resource_dir=resource_dir,
-        # debug mode keeps sentences with a Typo token or only "_" forms, from the typo-keeping pickles
-        remove_typo=not DEBUG_MODE,
-        pickle_path="ud/ud_typo_pickles" if DEBUG_MODE else "ud/ud_pickles",
+        remove_typo=True,
+        pickle_path="ud/ud_pickles",
         load_from_pickle=True,
         only_excluded=only_excluded,
         use_selected_treebanks=use_selected_treebanks,
@@ -193,8 +290,7 @@ def candidate_fills(node, morph_feats, um_split):
         unified = {k: v for k, v in unified.items() if k != "VerbForm" and len(v) == 1}
     unified = {k: ",".join(v) for k, v in unified.items()}
 
-    if any(inflect_feats.get(k) and not _readings_overlap(inflect_feats[k], v)
-           and inflect_feats[k] != "UNDEFINED" for k, v in unified.items()):   # LEGACY: UNDEFINED is never produced
+    if any(inflect_feats.get(k) and not _readings_overlap(inflect_feats[k], v) for k, v in unified.items()):
         return False, contested
     add_feats = {k: v for k, v in unified.items() if k not in query_feats}
     return (add_feats or False), contested
@@ -221,6 +317,20 @@ def _readings_overlap(a, b) -> bool:
     return a == b or bool(set(str(a).split(",")) & set(str(b).split(",")))
 
 
+def fill_node_feats(node, um_data, ud_data) -> None:
+    """Missing annotation is filled from the UniMorph-derived table first, then from the UD-derived one
+    (which only gets the features the first pass left open). Mutates node["feats"]."""
+    if isinstance(um_data, UDTable):
+        um_slice = um_data.get(node["upos"])
+        if um_slice is not None and not all(node["feats"].get(k, False) for k in um_slice.ud_features):
+            node["feats"] = expand_anno(node, node["feats"], um_slice)
+
+    if isinstance(ud_data, UDTable):
+        ud_split = ud_data.get(node["upos"])
+        if ud_split is not None and not all(node["feats"].get(k, False) for k in ud_split.ud_features):
+            node["feats"] = expand_anno(node, node["feats"], ud_split)
+
+
 def extract_node_features(
     node,
     tree,
@@ -232,7 +342,6 @@ def extract_node_features(
     target: PredictionTarget,
     excluded_deprels: set | None = None,
     lexicalize: bool = False,
-    encode_positional_features: bool = False,
     um_data: UDTable | None = None,
     ud_data: UDTable | None = None,
     fetch_all=False,
@@ -263,17 +372,8 @@ def extract_node_features(
         features[f"{prefix}_form_orig"] = node["form"]
         features[f"{prefix}_lemma"] = node["lemma"]
 
-    # Missing annotation is filled from the UniMorph-derived table first, then from the UD-derived one
-    # (which only gets the features the first pass left open)
-    if isinstance(um_data, UDTable) and fetch_all:
-        um_slice = um_data.get(node["upos"])
-        if um_slice is not None and not all(node["feats"].get(k, False) for k in um_slice.ud_features):
-            node["feats"] = expand_anno(node, node["feats"], um_slice)
-
-    if isinstance(ud_data, UDTable) and fetch_all:
-        ud_split = ud_data.get(node["upos"])
-        if ud_split is not None and not all(node["feats"].get(k, False) for k in ud_split.ud_features):
-            node["feats"] = expand_anno(node, node["feats"], ud_split)
+    if fetch_all:
+        fill_node_feats(node, um_data, ud_data)
 
     all_feats.update(set(node.get("feats", {}).keys()))
 
@@ -281,8 +381,8 @@ def extract_node_features(
         features[f"{prefix}_{feat}"] = (node["feats"] or {}).get(feat)
 
     # A verb still without VerbForm after annotation filling counts as Fin, unless the lexicon
-    # rows disagreed on it and the token has no Mood to settle it (debug mode assumes nothing)
-    if (not DEBUG_MODE and prefix == "head" and node["upos"] in ("VERB", "AUX")
+    # rows disagreed on it and the token has no Mood to settle it
+    if (prefix == "head" and node["upos"] in ("VERB", "AUX")
             and "VerbForm" in (target.head_feats or {})
             and features.get("head_VerbForm") is None
             and not (node.get("verbform_contested") and features.get("head_Mood") is None)):
@@ -343,56 +443,28 @@ def extract_node_features(
             features[f"{prefix}_sibling-pos_{pos}"] = pos in sibling_pos
 
         # Directional sibling deprels
-        if encode_positional_features:   # LEGACY: only the dead validate_swap_directly passes True
-            features["child_head_distance"] = abs(node["head"] - node["id"])
-
-            sibling_ids = tree_maps.head2child_ids[node["head"]]
-            for idx in sibling_ids:
-                sibling_deprel = tree[idx - 1]["deprel"]
-                sibling_pos = tree[idx - 1]["upos"]
-
-                if idx != node["id"]:
-                    if idx < node["id"] < node["head"]:
-                        features[f"{prefix}_sibling-deprel-sCH_{sibling_deprel}"] = True
-                        features[f"{prefix}_sibling-pos-sCH_{sibling_pos}"] = True
-                    elif node["id"] < idx < node["head"]:
-                        features[f"{prefix}_sibling-deprel-CsH_{sibling_deprel}"] = True
-                        features[f"{prefix}_sibling-pos-CsH_{sibling_pos}"] = True
-                    elif node["id"] < node["head"] < idx:
-                        features[f"{prefix}_sibling-deprel-CHs_{sibling_deprel}"] = True
-                        features[f"{prefix}_sibling-pos-CHs_{sibling_pos}"] = True
-                    elif idx < node["head"] < node["id"]:
-                        features[f"{prefix}_sibling-deprel-sHC_{sibling_deprel}"] = True
-                        features[f"{prefix}_sibling-pos-sHC_{sibling_pos}"] = True
-                    elif node["head"] < idx < node["id"]:
-                        features[f"{prefix}_sibling-deprel-HsC_{sibling_deprel}"] = True
-                        features[f"{prefix}_sibling-pos-HsC_{sibling_pos}"] = True
-                    elif node["head"] < node["id"] < idx:
-                        features[f"{prefix}_sibling-deprel-HCs_{sibling_deprel}"] = True
-                        features[f"{prefix}_sibling-pos-HCs_{sibling_pos}"] = True
-        else:
-            for sibling_dir in ["L", "R"]:
-                if sibling_dir == "L":
-                    dir_sibling_deprels = list(
-                        tree_maps.head2left_deprels[node["head"]]
+        for sibling_dir in ["L", "R"]:
+            if sibling_dir == "L":
+                dir_sibling_deprels = list(
+                    tree_maps.head2left_deprels[node["head"]]
+                )
+                if node["id"] < node["head"]:
+                    dir_sibling_deprels = remove_first_occurrence(
+                        dir_sibling_deprels, node["deprel"]
                     )
-                    if node["id"] < node["head"]:
-                        dir_sibling_deprels = remove_first_occurrence(
-                            dir_sibling_deprels, node["deprel"]
-                        )
-                else:
-                    dir_sibling_deprels = list(
-                        tree_maps.head2right_deprels[node["head"]]
+            else:
+                dir_sibling_deprels = list(
+                    tree_maps.head2right_deprels[node["head"]]
+                )
+                if node["id"] > node["head"]:
+                    dir_sibling_deprels = remove_first_occurrence(
+                        dir_sibling_deprels, node["deprel"]
                     )
-                    if node["id"] > node["head"]:
-                        dir_sibling_deprels = remove_first_occurrence(
-                            dir_sibling_deprels, node["deprel"]
-                        )
 
-                for deprel in sibling_deprel_candidates:
-                    features[f"{prefix}_sibling-deprel-{sibling_dir}_{deprel}"] = (
-                        deprel in dir_sibling_deprels
-                    )
+            for deprel in sibling_deprel_candidates:
+                features[f"{prefix}_sibling-deprel-{sibling_dir}_{deprel}"] = (
+                    deprel in dir_sibling_deprels
+                )
 
         # Sibling lemma for specific deprels
         if lexicalize:
@@ -660,10 +732,8 @@ def extract_instances(
     um_data: UDTable | None = None,
     ud_data: UDTable | None = None,
     fetch_all: bool = False,
-    require_all_children: bool = True,
 ):
-    """One instance per head of `tree` that has the target's child deprels (all of them, or any with
-    require_all_children=False; legacy npa/pipeline is the only caller with False) and passes the head and
+    """One instance per head of `tree` that has all of the target's child deprels and passes the head and
     child filters: node features of the head and each child, the sentence-level features, and, if requested,
     the agreement labels (yes / no / +- one side unset / -- both unset). Returns a list of dicts.
     """
@@ -699,12 +769,7 @@ def extract_instances(
         if not children:
             continue
         child_deprels_present = {slot_of[id(c)][0] for c in children}
-        deprels_ok = (
-            all(deprel in child_deprels_present for deprel in target.child_deprels)
-            if require_all_children
-            else any(deprel in child_deprels_present for deprel in target.child_deprels)
-        )
-        if not deprels_ok:
+        if not all(deprel in child_deprels_present for deprel in target.child_deprels):
             continue
 
         head = tree[head_id - 1]
@@ -806,6 +871,7 @@ def extract_instances(
             else:
                 target_features = []
 
+            attractor_refs = {}
             for target_feature in target_features:
                 if deprel == "nsubj":
                     # plain head_{feat} first (merge_subj_layered_feats folds [subj] into it); layered only as a fallback
@@ -822,7 +888,7 @@ def extract_instances(
                 child_val = child_features.get(f"{deprel}_{target_feature}", None)
 
                 # a NOUN/PROPN without Person is assumed 3rd person when its counterpart states one
-                if target_feature == "Person" and not DEBUG_MODE:   # debug mode assumes no values
+                if target_feature == "Person":
                     if head_val is None and child_val is not None and head["upos"] in ("NOUN", "PROPN"):
                         head_val = "3"
                         head_features[f"head_{target_feature}"] = head_val
@@ -850,6 +916,10 @@ def extract_instances(
                     )  # should not occur
 
                 instance[f"head_{deprel}_{target_feature}_agreement"] = agreement_label
+                attractor_refs[target_feature] = child_val if child_val is not None else head_val
+
+            instance.update(attractor_cols(tree, child["id"], head["id"], attractor_refs, deprel,
+                                             all_feats - lexical_features(), um_data, ud_data, fetch_all))
 
         instance["filled_feats"] = filled_feats(role_nodes)
 
@@ -869,8 +939,10 @@ def extract_instances(
     return instances
 
 
-def _categorize(df: pd.DataFrame) -> pd.DataFrame:
-    """Convert object-dtype columns to categorical, skipping columns with unhashable values."""
+def _categorize(df: pd.DataFrame, fill_true_only: bool = True) -> pd.DataFrame:
+    """Convert object-dtype columns to categorical, skipping columns with unhashable values. A column whose
+    only value is True has its gaps filled with False; with `fill_true_only=False` (a partial frame) that is
+    left to the caller, since a part cannot tell whether the column holds False elsewhere."""
     obj_cols = df.select_dtypes(include="object").columns
     # numpy arrays and one concat instead of per-column Series work and
     # df[col] = ... assignments, which dominate on frames this wide
@@ -882,7 +954,7 @@ def _categorize(df: pd.DataFrame) -> pd.DataFrame:
             is_na = pd.isna(values)
             try:
                 non_null = pd.unique(values[~is_na])
-                if len(non_null) == 1 and non_null[0] is True:
+                if fill_true_only and len(non_null) == 1 and non_null[0] is True:
                     values = np.where(is_na, False, values).astype(object)
 
                 converted[col] = pd.Categorical(values)
@@ -899,12 +971,12 @@ def _categorize(df: pd.DataFrame) -> pd.DataFrame:
     # Feature records are built by iterating sets, so their column order
     # varies with every process (string hashing); a fixed order keeps
     # cached tables, and the trees fit on them, reproducible.
-    return df[sorted(df.columns)]
+    return cast_attractor_cols(df[sorted(df.columns)])
 
 
-def records_to_df(records: list[dict]) -> pd.DataFrame:
+def records_to_df(records: list[dict], fill_true_only: bool = True) -> pd.DataFrame:
     """Create a DataFrame from feature records with object columns as categorical."""
-    return _categorize(pd.DataFrame(records))
+    return _categorize(pd.DataFrame(records), fill_true_only)
 
 
 def extract_features(
@@ -917,7 +989,6 @@ def extract_features(
     um_data: UDTable | None = None,
     ud_data: UDTable | None = None,
     fetch_all: bool = False,
-    require_all_children: bool = True,
 ):
     """
     Extract features from treebank based on prediction target.
@@ -927,7 +998,6 @@ def extract_features(
     of partial DataFrames; the caller is responsible for concatenating and
     categorizing them (see create_word_order_df).
 
-    require_all_children: see extract_instances.
     """
     merge_subj_layered_feats(treebank)
     all_feats, all_lemma_freqs, all_deprel, all_pos = get_all_feats(treebank)
@@ -949,7 +1019,6 @@ def extract_features(
                 um_data=um_data,
                 ud_data=ud_data,
                 fetch_all=fetch_all,
-                require_all_children=require_all_children,
             )
         )
 
@@ -978,7 +1047,7 @@ def drop_singleton_cols(
     """Drop columns with a single distinct value (NaN counts as a value: a column alternating between one
     value and "not annotated" is informative). Shared by create_word_order_df and agreement_trees.aux.pipeline.
 
-    Always kept: deprel_order/sen/no_space_after/treebank/sent_id/tree_idx/conllu_*, columns ending in
+    Always kept: deprel_order/sen/no_space_after/treebank/sent_id/tree_idx/conllu_*, attractor columns, columns ending in
     "agreement", "_idx", "_form", "_form_orig", "_pos" (constant upos is still shown in the tree page) or
     "_deprel", every non-empty feature column (a constant like Person[io]=3 is still read by
     resolve_layered_head_key), target.head_feats columns, and extra_always_keep (subj_aux's aux count).
@@ -992,6 +1061,7 @@ def drop_singleton_cols(
     always_keep.update(col for col in df.columns if col.endswith("_form_orig"))
     always_keep.update(col for col in df.columns if col.endswith("_pos"))
     always_keep.update(col for col in df.columns if col.endswith("_deprel"))
+    always_keep.update(col for col in df.columns if is_attractor_col(col) or is_attractor_slots_col(col))
     if target is not None and target.head_feats:
         always_keep.update(f"head_{feat}" for feat in target.head_feats)
     always_keep.update(
@@ -1019,7 +1089,6 @@ def create_word_order_df(
     um_data: UDTable | None = None,
     ud_data: UDTable | None = None,
     fetch_all: bool = False,
-    require_all_children: bool = True,
     extra_always_keep=(),
 ) -> pd.DataFrame:
     """DataFrame of word-order/agreement features for a language and prediction target (one row per instance).
@@ -1027,7 +1096,7 @@ def create_word_order_df(
     treebank, or lang (+ resource_dir, max_treebank_len) to load one. save_to: directory for "<lang>.parquet".
     um_data / ud_data: the UniMorph- and UD-derived tables for annotation filling (fetch_all).
     predictor_var names the agreement column to build; agreement_feats overrides it with a list of features
-    ("all": every plain feature on either side). require_all_children: see extract_instances.
+    ("all": every plain feature on either side).
     extra_always_keep: columns drop_singleton_columns must keep (see drop_singleton_cols).
     """
     if save_to is not None:
@@ -1044,7 +1113,6 @@ def create_word_order_df(
         agreement_feats=agreement_feats,
         lexicalize=lexicalize,
         batch_size=batch_size,
-        require_all_children=require_all_children,
         um_data=um_data,
         ud_data=ud_data,
         fetch_all=fetch_all
@@ -1071,59 +1139,3 @@ def create_word_order_df(
     return df
 
 
-def split_node_dfs(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """
-    LEGACY (unused, word-order validation procedure): split a combined (head, child) DataFrame — as produced by create_word_order_df(target=None)
-    — into the head_df and child_df expected by fit_reattachment_classifiers.
-
-    head_df: head_* columns, deduplicated by (tree_idx, head_idx), with a child_deprels
-             column listing every child deprel observed for that head in df, and a
-             deprel_directions column mapping each unambiguously-directed deprel to "L" or "R".
-    child_df: child_* columns + deprel label (= child_deprel) + metadata.
-              child_deprel is kept as a feature column; the separate 'deprel' column
-              is used as the classification label in build_training_data.
-    """
-    meta = ["tree_idx", "sent_id"]
-
-    head_cols = meta + [c for c in df.columns if c.startswith("head_")]
-    child_cols = meta + [c for c in df.columns if c.startswith("child_")]
-
-    child_deprels_per_head = (
-        df.groupby(["tree_idx", "head_idx"])["child_deprel"]
-        .apply(list)
-        .reset_index()
-        .rename(columns={"child_deprel": "child_deprels"})
-    )
-
-    # Build deprel_directions: {deprel: "L"/"R"} per head.
-    # child_dir (0=left, 1=right) is set by extract_node_features.
-    # Deprels where children appear on both sides are excluded (ambiguous).
-    dir_agg = (
-        df.groupby(["tree_idx", "head_idx", "child_deprel"])["child_dir"]
-        .agg(["first", "nunique"])
-        .reset_index()
-    )
-    unambiguous = dir_agg[dir_agg["nunique"] == 1].copy()
-    unambiguous["_dir"] = unambiguous["first"].map({0: "L", 1: "R"})
-    deprel_directions_per_head = (
-        unambiguous.groupby(["tree_idx", "head_idx"])
-        .apply(lambda g: dict(zip(g["child_deprel"], g["_dir"])))
-        .reset_index(name="deprel_directions")
-    )
-
-    head_df = (
-        df[head_cols]
-        .drop_duplicates(subset=["tree_idx", "head_idx"])
-        .merge(child_deprels_per_head, on=["tree_idx", "head_idx"])
-        .merge(deprel_directions_per_head, on=["tree_idx", "head_idx"], how="left")
-        .reset_index(drop=True)
-    )
-    # Heads with no unambiguous-direction children get an empty dict
-    head_df["deprel_directions"] = head_df["deprel_directions"].apply(
-        lambda x: x if isinstance(x, dict) else {}
-    )
-
-    child_df = df[child_cols].copy()
-    child_df["deprel"] = df["child_deprel"].values
-
-    return head_df, child_df

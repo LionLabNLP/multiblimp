@@ -1,7 +1,7 @@
 """Write the annotation coverage statistics (resources/annotation_coverage.json and
 _overview.tsv, see multiblimp.annotation_coverage) from the existing UD treebank pickles
 and the parquet tables (um_tables, ud_tables), without rebuilding any table.
-scripts/ud_tables.py and scripts/um2ud.py write the table halves when they run.
+scripts/data_caching/ud_tables.py and scripts/data_caching/um2ud.py write the table halves when they run.
 
 One worker, one fresh process per language, RAM-capped.
 

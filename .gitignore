@@ -24,5 +24,6 @@ resources/agreement_langs_*.json
 docs/um_values_without_ud.tsv
 output*/
 treebank_features*/
-report*/
+/report*/
 recache_run.log
+docs/

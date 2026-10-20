@@ -135,4 +135,7 @@ perl -pe 's/\bINDF([123])\b/$1;PRS/g' swc/swc > swc/swc2; mv swc/swc2 swc/swc
 # Old French: "not{NOM}" and "non{NOM}" are the same tag
 perl -pi -e 's/\bnot\{NOM\}/non{NOM}/g' fro/fro
 
+# Uyghur: lemmas are infinitives (achmaq), UD lemmas bare stems (ach); strip the ending so they can match
+awk -F'\t' 'BEGIN{OFS="\t"} {sub(/(maq|mek)$/,"",$1); print}' uig/uig > uig/uig2; mv uig/uig2 uig/uig
+
 touch "$MARKER"

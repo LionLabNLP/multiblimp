@@ -10,7 +10,6 @@ subject's (merge_subj_layered_feats folds [subj] into it); covers relation brack
 and case brackets ([abs]/[acc]/[dat]).
 """
 
-# --- live ---
 swap_number_subj_any = (["Number[subj]", "Number", "Number[erg]", "Number[abs]", "Number[nom]"], None)
 swap_any_person = (["Person[subj]", "Person", "Person[erg]", "Person[abs]", "Person[nom]"], None)
 swap_gender_any = (["Gender[subj]", "Gender", "Gender[erg]", "Gender[abs]", "Gender[nom]"], None)
@@ -23,13 +22,3 @@ swap_number_iobj_any = (["Number[iobj]", "Number[io]", "Number[dat]"], None)
 swap_person_iobj_any = (["Person[iobj]", "Person[io]", "Person[dat]"], None)
 swap_gender_iobj_any = (["Gender[iobj]", "Gender[io]", "Gender[dat]"], None)
 
-# --- LEGACY: keyed on UniMorph codes (SG/PL, NOM/ACC, ...) for the old inflector; only the old
-# scripts/create_minimal_pairs and scripts/measure_agreement import them. UDInflector would need UD values
-# (Sing/Plur) as keys. Delete with those scripts. ---
-swap_number_subj = (["Number[subj]", "Number"], {"SG": "PL", "PL": "SG"})
-swap_number = ("Number", {"SG": "PL", "PL": "SG"})
-swap_person = ("Person", {"1": "3", "3": "1"})
-swap_case_any = ("Case", None)
-swap_case = ("Case", {"NOM": "ACC", "ACC": "NOM"})
-swap_gender_f2m = ("Gender", {"MASC": "FEM", "FEM": "MASC"})
-swap_gender_fm2n = ("Gender", {"MASC": "NEUT", "FEM": "NEUT", "COM": "NEUT", "NEUT": "COM"})
