@@ -14,6 +14,7 @@ import sys
 from functools import lru_cache
 from typing import Dict, Optional
 
+import numpy as np
 import pandas as pd
 from pandas.api.types import union_categoricals
 from unidecode import unidecode
@@ -291,6 +292,7 @@ def _ud_table_values(langcode: str, col: str) -> set:
 
 CHUNK_MIN_BYTES = 250_000_000   # a UniMorph file above this (Slovak, 1.5 GB; the rest < 100 MB) is converted in chunks
 CHUNK_ROWS = 250_000
+DEDUPE_BUCKETS = 64
 
 PQP_MIN_MATCHED = 30       # UD Pqp rows that must be found in the UniMorph table
 PQP_MIN_SHARE = 0.8        # of them, the share with a PRF reading
@@ -409,6 +411,25 @@ def _concat_pieces(pieces: list) -> pd.DataFrame:
     return pd.DataFrame(columns)
 
 
+def _drop_duplicate_rows(out: pd.DataFrame) -> pd.DataFrame:
+    """`out` without duplicate rows, index reset. A chunked table (categorical columns) is checked in buckets
+    of its category codes, which duplicates share, so the group index of `duplicated` stays small."""
+    categorical = [col for col in out.columns if isinstance(out[col].dtype, pd.CategoricalDtype)]
+    if not categorical:
+        return out.drop_duplicates().reset_index(drop=True)
+    bucket = np.zeros(len(out), dtype=np.uint64)
+    for col in categorical:
+        bucket = bucket * np.uint64(1000003) + out[col].cat.codes.to_numpy().astype(np.uint64)
+    bucket %= np.uint64(DEDUPE_BUCKETS)
+    keep = np.ones(len(out), dtype=bool)
+    for value in range(DEDUPE_BUCKETS):
+        rows = np.flatnonzero(bucket == value)
+        keep[rows] = ~out.iloc[rows].duplicated().to_numpy()
+    out = out.take(np.flatnonzero(keep))
+    out.index = pd.RangeIndex(len(out))
+    return out
+
+
 def convert_language(lang: str, resource_dir: str = RESOURCE_DIR, chunk_rows: Optional[int] = None) -> Optional[pd.DataFrame]:
     """The language's UniMorph table in UD notation (columns lemma, form, upos, frequency and the
     stored features); None if there is no UniMorph file. A file above CHUNK_MIN_BYTES (or any file, with
@@ -430,7 +451,7 @@ def convert_language(lang: str, resource_dir: str = RESOURCE_DIR, chunk_rows: Op
         pieces.append(_compact(piece) if chunk_rows else piece)
     out = _concat_pieces(pieces)
     del pieces
-    out = out.loc[:, out.notna().any(axis=0)]
+    out = out.drop(columns=[col for col in out.columns if not out[col].notna().any()])
     if "VerbForm" not in out.columns:
         out["VerbForm"] = pd.Series(None, index=out.index, dtype=object)
     # where UniMorph's past + PRF is the pluperfect, state it as UD does (Tense=Pqp) so a Tense=Past token
@@ -443,7 +464,7 @@ def convert_language(lang: str, resource_dir: str = RESOURCE_DIR, chunk_rows: Op
         out.loc[mask, "Tense"] = "Pqp"
         out.loc[mask, ["Aspect", SHADOW_PREFIX + "Aspect"]] = None
         pluperfect = True
-    out = out.drop_duplicates().reset_index(drop=True)
+    out = _drop_duplicate_rows(out)
     out["frequency"] = 1
     out.attrs["pluperfect_rows"] = int((out["Tense"] == "Pqp").sum()) if pluperfect else 0
     return out

@@ -56,12 +56,10 @@ def write_ud_table(rows: list, path: str) -> int:
 
 def write_ud_dataframe(df: pd.DataFrame, path: str) -> int:
     """Same file from a frame with the table's columns."""
-    df = df.copy()
-    for col in df.columns:
-        if col != "frequency":
-            df[col] = df[col].astype("category")
+    columns = {col: df[col] if col == "frequency" or isinstance(df[col].dtype, pd.CategoricalDtype)
+               else df[col].astype("category") for col in df.columns}
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    df.to_parquet(path, index=False)
+    pd.DataFrame(columns).to_parquet(path, index=False)
     return len(df)
 
 
