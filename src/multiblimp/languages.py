@@ -173,7 +173,7 @@ remove_multiples_langs = {
     "Ancient_Greek",
 }
 
-# UniMorph files whose script differs from the treebank's: the table is converted once, in um2ud.read_unimorph,
+# UniMorph files whose script differs from the treebank's: the table is converted once, in um2ud._normalise_text,
 # so the whole pipeline (forms, lemmas, sentences, pairs) stays in the treebank's script.
 # Uyghur: UniMorph is Latin (ULS), the treebank Arabic (UAS).
 unimorph_script_converters = {"uig": ("ULS", "UAS")}
