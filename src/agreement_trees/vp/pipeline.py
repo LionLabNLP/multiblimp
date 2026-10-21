@@ -122,6 +122,9 @@ def refresh_deprel_index(target_id, deprel, predictor_var, head_label="Verb",
                     )
 
 
+CONTEXT_UPOS = ["PRON", "NOUN", "PROPN", "DET", "NUM", "ADJ"]
+
+
 class Pipeline:
     # Wording of the agreeing head in reports/pages; subclasses override.
     head_label = "Verb"
@@ -460,6 +463,16 @@ class Pipeline:
             "-- the agreement column itself never got computed for any of them."
         )
 
+    def _context_inflector(self, lang):
+        """Inflector over the nominals an argument can be: the values of the swapped feature its own form can
+        carry (create_pairs' ambiguous_subjects bucket)."""
+        inflector, _, _ = load_ud_inflector(
+            lang=lang, langcode=lang2langcode(lang),
+            unimorph_args={"filter_entries": {"upos": CONTEXT_UPOS}, "combine_um_ud": True,
+                           "remove_multiword_forms": True},
+            inflection_map=(self.target.swap_feat, None), resource_dir=self.resource_dir)
+        return inflector
+
     def _process_language_impl(self, lang):
         print(lang)
 
@@ -550,7 +563,8 @@ class Pipeline:
                 full_df=full_df,
                 unk_counts=unk_counts,
                 label_distribution=label_distribution,
-                head_label=self.head_label)
+                head_label=self.head_label,
+                context_inflector=self._context_inflector(lang))
             try:
                 diagnostic_dfs = create_pairs(dt_df, leaf_threshold=leaf_threshold, **pairs_kwargs)
                 if self.second_chance is not None:

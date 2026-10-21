@@ -195,11 +195,12 @@ class UDInflector:
                     query[feat] = value
         return query
 
-    def _form_rows(self, form: str, query: Dict[str, str], lemma: Optional[str] = None):
+    def _form_rows(self, form: str, query: Dict[str, str], lemma: Optional[str] = None, upos: Optional[str] = None):
         """[(slice, row indices)] of the tightest rows for `form` and `lemma` that agree with `query`;
-        the lemma is ignored only if the token has none or this table holds no lemmas."""
+        the lemma is ignored only if the token has none or this table holds no lemmas. `upos` limits the
+        search to that part of speech."""
         use_lemma = bool(lemma) and bool(self.own_lemmas)
-        found = self._agreeing_rows(form, query, lemma if use_lemma else None)
+        found = self._agreeing_rows(form, query, lemma if use_lemma else None, upos)
         if not found:
             return []
         if not self.prefer_tight_match:
@@ -207,9 +208,11 @@ class UDInflector:
         best = min(int(d.min()) for _, _, d in found)
         return [(piece, rows[d == best]) for piece, rows, d in found if (d == best).any()]
 
-    def _agreeing_rows(self, form: str, query: Dict[str, str], lemma: Optional[str]):
+    def _agreeing_rows(self, form: str, query: Dict[str, str], lemma: Optional[str], upos: Optional[str] = None):
         found = []
         for piece in self.slices:
+            if upos is not None and self.upos_of[id(piece)] != upos:
+                continue
             rows = piece.form_rows(form)
             if lemma is not None:
                 rows = rows[piece.lemmas[rows] == lemma]
@@ -320,9 +323,10 @@ class UDInflector:
 
     def get_form_features(self, form: str, features: Dict[str, str], ufeat: Optional[str] = None,
                           only_try_ud_if_no_um: bool = False, prefer_tight_match: bool = False,
-                          fetch_all: bool = False, slot_aliases: Sequence[str] = ()) -> Set[str]:
-        """The values of `ufeat` (default: the swap feature) among the rows of `form` that agree with
-        `features`, plus the fallback table's."""
+                          fetch_all: bool = False, slot_aliases: Sequence[str] = (),
+                          upos: Optional[str] = None) -> Set[str]:
+        """The values of `ufeat` (default: the swap feature) among the rows of `form` (of part of speech
+        `upos`, if given) that agree with `features`, plus the fallback table's."""
         form = form.lower()
         ufeat = self.resolve_column(ufeat, slot_aliases) if ufeat is not None else self.ufeat
         values: Set[str] = set()
@@ -331,7 +335,7 @@ class UDInflector:
         if not fetch_all and ufeat is not None:
             tight, self.prefer_tight_match = self.prefer_tight_match, prefer_tight_match
             try:
-                for piece, rows in self._form_rows(form, query):
+                for piece, rows in self._form_rows(form, query, upos=upos):
                     j = piece.feature_index.get(ufeat)
                     if j is not None:
                         for i in rows:
@@ -340,7 +344,7 @@ class UDInflector:
                 self.prefer_tight_match = tight
         if self.fallback is not None and not (only_try_ud_if_no_um and values):
             values |= self.fallback.get_form_features(form, features, ufeat, only_try_ud_if_no_um,
-                                                      prefer_tight_match, fetch_all, slot_aliases)
+                                                      prefer_tight_match, fetch_all, slot_aliases, upos)
         return values
 
 

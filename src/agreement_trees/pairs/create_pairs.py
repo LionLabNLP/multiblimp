@@ -740,7 +740,7 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
         feature_col = re.compile(r"[A-Z][A-Za-z]*(\[[^\]]+\])?")
         loop_cols = [
             col for col in columns
-            if col in (f"{child_deprel}_form", f"{child_deprel}_Case")
+            if col in (f"{child_deprel}_form", f"{child_deprel}_Case", f"{child_deprel}_pos")
             or any(
                 col in (f"{kind}_form", f"{kind}_form_orig", f"{kind}_lemma")
                 or (col.startswith(f"{kind}_") and feature_col.fullmatch(col[len(kind) + 1:]))
@@ -813,11 +813,19 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
                     if len(swap_forms) > 0:
                         results = []
                         context_features = set()
-                        if context_inflector is not None:
-                            context_features = context_inflector.get_form_features(
-                                base_item["child"], {"Case": "Nom"}, row_ufeat,
-                                only_try_ud_if_no_um=True, slot_aliases=slot_aliases,
-                            )
+                        child_form = base_item["child"]
+                        if context_inflector is not None and isinstance(child_form, str):
+                            child_case = base_item.get(f"{child_deprel}_Case")
+                            child_pos = base_item.get(f"{child_deprel}_pos")
+                            child_feats = {"Case": child_case} if isinstance(child_case, str) and child_case != MISSING else {}
+                            context_kwargs = dict(ufeat=row_ufeat.partition("[")[0], only_try_ud_if_no_um=True)
+                            # the child's own part of speech first: lowercased forms merge pronouns with
+                            # homographs (es / Es), and the treebank's tag may be one the lexicon lacks
+                            context_features = (
+                                context_inflector.get_form_features(child_form, child_feats, upos=child_pos, **context_kwargs)
+                                if isinstance(child_pos, str) else set())
+                            if not context_features:
+                                context_features = context_inflector.get_form_features(child_form, child_feats, **context_kwargs)
                         for swap_form in swap_forms:
                             items_seen += 1
                             item_type, item = process_item(
