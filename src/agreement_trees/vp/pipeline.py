@@ -21,7 +21,7 @@ from agreement_trees.extract.per_treebank import (
 from agreement_trees.report.viz_deprel import generate_html_deprel_index
 from multiblimp.excluded_treebanks import treebank_row_exclusion_reason
 from multiblimp.languages import lang2langcode, gblang2udlang
-from multiblimp.ud_inflector import load_ud_inflector
+from multiblimp.ud_inflector import load_ud_inflector, nominal_inflector
 from multiblimp.ud_table import ud_lookup_table, um_lookup_table
 from agreement_trees.pipeline_utils import parquet_current, sentinel_current, write_sentinel
 from agreement_trees.config import lexical_features
@@ -122,7 +122,7 @@ def refresh_deprel_index(target_id, deprel, predictor_var, head_label="Verb",
                     )
 
 
-CONTEXT_UPOS = ["PRON", "NOUN", "PROPN", "DET", "NUM", "ADJ"]
+CONTEXT_UPOS = ["NOUN", "PROPN", "PRON"]   # the child_pos of every VP target
 
 
 class Pipeline:
@@ -463,16 +463,6 @@ class Pipeline:
             "-- the agreement column itself never got computed for any of them."
         )
 
-    def _context_inflector(self, lang):
-        """Inflector over the nominals an argument can be: the values of the swapped feature its own form can
-        carry (create_pairs' ambiguous_subjects bucket)."""
-        inflector, _, _ = load_ud_inflector(
-            lang=lang, langcode=lang2langcode(lang),
-            unimorph_args={"filter_entries": {"upos": CONTEXT_UPOS}, "combine_um_ud": True,
-                           "remove_multiword_forms": True},
-            inflection_map=(self.target.swap_feat, None), resource_dir=self.resource_dir)
-        return inflector
-
     def _process_language_impl(self, lang):
         print(lang)
 
@@ -483,7 +473,8 @@ class Pipeline:
             langcode=lang2langcode(lang),
             unimorph_args=self.unimorph_args,
             inflection_map=self.inflection_map,
-            resource_dir=self.resource_dir,)
+            resource_dir=self.resource_dir,
+            also_upos=CONTEXT_UPOS)
 
         df = self._extract_df(lang, inflector)
 
@@ -564,7 +555,8 @@ class Pipeline:
                 unk_counts=unk_counts,
                 label_distribution=label_distribution,
                 head_label=self.head_label,
-                context_inflector=self._context_inflector(lang))
+                # which values of the swapped feature the argument's own form can carry (ambiguous_subjects)
+                context_inflector=nominal_inflector(inflector, CONTEXT_UPOS, (self.target.swap_feat, None)))
             try:
                 diagnostic_dfs = create_pairs(dt_df, leaf_threshold=leaf_threshold, **pairs_kwargs)
                 if self.second_chance is not None:

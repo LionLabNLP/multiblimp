@@ -190,6 +190,10 @@ def run_in_pool(fn, tasks, n_jobs, mem_bytes=None, max_tasks_per_child=1, on_don
     A worker that dies (OOM-kill, watchdog exit) breaks the whole pool, so the
     affected tasks are retried one worker at a time: the task that kills its
     worker alone is reported as failed and the rest carry on."""
+    # a failure message can carry any language's characters; a latin-1 terminal must not abort the sweep
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="backslashreplace")
     results = {}
     pending = dict(tasks)
     jobs = n_jobs

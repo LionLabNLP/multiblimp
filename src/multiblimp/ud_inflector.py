@@ -353,19 +353,35 @@ def _ud_upos(values: Sequence[str]) -> List[str]:
     return list(dict.fromkeys(um_tag_upos(v) or v for v in values))
 
 
-def load_ud_inflector(lang: str, langcode: str, unimorph_args: dict, inflection_map, resource_dir=None):
+def load_ud_inflector(lang: str, langcode: str, unimorph_args: dict, inflection_map, resource_dir=None,
+                      also_upos=None):
     """(inflector, number of lemmas, number of forms), the counterpart of unimorph.load_inflector.
     unimorph_args: filter_entries {"upos": [...]}, combine_um_ud, remove_multiword_forms.
+    also_upos: further UPOS whose rows are read with the tables, for nominal_inflector.
     The UniMorph-derived table is the inflector, with the UD-derived table as its fallback when
     combine_um_ud is set; a language without UniMorph rows runs on the UD-derived table alone,
     and one without either gets an empty inflector."""
     upos = unimorph_args.get("filter_entries", {}).get("upos")
-    kwargs = dict(upos=_ud_upos(upos) if upos else None,
-                  remove_multiword_forms=unimorph_args.get("remove_multiword_forms", False))
-    um_table = UDTable.from_file(um_table_path(langcode), expand_values=True)
-    ud_table = UDTable.load(langcode) if unimorph_args.get("combine_um_ud", False) else None
+    ud_upos = _ud_upos(upos) if upos else None
+    read_upos = list(dict.fromkeys(ud_upos + _ud_upos(also_upos))) if ud_upos and also_upos else ud_upos
+    kwargs = dict(upos=ud_upos, remove_multiword_forms=unimorph_args.get("remove_multiword_forms", False))
+    um_table = UDTable.from_file(um_table_path(langcode), expand_values=True, upos=read_upos)
+    ud_table = UDTable.load(langcode, upos=read_upos) if unimorph_args.get("combine_um_ud", False) else None
     # the UniMorph-derived table is the inflector itself (empty if the language has none)
     fallback = UDInflector(ud_table, inflection_map, expand_values=False, **kwargs) if ud_table is not None else None
     inflector = UDInflector(um_table, inflection_map, fallback=fallback, **kwargs)
     inflector.langcode, inflector.resource_dir = langcode, resource_dir or "."
+    inflector.um_table, inflector.ud_table = um_table, ud_table
     return inflector, inflector.num_lemmas, inflector.num_forms
+
+
+def nominal_inflector(inflector: UDInflector, upos: Sequence[str], inflection_map) -> UDInflector:
+    """An inflector over the tables `inflector` was loaded with, limited to `upos` (which load_ud_inflector
+    must have been given as also_upos): for form lookups on the nominals, without reading the tables again."""
+    ud_upos = _ud_upos(upos)
+    fallback = (UDInflector(inflector.ud_table, inflection_map, expand_values=False, upos=ud_upos,
+                            remove_multiword_forms=True) if inflector.ud_table is not None else None)
+    nominal = UDInflector(inflector.um_table, inflection_map, fallback=fallback, upos=ud_upos,
+                          remove_multiword_forms=True)
+    nominal.langcode, nominal.resource_dir = inflector.langcode, inflector.resource_dir
+    return nominal

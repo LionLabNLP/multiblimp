@@ -18,6 +18,8 @@ from typing import Dict, List, Optional
 
 import numpy as np
 import pandas as pd
+import pyarrow as pa
+import pyarrow.parquet as pq
 
 from .config import REPO_ROOT, RESOURCE_DIR
 
@@ -74,12 +76,22 @@ class UDTable:
         self.expand_values = expand_values
 
     @classmethod
-    def load(cls, langcode: str) -> Optional["UDTable"]:
-        return cls.from_file(table_path(langcode))
+    def load(cls, langcode: str, upos: Optional[List[str]] = None) -> Optional["UDTable"]:
+        return cls.from_file(table_path(langcode), upos=upos)
 
     @classmethod
-    def from_file(cls, path: str, expand_values: bool = False) -> Optional["UDTable"]:
-        return cls(pd.read_parquet(path), expand_values) if os.path.isfile(path) else None
+    def from_file(cls, path: str, expand_values: bool = False, upos: Optional[List[str]] = None) -> Optional["UDTable"]:
+        """The table at `path`. With `upos`, only those rows, read through pyarrow with the categorical columns
+        decoded for the kept rows alone: their dictionaries hold the whole language's forms."""
+        if not os.path.isfile(path):
+            return None
+        if not upos:
+            return cls(pd.read_parquet(path), expand_values)
+        table = pq.read_table(path, filters=[("upos", "in", list(upos))])
+        categorical = [name for name, column in zip(table.column_names, table.columns) if pa.types.is_dictionary(column.type)]
+        table = pa.table({name: column.cast(column.type.value_type) if name in categorical else column
+                          for name, column in zip(table.column_names, table.columns)})
+        return cls(table.to_pandas(categories=categorical), expand_values)
 
     def upos_names(self) -> List[str]:
         return sorted(self._df["upos"].astype(str).unique())
