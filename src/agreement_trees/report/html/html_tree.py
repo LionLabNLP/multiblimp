@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from agreement_trees.pipeline_utils import match_casing
+from agreement_trees.pairs.sentence_text import detokenize
 from agreement_trees.utils import build_grew_link
 from agreement_trees.extract.process_treebank import resolve_layered_head_key, slot_suffixes
 
@@ -218,6 +219,22 @@ def _v2_sentence_html(sen, highlight_idx):
     )
 
 
+def _v2_written_forms(row, sen, swap_at, swap_form):
+    """(original, swapped) sentence in their written form (de le -> du), escaped for the page, when pair creation
+    wrote one that differs from the words joined as they are; else (None, None). sen_str / wrong_sen_str of a pair
+    written before the written forms existed are the joined words, so those show nothing."""
+    orig, swapped = row.get("sen_str"), row.get("wrong_sen_str")
+    if not isinstance(orig, str) or not isinstance(swapped, str) or not isinstance(swap_form, str):
+        return None, None
+    no_space_after = row.get("no_space_after")
+    no_space_after = no_space_after if hasattr(no_space_after, "__len__") else None
+    plain_swapped = list(sen)
+    plain_swapped[swap_at] = swap_form
+    if orig == detokenize(sen, no_space_after) and swapped == detokenize(plain_swapped, no_space_after):
+        return None, None
+    return html_lib.escape(orig), html_lib.escape(swapped)
+
+
 def _v2_pair_treebank_link(row):
     """Prefers the untouched-casing "*_form_orig" columns over "*_form"."""
     orig_values = [v for c, v in row.items() if c.endswith("_form_orig") and pd.notna(v)]
@@ -258,6 +275,7 @@ def _v2_pair_from_row(row, raw_role_a, raw_role_b, decisive_feat):
     swap_form = row.get(f"swap_{swap_prefix}")
     swapped_sen = list(sen)
     swapped_sen[int(idx) - 1] = match_casing(sen[int(idx) - 1], swap_form)
+    written_orig, written_swap = _v2_written_forms(row, sen, int(idx) - 1, swap_form)
 
     href, name = _v2_pair_treebank_link(row)
     # the swapped value is often only under a bracketed after_ column (after_head_Number[abs]), not the plain name,
@@ -324,6 +342,8 @@ def _v2_pair_from_row(row, raw_role_a, raw_role_b, decisive_feat):
     return {
         "origSentence": _v2_sentence_html(sen, highlight_idx),
         "swapSentence": _v2_sentence_html(swapped_sen, highlight_idx),
+        "writtenOrig": written_orig,
+        "writtenSwap": written_swap,
         "nsubj": row.get(f"{raw_role_a}_form", ""),
         "verb": row.get(f"{raw_role_b}_form", ""),
         "nsubjFeats": _v2_pair_feat_list(row, raw_role_a, decisive_feat),

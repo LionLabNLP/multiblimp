@@ -34,7 +34,7 @@ from agreement_trees.pipeline_utils import (
     find_other_running_instances, read_unk_counts, run_in_pool,
     worker_mem_bytes, write_label_distribution,
 )
-from agreement_trees.pairs.create_pairs import create_pairs, MissingColumnError
+from agreement_trees.pairs.create_pairs import create_pairs, MissingColumnError, pairs_current, read_cached_pairs
 from agreement_trees.pairs.second_chance import second_chance_decision
 from agreement_trees.pairs.diagnostics import generate_diagnostics_table, write_diagnostics_csv, diagnostics_row_to_json
 
@@ -139,8 +139,9 @@ class Pipeline:
                  second_chance=None, per_treebank=True, include_excluded=False,
                  fetch_all=True, incl_unk=False,
                  build_index=True, head_label=None,
-                 max_depth=12, test_size=0.1, impurity=None, only_treebanks=()):
+                 max_depth=12, test_size=0.1, impurity=None, only_treebanks=(), redo_pairs=False):
         self.only_treebanks = list(only_treebanks)
+        self.redo_pairs = redo_pairs
         self.target = target
         self.predictor_var = predictor_var
         # all agreement features are extracted so one cache serves every target
@@ -245,9 +246,9 @@ class Pipeline:
                 )
 
     def _is_done(self, lang):
-        # done = pairs, tree HTML and per-treebank summaries exist for every deprel
-        return not self.never_skip and not self.never_skip_fit and all(
-            os.path.isdir(os.path.join(
+        # done = current pairs, tree HTML and per-treebank summaries exist for every deprel
+        return not self.never_skip and not self.never_skip_fit and not self.redo_pairs and all(
+            pairs_current(os.path.join(
                 OUTPUT_MINIMAL_PAIRS_DIR, self.target_id, f"{self.target_id}_{deprel}", lang))
             and os.path.exists(os.path.join(HTML_DECISION_TREES_DIR, self.target_id, f"{lang}.html"))
             and (not self.per_treebank or self._treebanks_done(
@@ -388,7 +389,7 @@ class Pipeline:
         elif os.path.exists(marker):
             os.remove(marker)
 
-    def _extract_df(self, lang, inflector):
+    def _extract_df(self, lang, get_inflector):
         """Cached feature df of EVERY one of the language's treebanks (see
         _build_df), or None if there is nothing to extract."""
         if not self.never_skip:
@@ -398,7 +399,7 @@ class Pipeline:
                     return df
             elif sentinel_current(self.empty_marker_path(lang)):
                 return None
-        df = self._build_df(lang, self.word_order_dir, inflector)
+        df = self._build_df(lang, self.word_order_dir, get_inflector()[0])
         self.record_extraction(lang, df)
         return df
 
@@ -468,15 +469,21 @@ class Pipeline:
 
         self._clear_no_data_markers(lang)
 
-        inflector, num_lemma, num_form = load_ud_inflector(
-            lang=lang,
-            langcode=lang2langcode(lang),
-            unimorph_args=self.unimorph_args,
-            inflection_map=self.inflection_map,
-            resource_dir=self.resource_dir,
-            also_upos=CONTEXT_UPOS)
+        loaded = []
 
-        df = self._extract_df(lang, inflector)
+        def get_inflector():
+            """(inflector, lemmas, forms), loaded on first use: only extraction and building pairs need it."""
+            if not loaded:
+                loaded.append(load_ud_inflector(
+                    lang=lang,
+                    langcode=lang2langcode(lang),
+                    unimorph_args=self.unimorph_args,
+                    inflection_map=self.inflection_map,
+                    resource_dir=self.resource_dir,
+                    also_upos=CONTEXT_UPOS))
+            return loaded[0]
+
+        df = self._extract_df(lang, get_inflector)
 
         if df is None or not len(df):
             print(f"Skipping {lang}, raw_df has no entries")
@@ -511,8 +518,9 @@ class Pipeline:
 
             pred_values = set(full_df[self.predictor_var].values)
 
-            if (self.never_skip or self.never_skip_fit
-                    or not os.path.exists(f"{decision_trees_dir}/{lang}.joblib")):
+            fit_rebuilt = (self.never_skip or self.never_skip_fit
+                           or not os.path.exists(f"{decision_trees_dir}/{lang}.joblib"))
+            if fit_rebuilt:
                 if len(pred_values)>1:
                     model, dt_df, _predictor_df, unk_counts = fit_dt(
                         full_df=full_df,
@@ -545,39 +553,48 @@ class Pipeline:
             # before tree2html so the page can join this run's correct_swaps rows by leaf_id
             correct_swaps_df = None
             leaf_threshold = self.leaf_threshold
-            pairs_kwargs = dict(
-                swap_feat=self.predictor_var, inflector=inflector,
-                target=self.target,
-                save_to=os.path.join(OUTPUT_MINIMAL_PAIRS_DIR, self.target_id, f"{self.target_id}_{deprel}", lang),
-                num_lemma=num_lemma,
-                num_form=num_form,
-                full_df=full_df,
-                unk_counts=unk_counts,
-                label_distribution=label_distribution,
-                head_label=self.head_label,
-                # which values of the swapped feature the argument's own form can carry (ambiguous_subjects)
-                context_inflector=nominal_inflector(inflector, CONTEXT_UPOS, (self.target.swap_feat, None)))
-            try:
-                diagnostic_dfs = create_pairs(dt_df, leaf_threshold=leaf_threshold, **pairs_kwargs)
-                if self.second_chance is not None:
-                    retry, lax, info = second_chance_decision(
-                        dt_df, self.predictor_var, label_distribution,
-                        strict_threshold=leaf_threshold,
-                        min_samples_leaf=self.min_samples_leaf, cfg=self.second_chance)
-                    print(f"{lang} {deprel}: second chance: {info['reason']}")
-                    if retry:
-                        # adopted even with zero correct_swaps: the lax pass's numbers are the ones to record
-                        second_dfs = create_pairs(
-                            dt_df, leaf_threshold=lax,
-                            extra_meta={"second_pass": True, "second_chance_info": info},
-                            second_chance_threshold=leaf_threshold,
-                            **pairs_kwargs)
-                        leaf_threshold, diagnostic_dfs = lax, second_dfs
-                        if not len(second_dfs["correct_swaps"]):
-                            print(f"{lang} {deprel}: retry attempted, yielded no pairs")
-                correct_swaps_df = diagnostic_dfs.get("correct_swaps")
-            except MissingColumnError as err:
-                print(f"Skipping {lang} for {deprel}, missing column {err}")
+            pairs_lang_dir = os.path.join(OUTPUT_MINIMAL_PAIRS_DIR, self.target_id, f"{self.target_id}_{deprel}", lang)
+            if (fit_rebuilt or self.never_skip or self.never_skip_fit or self.redo_pairs
+                    or not pairs_current(pairs_lang_dir)):
+                inflector, num_lemma, num_form = get_inflector()
+                pairs_kwargs = dict(
+                    swap_feat=self.predictor_var, inflector=inflector,
+                    target=self.target,
+                    save_to=pairs_lang_dir,
+                    num_lemma=num_lemma,
+                    num_form=num_form,
+                    full_df=full_df,
+                    unk_counts=unk_counts,
+                    label_distribution=label_distribution,
+                    head_label=self.head_label,
+                    # which values of the swapped feature the argument's own form can carry (ambiguous_subjects)
+                    context_inflector=nominal_inflector(inflector, CONTEXT_UPOS, (self.target.swap_feat, None)))
+                try:
+                    diagnostic_dfs = create_pairs(dt_df, leaf_threshold=leaf_threshold, **pairs_kwargs)
+                    if self.second_chance is not None:
+                        retry, lax, info = second_chance_decision(
+                            dt_df, self.predictor_var, label_distribution,
+                            strict_threshold=leaf_threshold,
+                            min_samples_leaf=self.min_samples_leaf, cfg=self.second_chance)
+                        print(f"{lang} {deprel}: second chance: {info['reason']}")
+                        if retry:
+                            # adopted even with zero correct_swaps: the lax pass's numbers are the ones to record
+                            second_dfs = create_pairs(
+                                dt_df, leaf_threshold=lax,
+                                extra_meta={"second_pass": True, "second_chance_info": info},
+                                second_chance_threshold=leaf_threshold,
+                                **pairs_kwargs)
+                            leaf_threshold, diagnostic_dfs = lax, second_dfs
+                            if not len(second_dfs["correct_swaps"]):
+                                print(f"{lang} {deprel}: retry attempted, yielded no pairs")
+                    correct_swaps_df = diagnostic_dfs.get("correct_swaps")
+                except MissingColumnError as err:
+                    print(f"Skipping {lang} for {deprel}, missing column {err}")
+            else:
+                # pairs of an earlier run: the page reads them back, with the cutoffs they were built with
+                correct_swaps_df, cached_threshold = read_cached_pairs(pairs_lang_dir)
+                if cached_threshold is not None:
+                    leaf_threshold = cached_threshold
 
             tree_html_kwargs = dict(
                     discounted_classes=[c for c in label_distribution if c not in ("yes", "no")] if self.drop_unk else None,
@@ -625,7 +642,7 @@ class Pipeline:
                 write_treebanks_marker(os.path.join(decision_trees_dir, "treebanks", f"{lang}.json"),
                                        self.include_excluded, self.incl_unk)
 
-            if (self.never_skip or self.never_skip_fit or treebanks_fresh
+            if (self.never_skip or self.never_skip_fit or self.redo_pairs or treebanks_fresh
                     or not os.path.exists(lang_html_file)):
                 tree2html(
                     pipeline_model=model,

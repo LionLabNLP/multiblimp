@@ -693,6 +693,7 @@ def create_html(
                 <tr><td>% undefined feature</td><td># undefined feature (<code>undefined_features</code>)</td><td>swap_items</td><td><code>items_seen &minus; no_match &minus; no_inflection</code></td><td>item</td><td>Fires once per attempted swap_form.</td></tr>
                 <tr><td>% conflicting features</td><td># conflicting features (<code>conflicting_features</code>)</td><td>swap_items</td><td><code>items_seen &minus; no_match &minus; no_inflection</code></td><td>item</td><td>Fires once per attempted swap_form. Always 0 for NPA.</td></tr>
                 <tr><td>% ambiguous {subject_label}</td><td># ambiguous {subject_label} (<code>ambiguous_subjects</code>)</td><td>swap_items</td><td><code>items_seen &minus; no_match &minus; no_inflection</code></td><td>item</td><td>Fires once per attempted swap_form.</td></tr>
+                <tr><td>% invalid surface</td><td># invalid surface (<code>invalid_surface</code>)</td><td>swap_items</td><td><code>items_seen &minus; no_match &minus; no_inflection</code></td><td>item</td><td>A valid pair whose written form could not be built: the swapped word sits in a contraction (<code>de le</code> = <code>du</code>) and its new components are neither a known contraction nor an attested word sequence. Left out of the pairs.</td></tr>
                 <tr><td>(not shown) extra_pairs</td><td><code>extra_pairs</code></td><td>swap_items</td><td><code>items_seen &minus; no_match &minus; no_inflection</code></td><td>item</td><td>Would collect otherwise-valid swaps (same eligibility as correct_swaps) that get capped once their FROM&rarr;TO combination hits the max_num_of_pairs limit. Always 0 today since create_pairs is never called with that limit set.</td></tr>
               </tbody>
             </table>
@@ -775,6 +776,7 @@ def create_html(
       {{ key: "undefined_feature", label: "undefined feature", desc: "The target feature was undefined or missing for this form." }},
       {{ key: "ambiguous_subject", label: "ambiguous {subject_label}", desc: "The row's {subject_label} couldn't be uniquely resolved." }},
       {{ key: "conflicting_features", label: "conflicting features", desc: "The reinflected form directly opposes the original on another feature (or adds an argument slot or feature dimension), so it isn't a minimal pair." }},
+      {{ key: "invalid_surface", label: "invalid surface", desc: "The swapped word sits in a contraction (de le = du) and the new components have no valid written form, so the pair is left out." }},
     ];
 
     // Fixed left-to-right order for the distribution bar -- matches

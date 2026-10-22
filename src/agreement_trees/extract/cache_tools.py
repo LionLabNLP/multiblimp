@@ -175,9 +175,13 @@ def run_cache_sweep(args):
         else:
             log.info(f"Capping each of {workers['n_jobs']} worker(s) to {mem_bytes / 1024**3:.1f} GB RAM")
 
+        finished = [0]
+
         def report(lang, result, error):
+            finished[0] += 1
+            progress = f"[{finished[0]}/{len(tasks)}]"
             if error is not None:
-                log.info(f"  FAILED: {lang}: {error}")
+                log.info(f"{progress} FAILED: {lang}: {error}")
                 if tasks[lang][1]:
                     vp_failed.append(lang)
                     log_cache_error("vp", lang, f"worker lost: {error}")
@@ -193,9 +197,13 @@ def run_cache_sweep(args):
                     cached_vp[lang].update(dict(rows))
             if "np" in result:
                 np_results[lang] = result["np"]
+            parts = []
             if vp_pipelines and lang not in vp_failed:
-                log.info(f"{lang}: " + ", ".join(
-                    f"{p.target_id}={cached_vp[lang].get(p.target_id)}" for p in vp_pipelines))
+                parts += [f"{p.target_id}={cached_vp[lang].get(p.target_id)}" for p in vp_pipelines]
+            if "np" in result:
+                parts.append(f"np={result['np'][0]}")
+            if parts:
+                log.info(f"{progress} {lang}: " + ", ".join(parts))
 
         run_in_pool(cache_language, tasks, workers["n_jobs"], mem_bytes, workers["max_tasks_per_child"], on_done=report)
 

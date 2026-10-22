@@ -11,16 +11,20 @@ predict whether a subject, object, indirect object or noun-phrase dependent agre
 
 1. **Resources** (`setup.sh`): UD treebanks, `resources/um2ud_annotation` (UniMorph-to-UD value mapper), treebank pickles
    (`scripts/data_caching/pickle_treebanks.py`), UD-derived tables (`scripts/data_caching/ud_tables.py` -> `resources/ud_tables/`), UniMorph and its tables in
-   UD notation (`scripts/data_caching/um2ud.py` -> `resources/um_tables/`). All three scripts take `--langs`.
+   UD notation (`scripts/data_caching/um2ud.py` -> `resources/um_tables/`), and the multiword-token statistics of the raw UD files
+   (`scripts/data_caching/mwt_stats.py` -> `resources/ud_mwt/`, built on demand when missing). All four scripts take `--langs`.
 2. **Extraction and scan** (`cache_data.sh`): `scripts/agreement_trees/cache_treebank_features.py` writes one feature cache per language and
    family under `treebank_features/` (verb families sv, sp, sa, ov, op, oa, iov, iop, ioa; noun phrases under `npa/`);
    `find_agreement_candidates.py` scans the caches and records which (target, language) pairs have enough agreement evidence
    (`resources/agreement_langs_{vp,np}.json`).
 3. **Fit** (`fit_all.py`, or one target with `fit_candidate.py`, e.g. `sv:Number`, `HEAD-DET_Number`): decision tree, minimal pairs
-   (`output/minimal_pairs/`, `output/decision_trees/`) and the tree pages (`html/decision_trees/`).
+   (`output/minimal_pairs/`, `output/decision_trees/`) and the tree pages (`html/decision_trees/`). Pair creation writes each pair's sentences
+   in their written form (`de le` -> `du`, in `sen_str` / `wrong_sen_str`) and leaves pairs with no valid written form in the `invalid_surface`
+   bucket. A language whose current pairs, page and per-treebank trees exist is skipped; `--redo_pairs` rebuilds the pairs and the pooled
+   page from the existing fits, and pairs written by an older version (`meta.json`'s `pairs_version`) are rebuilt without it.
 4. **Overview** (`scripts/overview/run_all.sh`): per-condition indexes (`generate_html_indexes.py`), `build_stats.py` and the top-level `html/index.html`.
-5. **Benchmark** (`scripts/benchmark/`): `validate_surface.py` rebuilds the written form of contractions (`de le` -> `du`) in the pairs' sentences and
-   drops pairs with no valid form; `build_benchmark.py` downsamples the pairs (default 1000 per language x condition) into `output/benchmark/`;
+5. **Benchmark** (`scripts/benchmark/`): `build_benchmark.py` downsamples the pairs (default 1000 per language x condition) into `output/benchmark/`
+   (`validate_surface.py` only backfills the written forms into pair directories built before pair creation wrote them);
    `eval_model.py` scores them with a HuggingFace model through lm-eval and writes the accuracy per language x condition to `output/model_results/`.
 
 Settings are in `resources/agreement_config.json` (modes, languages, workers, scan thresholds, tree and second-chance settings) and

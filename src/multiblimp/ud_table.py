@@ -82,7 +82,8 @@ class UDTable:
     @classmethod
     def from_file(cls, path: str, expand_values: bool = False, upos: Optional[List[str]] = None) -> Optional["UDTable"]:
         """The table at `path`. With `upos`, only those rows, read through pyarrow with the categorical columns
-        decoded for the kept rows alone: their dictionaries hold the whole language's forms."""
+        decoded for the kept rows alone (their dictionaries hold the whole language's forms); form and lemma
+        stay arrow strings, since categories of them would be millions of Python strings."""
         if not os.path.isfile(path):
             return None
         if not upos:
@@ -91,7 +92,8 @@ class UDTable:
         categorical = [name for name, column in zip(table.column_names, table.columns) if pa.types.is_dictionary(column.type)]
         table = pa.table({name: column.cast(column.type.value_type) if name in categorical else column
                           for name, column in zip(table.column_names, table.columns)})
-        return cls(table.to_pandas(categories=categorical), expand_values)
+        return cls(table.to_pandas(categories=[name for name in categorical if name not in ("form", "lemma")]),
+                   expand_values)
 
     def upos_names(self) -> List[str]:
         return sorted(self._df["upos"].astype(str).unique())

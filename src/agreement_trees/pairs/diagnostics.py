@@ -22,6 +22,7 @@ BUCKET_LABELS = {
     "undefined_features": "undefined feature",
     "ambiguous_subjects": "ambiguous subject",
     "conflicting_features": "conflicting features",
+    "invalid_surface": "invalid surface",
 }
 
 BUCKET_JSON_KEYS = {
@@ -33,6 +34,7 @@ BUCKET_JSON_KEYS = {
     "undefined_features": "undefined_feature",
     "ambiguous_subjects": "ambiguous_subject",
     "conflicting_features": "conflicting_features",
+    "invalid_surface": "invalid_surface",
 }
 
 # multi_now_valid is left out: it duplicates some correct_swaps rows.

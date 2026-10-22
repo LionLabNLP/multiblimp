@@ -12,6 +12,7 @@ import pyarrow.parquet as pq
 from tqdm import tqdm
 
 from agreement_trees.pairs.attractors import add_attractors_if_stored
+from agreement_trees.eval.surface import with_surface_strings
 from agreement_trees.pairs.sentence_text import add_sentence_strings
 from agreement_trees.fit.decision_tree import MISSING, MIN_DF_LEN, fit_pipeline, set_dt_features_in_df, fit_excluded_for_display
 from agreement_trees.extract.process_treebank import (
@@ -34,7 +35,8 @@ from agreement_trees.pipeline_utils import (
 from agreement_trees.npa.np_cache import cache_np_language, np_cache_status
 from agreement_trees.vp.pipeline import get_impurity
 from agreement_trees.pairs.create_pairs import (
-    ambiguous_readings, bucket_examples_html, bucket_frame, coverage_stats, leaf_keep, process_item,
+    PAIRS_VERSION, ambiguous_readings, bucket_examples_html, bucket_frame, coverage_stats, leaf_keep, pairs_current,
+    process_item, read_cached_pairs,
 )
 from agreement_trees.pairs.second_chance import second_chance_decision
 from agreement_trees.pairs.diagnostics import (
@@ -359,7 +361,7 @@ def _unk_split_counts(full_df: pd.DataFrame, target_col: str, feat: str,
 
 _NPA_BUCKET_NAMES = [
     "correct_swaps", "same_forms", "same_features", "ambiguous_subjects", "conflicting_features",
-    "undefined_features", "no_inflections", "no_candidates", "ambiguous_readings",
+    "undefined_features", "no_inflections", "no_candidates", "ambiguous_readings", "invalid_surface",
 ]
 
 
@@ -426,6 +428,7 @@ def create_npa_pairs_for_target_col(
     )
 
     meta = {
+        "pairs_version": PAIRS_VERSION,
         "leaf_min_acc": leaf_threshold,
         "num_ud_candidates_raw": n_raw,
         "num_ud_candidates_keep": total_n_keep,
@@ -444,9 +447,9 @@ def create_npa_pairs_for_target_col(
         meta.update(extra_meta)
 
     if len(diagnostic_dfs.get("correct_swaps", ())):
-        diagnostic_dfs["correct_swaps"] = add_sentence_strings(diagnostic_dfs["correct_swaps"])
-        diagnostic_dfs["correct_swaps"] = add_attractors_if_stored(
-            diagnostic_dfs["correct_swaps"], f"{role1}-{role2}_attractor_slots", (role1, role2))
+        kept, diagnostic_dfs["invalid_surface"] = with_surface_strings(add_sentence_strings(diagnostic_dfs["correct_swaps"]))
+        diagnostic_dfs["correct_swaps"] = (
+            add_attractors_if_stored(kept, f"{role1}-{role2}_attractor_slots", (role1, role2)) if len(kept) else kept)
 
     # example tables show only (role1, role2); the saved frames keep every column (other roles stay valid
     # tree predictors)
@@ -558,6 +561,7 @@ def _fit_language(lang: str, ctx: dict) -> None:
     resource_dir = ctx["resource_dir"]
     pairs_dir = ctx["pairs_dir"]
     never_skip = ctx["never_skip"]
+    redo_pairs = ctx["redo_pairs"]
     drop_unk = ctx["drop_unk"]
     max_depth = ctx["max_depth"]
     min_samples_leaf = ctx["min_samples_leaf"]
@@ -609,8 +613,9 @@ def _fit_language(lang: str, ctx: dict) -> None:
 
     pred_values = set(full_df[target_col].values) - ({"unk"} if drop_unk else set())
     model, dt_df, learn_dt = None, None, False
+    fit_rebuilt = never_skip or not os.path.exists(joblib_path)
 
-    if never_skip or not os.path.exists(joblib_path):
+    if fit_rebuilt:
         if len(pred_values) > 1:
             model, dt_df, _, _ = fit_npa_tree(
                 full_df, target_col, drop_unk=drop_unk, max_depth=max_depth,
@@ -637,7 +642,7 @@ def _fit_language(lang: str, ctx: dict) -> None:
     lang_pairs_dir = os.path.join(pairs_dir, cached_lang)
     correct_swaps_df = None
     lang_leaf_threshold = leaf_threshold
-    if never_skip or not os.path.isdir(lang_pairs_dir):
+    if fit_rebuilt or redo_pairs or not pairs_current(lang_pairs_dir):
         inflectors = {}
         for role in {role1, role2}:
             inflector, num_lemma, num_form = build_role_inflector(
@@ -678,18 +683,11 @@ def _fit_language(lang: str, ctx: dict) -> None:
                     print(f"{lang} {target_col}: retry attempted, yielded no pairs")
         correct_swaps_df = diagnostic_dfs.get("correct_swaps")
     else:
-        # pairs built by an earlier run: read the cached correct_swaps bucket for the page
-        correct_swaps_path = os.path.join(lang_pairs_dir, "correct_swaps.parquet")
-        if os.path.exists(correct_swaps_path):
-            correct_swaps_df = pd.read_parquet(correct_swaps_path)
-        # a retried language's tree page must show the (lax) cutoffs
-        # its pairs were actually built with
-        meta_path = os.path.join(lang_pairs_dir, "meta.json")
-        if os.path.exists(meta_path):
-            with open(meta_path) as f:
-                cached_threshold = json.load(f).get("leaf_min_acc")
-            if isinstance(cached_threshold, dict):
-                lang_leaf_threshold = {int(k): v for k, v in cached_threshold.items()}
+        # pairs built by an earlier run: the page reads the cached correct_swaps bucket and shows the (lax) cutoffs
+        # of a retried language that its pairs were actually built with
+        correct_swaps_df, cached_threshold = read_cached_pairs(lang_pairs_dir)
+        if cached_threshold is not None:
+            lang_leaf_threshold = cached_threshold
 
     shown_df = _drop_irrelevant_roles(full_df, (role1, role2))
     tree_html_kwargs = dict(
@@ -737,7 +735,7 @@ def _fit_language(lang: str, ctx: dict) -> None:
         write_treebanks_marker(os.path.join(save_dir, "treebanks", f"{cached_lang}.json"),
                                include_excluded, incl_unk)
 
-    if never_skip or treebanks_fresh or not os.path.exists(html_path):
+    if never_skip or redo_pairs or treebanks_fresh or not os.path.exists(html_path):
         tree2html(
             pipeline_model=model,
             dt_df=dt_df,
@@ -756,11 +754,11 @@ def _fit_language(lang: str, ctx: dict) -> None:
 
 def _is_done(lang: str, ctx: dict) -> bool:
     """Pages, pairs and per-treebank summary all exist for the current settings."""
-    if ctx["never_skip"]:
+    if ctx["never_skip"] or ctx["redo_pairs"]:
         return False
     cached_lang = gblang2udlang.get(lang, lang).replace(" ", "_")
     return (os.path.exists(os.path.join(ctx["html_dir"], f"{cached_lang}.html"))
-            and os.path.isdir(os.path.join(ctx["pairs_dir"], cached_lang))
+            and pairs_current(os.path.join(ctx["pairs_dir"], cached_lang))
             and (not ctx["per_treebank"] or treebanks_done(
                 os.path.join(ctx["save_dir"], "treebanks", f"{cached_lang}.json"),
                 ctx["include_excluded"], ctx["incl_unk"])))
@@ -774,7 +772,7 @@ def run_agreement_pipeline(target_col: str, langs: list[str], instances_dir: str
                             resource_dir: str = RESOURCE_DIR,
                             pairs_dir: str | None = None,
                             diagnostics_csv: str | None = None,
-                            never_skip: bool = False,
+                            never_skip: bool = False, redo_pairs: bool = False,
                             recache_data: bool = False,
                             extract: dict | None = None,
                             drop_unk: bool = True, max_depth: int = 12,
@@ -801,7 +799,8 @@ def run_agreement_pipeline(target_col: str, langs: list[str], instances_dir: str
 
     A language without an np_instances parquet is extracted first (`extract` = max_treebank_len/streaming/
     chunk_size/fetch_all for agreement_trees.npa.np_cache; None never extracts). never_skip redoes fit, pairs and pages;
-    recache_data also re-extracts; a language whose pages, pairs and per-treebank summary exist is skipped.
+    redo_pairs rebuilds the pairs and the pooled page from the existing fit; recache_data also re-extracts; a language whose
+    pages, current pairs and per-treebank summary exist is skipped.
 
     Paths default to {decision_trees_root}/npa/{npa_id(target_col)} and the html/pairs/diagnostics equivalents.
     unimorph_args goes to build_role_inflector. include_excluded adds trees for excluded treebanks (never the
@@ -828,7 +827,7 @@ def run_agreement_pipeline(target_col: str, langs: list[str], instances_dir: str
 
     ctx = dict(
         target_col=target_col, instances_dir=instances_dir, save_dir=save_dir, html_dir=html_dir,
-        resource_dir=resource_dir, pairs_dir=pairs_dir, never_skip=never_skip, recache_data=recache_data,
+        resource_dir=resource_dir, pairs_dir=pairs_dir, never_skip=never_skip, redo_pairs=redo_pairs, recache_data=recache_data,
         extract=extract, drop_unk=drop_unk, max_depth=max_depth, min_samples_leaf=min_samples_leaf,
         test_size=test_size, leaf_threshold=leaf_threshold,
         impurity_fn=functools.partial(get_impurity, **(impurity or {})),

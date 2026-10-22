@@ -1,6 +1,7 @@
 """Downsample the correct_swaps of the minimal pairs into the benchmark directory.
 
-Stage 3 of the benchmark: run after validate_surface.py. Keeps the <cond>/<cond>_<deprel>/<lang>/ layout, so
+Stage 2 of the benchmark: run after the pairs are built (and, for pair directories from before pair creation wrote the
+written forms, after validate_surface.py). Keeps the <cond>/<cond>_<deprel>/<lang>/ layout, so
 the benchmark reads like the pipeline output; manifest.json records the settings and the counts before and after.
 
 Usage (any directory):

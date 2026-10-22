@@ -139,12 +139,20 @@ def find_other_running_instances(script_path):
     return [p for p in pids if p != os.getpid()]
 
 
+# RLIMIT_AS counts reserved address space, which thread arenas and the arrow allocator inflate far past what
+# a process uses: a tight limit kills workers that hold a few GB. It is only a backstop against a runaway
+# allocation; the resident-memory watchdog is the real cap.
+ADDRESS_SPACE_FACTOR = 8
+ADDRESS_SPACE_FLOOR = 64 * 1024**3
+
+
 def limit_process_memory(max_bytes):
-    """Cap this process's address space (RLIMIT_AS). Enforced on Linux, ignored
-    on macOS."""
+    """Cap this process's address space (RLIMIT_AS) at ADDRESS_SPACE_FACTOR times max_bytes, at least
+    ADDRESS_SPACE_FLOOR. Enforced on Linux, ignored on macOS."""
+    limit = max(max_bytes * ADDRESS_SPACE_FACTOR, ADDRESS_SPACE_FLOOR)
     try:
         import resource
-        resource.setrlimit(resource.RLIMIT_AS, (max_bytes, max_bytes))
+        resource.setrlimit(resource.RLIMIT_AS, (limit, limit))
     except (ImportError, ValueError, OSError):
         pass
 
@@ -154,7 +162,7 @@ def guard_process_memory(max_bytes, poll_s=0.5, grace_s=10.0):
     Past max_bytes of resident memory it raises MemoryError in the main thread
     (caught per language, so the run continues); if still over grace_s later it
     hard-exits the worker, which run_in_pool then reports as a failed language.
-    Requires psutil; without it only the RLIMIT_AS cap applies (Linux only)."""
+    Requires psutil; without it only the loose RLIMIT_AS backstop applies (Linux only)."""
     limit_process_memory(max_bytes)
     try:
         import psutil

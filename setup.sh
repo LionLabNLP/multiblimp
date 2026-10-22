@@ -20,6 +20,9 @@ python3 scripts/agreement_trees/supplementary/flag_treebanks_report.py
 python3 scripts/data_caching/pickle_treebanks.py
 python3 scripts/data_caching/ud_tables.py
 
+# multiword-token statistics from the raw UD files (surface forms of the minimal pairs)
+python3 scripts/data_caching/mwt_stats.py
+
 # UniMorph (needs a GitHub SSH key), then its UD-notation tables (needs the UD-derived tables above)
 (cd resources/unimorph && bash download_all.sh && bash changelog.sh)
 python3 scripts/data_caching/um2ud.py

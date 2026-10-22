@@ -16,8 +16,36 @@ from agreement_trees.fit.decision_tree import MISSING, UNK_LABELS
 from agreement_trees.fit.entropy import DEFAULT_LEAF_MIN_ACCURACY
 from agreement_trees.pipeline_utils import match_casing
 from agreement_trees.pairs.attractors import add_attractors_if_stored
+from agreement_trees.eval.surface import with_surface_strings
 from agreement_trees.pairs.sentence_text import add_sentence_strings
 from multiblimp.script_log import append_log
+
+
+PAIRS_VERSION = 1   # bump when what create_pairs writes changes (buckets, strings, meta); older directories are rebuilt
+
+
+def pairs_current(lang_pairs_dir: str) -> bool:
+    """Whether the language's pairs directory was written by this PAIRS_VERSION (its meta.json says so)."""
+    try:
+        with open(os.path.join(lang_pairs_dir, "meta.json")) as f:
+            return json.load(f).get("pairs_version") == PAIRS_VERSION
+    except (OSError, ValueError):
+        return False
+
+
+def read_cached_pairs(lang_pairs_dir: str):
+    """(correct_swaps frame or None, leaf cutoff the pairs were built with or None) of an existing pairs directory:
+    what a tree page needs when the pairs are reused. A retried language's cutoffs are per leaf, keyed by int."""
+    path = os.path.join(lang_pairs_dir, "correct_swaps.parquet")
+    pairs = pd.read_parquet(path) if os.path.exists(path) else None
+    try:
+        with open(os.path.join(lang_pairs_dir, "meta.json")) as f:
+            cutoff = json.load(f).get("leaf_min_acc")
+    except (OSError, ValueError):
+        cutoff = None
+    if isinstance(cutoff, dict):
+        cutoff = {int(k): v for k, v in cutoff.items()}
+    return pairs, cutoff
 
 
 def coverage_stats(df, form_cols, inflector):
@@ -870,10 +898,11 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
     print(f"items_seen={items_seen} correct_swaps={len(diagnostics['correct_swaps'])} coverage={coverage}%")
 
     diagnostic_dfs = {item_type: bucket_frame(swap_df, items) for item_type, items in diagnostics.items()}
+    diagnostic_dfs["invalid_surface"] = pd.DataFrame()
     if len(diagnostic_dfs["correct_swaps"]):
-        diagnostic_dfs["correct_swaps"] = add_sentence_strings(diagnostic_dfs["correct_swaps"])
-        diagnostic_dfs["correct_swaps"] = add_attractors_if_stored(
-            diagnostic_dfs["correct_swaps"], f"{child_deprel}_attractor_slots", child_deprel)
+        kept, diagnostic_dfs["invalid_surface"] = with_surface_strings(add_sentence_strings(diagnostic_dfs["correct_swaps"]))
+        diagnostic_dfs["correct_swaps"] = (
+            add_attractors_if_stored(kept, f"{child_deprel}_attractor_slots", child_deprel) if len(kept) else kept)
     # unk rows are never modified: keep their dtypes, skip the records round trip
     for item_type, unk_df in (("head_unk", head_unk_df), ("nsubj_unk", nsubj_unk_df),
                               ("both_unk", both_unk_df)):
@@ -891,6 +920,7 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
             full_df, ["head_form", f"{child_deprel}_form"], inflector
         )
         meta = {
+            "pairs_version": PAIRS_VERSION,
             "leaf_min_acc": leaf_threshold,
             "num_ud_candidates_raw": n_raw,
             "num_ud_candidates_keep": n_keep,

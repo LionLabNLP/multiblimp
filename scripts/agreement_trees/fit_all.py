@@ -8,8 +8,8 @@ says a target passes the statistical bar, not that it is real agreement (e.g.
 sv:Case or a lexical feature can pass while spurious): list vetted targets in
 "fit.targets" to keep a full sweep to those.
 
---include_excluded is passed to every fit. Anything else on the command line is
-passed through to every fit_candidate.py call, e.g.
+--include_excluded (also fit the excluded treebanks' pages) is off unless given; it then goes to every fit.
+Anything else on the command line is passed through to every fit_candidate.py call, e.g.
   python3 fit_all.py --langs English German -j 2
   python3 fit_all.py --targets sv:Number HEAD-DET_Number
   python3 fit_all.py -rf
@@ -29,7 +29,6 @@ from agreement_trees.config import (
     apply_mode_flags, load_agreement_config, load_scan_results, parse_vp_target,
 )
 
-DEFAULT_FLAGS = ["--include_excluded"]
 INDEX_SCRIPT = os.path.join(_here, "..", "overview", "generate_html_indexes.py")
 
 
@@ -39,6 +38,8 @@ def main():
     parser.add_argument("--np", action="store_true", help="Only noun-phrase targets.")
     parser.add_argument("--targets", nargs="*", default=None,
                         help="Targets to fit (default: see above).")
+    parser.add_argument("--include_excluded", action="store_true",
+                        help="Also fit/render trees for each language's excluded treebanks (analysis pages only).")
     parser.add_argument("--skip_indexes", action="store_true",
                         help="Build no indexes: every fit gets --no_index and generate_html_indexes.py "
                              "is not run afterwards.")
@@ -48,6 +49,8 @@ def main():
     args, passthrough = parser.parse_known_args()
     if args.config:
         passthrough += ["--config", args.config]
+    if args.include_excluded:
+        passthrough.append("--include_excluded")
 
     config = apply_mode_flags(load_agreement_config(args.config), args.vp, args.np)
     targets = args.targets or config["fit"]["targets"]
@@ -61,7 +64,7 @@ def main():
     failed, skipped = [], []
     for target in targets:
         cmd = [sys.executable, os.path.join(_here, "fit_candidate.py"), target,
-               *DEFAULT_FLAGS, "--no_index", *passthrough]
+               "--no_index", *passthrough]
         print(f"\n=== {' '.join(cmd)}", flush=True)
         returncode = subprocess.run(cmd).returncode
         if returncode == SKIPPED_EXIT:

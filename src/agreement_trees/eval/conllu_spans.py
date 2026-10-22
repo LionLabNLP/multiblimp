@@ -25,16 +25,17 @@ def recase(original: str, form: str) -> str:
 
 
 def iter_sentences(path):
-    """(line of '# sent_id', '# text', units) per sentence; a unit is a plain token or a multiword token
+    """(first line of the sentence block, '# text', units) per sentence, the line number conllu_sent_line holds; a unit
+    is a plain token or a multiword token
     (mwt=True, surface form in `form`, component forms in `comps`, their UPOS in `comp_upos`; a plain token's UPOS
     in `upos`). Empty nodes are skipped."""
     units, start, text, last = [], None, None, None
     with open(path, encoding="utf-8") as f:
         for i, line in enumerate(f, 1):
+            if start is None and line.strip():
+                start = i
             if line[0] == "#":
-                if line.startswith("# sent_id"):
-                    start = i
-                elif line.startswith("# text ="):
+                if line.startswith("# text ="):
                     text = line[len("# text ="):].strip()
                 continue
             if not line.strip():

@@ -66,6 +66,7 @@ BUCKET_LABELS = {
     "undefined_features": "Undefined feature",
     "ambiguous_subjects": "Ambiguous subject",
     "conflicting_features": "Conflicting features",
+    "invalid_surface": "Invalid surface",
 }
 
 

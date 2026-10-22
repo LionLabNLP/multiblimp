@@ -40,6 +40,9 @@ def parse_fit_args(argv=None):
     parser.add_argument("--refit_trees", "-rf", action="store_true",
                         help="Redo everything downstream of the cached extraction (included/excluded "
                              "split, tree fit, minimal pairs, pages) without re-extracting.")
+    parser.add_argument("--redo_pairs", action="store_true",
+                        help="Rebuild the minimal pairs and the pooled tree page from the existing fits (no refit, per-treebank "
+                             "trees reused). Pairs written by an older version are rebuilt without it.")
     parser.add_argument("--keep_unk", action="store_true",
                         help="Keep unk-labeled rows in the tree fit instead of dropping them.")
     parser.add_argument("--incl_unk_trees", action="store_true",
@@ -170,6 +173,7 @@ def run_vp(target: str, args, config: dict) -> None:
         max_treebank_len=config["vp"]["max_treebank_len"],
         never_skip=args.recache_data,
         never_skip_fit=args.refit_trees,
+        redo_pairs=args.redo_pairs,
         rm_columns=list(base.rm_columns),
         head_label=base.head_label,
         target_id=target_id,
@@ -210,6 +214,7 @@ def run_np(target: str, args, config: dict) -> None:
         langs=target_langs("np", canonical, args, config),
         resource_dir=RESOURCE_DIR,
         never_skip=args.recache_data or args.refit_trees,
+        redo_pairs=args.redo_pairs,
         recache_data=args.recache_data,
         extract=dict(max_treebank_len=np_cfg["max_treebank_len"], streaming=np_cfg["streaming"],
                      chunk_size=np_cfg["chunk_size"], fetch_all=True),
