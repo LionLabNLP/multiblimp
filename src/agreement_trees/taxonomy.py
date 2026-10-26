@@ -1,7 +1,8 @@
 """Naming convention shared by every agreement condition this project runs:
 sv/sp/sa + Na/Ga/Pa for subject-verb/participle/auxiliary agreement,
 ov/op/oa for object-verb/participle/auxiliary, iov/iop/ioa for indirect-
-object-verb/participle/auxiliary agreement (e.g. "svNa" = Subject-Verb, Number), and
+object-verb/participle/auxiliary agreement (e.g. "svNa" = Subject-Verb, Number), sx<form> for subject agreement
+with a head of another VerbForm (OTHER_VERB_FORMS, e.g. "sxinfNa" = Subject-Infinitive, Number), and
 npa/{ROLE1}-{ROLE2}_{FeatAbbrev} for noun-phrase agreement role pairs
 (e.g. "npa/HEAD-DET_N" = Head-Determiner Number). Both
 scripts/overview/build_stats.py (the stats-overview aggregator) and
@@ -13,10 +14,25 @@ pages can't drift apart on what a condition id means.
 
 import re
 
+# Subject agreement with a head whose VerbForm is neither Fin nor Part: one family per VerbForm value, all shown
+# under one group. family prefix -> (VerbForm value, label)
+OTHER_VERB_FORMS = {
+    "sxinf": ("Inf", "Infinitive"),
+    "sxvnoun": ("Vnoun", "Verbal noun"),
+    "sxgdv": ("Gdv", "Gerundive"),
+    "sxger": ("Ger", "Gerund"),
+    "sxconv": ("Conv", "Converb"),
+    "sxsup": ("Sup", "Supine"),
+    "sxnonfin": ("NonFin", "Non-finite"),
+    "sxstat": ("Stat", "Stative"),
+    "sxnomag": ("NomAg", "Agent noun"),
+}
+OTHER_VERB_FORMS_GROUP = "Subject–Other verb forms"
+
 GROUP_PREFIXES = {
     "sv": "Subject–Verb",
     "sp": "Subject–Participle",
-    "sx": "Subject–Other verb forms",
+    **{prefix: OTHER_VERB_FORMS_GROUP for prefix in OTHER_VERB_FORMS},
     "sa": "Subject–Auxiliary",
     "ov": "Object–Verb",
     "op": "Object–Participle",
@@ -49,8 +65,12 @@ NPA_FEATURE_ORDER = {"N": 0, "G": 1, "P": 2, "C": 3}
 # callers that also track NPA's own aggregate condition (e.g.
 # build_stats.py's "npa": ("Noun Phrase", "Agreement (all role pairs)"))
 # add that entry themselves, since NPA has no single flat id here.
+def _feature_label(prefix: str, feature: str) -> str:
+    return f"{OTHER_VERB_FORMS[prefix][1]} ({feature})" if prefix in OTHER_VERB_FORMS else feature
+
+
 FLAT_CONDITION_META = {
-    f"{prefix}{suffix}": (group, FEATURE_SUFFIXES[suffix])
+    f"{prefix}{suffix}": (group, _feature_label(prefix, FEATURE_SUFFIXES[suffix]))
     for prefix, group in GROUP_PREFIXES.items()
     for suffix in FEATURE_SUFFIXES
 }
@@ -71,8 +91,19 @@ def classify_flat_condition(cid: str):
         return None
     prefix, suffix, variant = match.groups()
     if suffix in FEATURE_SUFFIXES:
-        return GROUP_PREFIXES[prefix], FEATURE_SUFFIXES[suffix], FEATURE_ORDER[suffix], variant
-    return "Other", f"{GROUP_PREFIXES[prefix]} {suffix}", _CANDIDATE_ORDER, variant
+        return GROUP_PREFIXES[prefix], _feature_label(prefix, FEATURE_SUFFIXES[suffix]), FEATURE_ORDER[suffix], variant
+    family = f"Subject–{OTHER_VERB_FORMS[prefix][1]}" if prefix in OTHER_VERB_FORMS else GROUP_PREFIXES[prefix]
+    return "Other", f"{family} {suffix}", _CANDIDATE_ORDER, variant
+
+
+def other_verb_form(cid: str):
+    """(VerbForm label, feature label) of a condition id of the other-verb-forms families ("sxinfNa" ->
+    ("Infinitive", "Number"), "sxinfCase" -> ("Infinitive", "Case")), else None."""
+    match = _FLAT_ID_RE.match(cid)
+    if not match or match.group(1) not in OTHER_VERB_FORMS:
+        return None
+    suffix = match.group(2)
+    return OTHER_VERB_FORMS[match.group(1)][1], FEATURE_SUFFIXES.get(suffix, suffix)
 
 
 def npa_subgroup_label(subgroup: str) -> str:

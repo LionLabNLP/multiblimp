@@ -10,7 +10,9 @@ worth fitting. Both pipelines are scanned the same way and judged by one bar
 Per (target, language) the rows are split into yes / no (both sides tagged,
 agreeing or not), one-side-only (two buckets, named after the roles), and
 neither, all out of the rows where the two roles actually co-occur. Rows of
-excluded treebanks are not counted.
+excluded treebanks are not counted. Each language entry also carries two diagnostics (nothing is filtered on
+them): head_values, how many distinct values the head's feature takes over the yes/no rows, and chance_adjusted,
+the agreement beyond what independent head and child values would give.
 """
 import glob
 import json
@@ -38,6 +40,7 @@ def new_stats():
     return defaultdict(lambda: {
         "roles": None,
         "lang_counts": defaultdict(lambda: Counter({k: 0 for k in COUNT_KEYS})),
+        "lang_values": defaultdict(lambda: {"head": Counter(), "child": Counter()}),
     })
 
 
@@ -50,12 +53,34 @@ def _included(path: str, schema_names, columns) -> pd.DataFrame:
     return df.drop(columns="treebank", errors="ignore")
 
 
-def _add(stats: dict, key: str, roles: tuple[str, str], lang: str, counts: tuple) -> None:
+def _add(stats: dict, key: str, roles: tuple[str, str], lang: str, counts: tuple, values: tuple | None = None) -> None:
     entry = stats[key]
     entry["roles"] = roles
     lc = entry["lang_counts"][lang]
     for name, value in zip(COUNT_KEYS, counts):
         lc[name] += value
+    if values:
+        entry["lang_values"][lang]["head"].update(values[0])
+        entry["lang_values"][lang]["child"].update(values[1])
+
+
+def value_pairs(agreement: pd.Series, head: pd.Series | None, child: pd.Series | None) -> tuple | None:
+    """Counters of the head's and the child's feature values over the rows labelled yes or no."""
+    if head is None or child is None:
+        return None
+    rows = agreement.isin(["yes", "no"])
+    return Counter(head[rows].dropna().astype(str)), Counter(child[rows].dropna().astype(str))
+
+
+def agreement_diagnostics(head: Counter, child: Counter, yes: int, no: int) -> tuple:
+    """(distinct head values, agreement beyond chance): (observed - expected) / (1 - expected), expected being the
+    agreement of a head and a child value drawn independently; None when it cannot be told. Diagnostics only: a head
+    that never varies, or agreement no better than chance, shows up here, but nothing is filtered on it."""
+    n_head, n_child = sum(head.values()), sum(child.values())
+    if not n_head or not n_child or not yes + no:
+        return len(head), None
+    expected = sum(head[v] / n_head * child.get(v, 0) / n_child for v in head)
+    return len(head), None if expected >= 1 else round((yes / (yes + no) - expected) / (1 - expected), 3)
 
 
 # ---------------------------------------------------------------- vp
@@ -101,12 +126,14 @@ def scan_vp_language(parquet_path: str, family: str, deprel: str, stats: dict,
         return None
     wanted = [f"head_{deprel}_{f}_agreement" for f in feats]
     wanted += [f"{deprel}_{f}" for f in feats if f"{deprel}_{f}" in schema_names]
+    wanted += [f"head_{f}" for f in feats if f"head_{f}" in schema_names]
     df = _included(parquet_path, set(schema_names), wanted)
     for feat in feats:
         child_col = f"{deprel}_{feat}"
         counts = vp_counts(df[f"head_{deprel}_{feat}_agreement"],
                            df[child_col] if child_col in df.columns else None)
-        _add(stats, vp_scan_key(family, feat), ("head", deprel), lang, counts)
+        values = value_pairs(df[f"head_{deprel}_{feat}_agreement"], df.get(f"head_{feat}"), df.get(child_col))
+        _add(stats, vp_scan_key(family, feat), ("head", deprel), lang, counts, values)
     return lang
 
 
@@ -168,7 +195,7 @@ def scan_np_language(parquet_path: str, stats: dict, split_head_upos: bool = Fal
 
     wanted = {"HEAD_pos"} if split_head_upos else set()
     for role1, role2, feat, col in matches:
-        wanted.update((col, f"{role1}_{feat}", f"{role1}_form", f"{role2}_form"))
+        wanted.update((col, f"{role1}_{feat}", f"{role2}_{feat}", f"{role1}_form", f"{role2}_form"))
     df = _included(parquet_path, schema_set, [c for c in wanted if c in schema_set])
 
     for role1, role2, feat, col in matches:
@@ -178,8 +205,8 @@ def scan_np_language(parquet_path: str, stats: dict, split_head_upos: bool = Fal
         else:
             groups = [(col, df)]
         for key, group_df in groups:
-            _add(stats, key, (key.split("-", 1)[0], role2), lang,
-                 np_counts(group_df, col, role1, role2, feat))
+            _add(stats, key, (key.split("-", 1)[0], role2), lang, np_counts(group_df, col, role1, role2, feat),
+                 value_pairs(group_df[col], group_df.get(f"{role1}_{feat}"), group_df.get(f"{role2}_{feat}")))
     return lang
 
 
@@ -196,8 +223,9 @@ def unit_key(mode: str, family: str | None, lang: str) -> str:
 
 
 def scan_thresholds(scan_cfg: dict) -> dict:
-    keys = ("wilson_floor", "min_both", "min_yes", "yes_rate_floor", "split_head_upos")
-    return {**{k: scan_cfg[k] for k in keys}, "exclude_features": sorted(scan_cfg["exclude_features"])}
+    keys = ("wilson_floor", "min_both", "min_yes", "yes_rate_floor", "split_head_upos", "min_agree_share")
+    return {**{k: scan_cfg[k] for k in keys}, "exclude_features": sorted(scan_cfg["exclude_features"]),
+            "min_agree_share_families": sorted(scan_cfg["min_agree_share_families"])}
 
 
 def scan_vp(langs: list[str] | None = None, families: list[str] | None = None,
@@ -267,11 +295,14 @@ def build_summary(stats: dict, mode: str) -> pd.DataFrame:
     return df.reset_index(drop=True)
 
 
-def langs_passing(entry: dict, scan_cfg: dict) -> dict[str, Counter]:
+def langs_passing(entry: dict, scan_cfg: dict, key: str = "") -> dict[str, Counter]:
+    """The languages of a scan entry (key: its target, "sxinf:Number") that clear the bar; the families in
+    scan_cfg["min_agree_share_families"] must also have a majority of agreeing rows."""
+    share = scan_cfg["min_agree_share"] if key.split(":", 1)[0] in scan_cfg["min_agree_share_families"] else 0.0
     return {
         lang: c for lang, c in sorted(entry["lang_counts"].items())
         if passes_agreement_bar(c["yes"], c["no"], c["total"], scan_cfg["wilson_floor"],
-                                scan_cfg["min_both"], scan_cfg["min_yes"], scan_cfg["yes_rate_floor"])
+                                scan_cfg["min_both"], scan_cfg["min_yes"], scan_cfg["yes_rate_floor"], share)
     }
 
 
@@ -282,7 +313,7 @@ def build_lang_config(stats: dict, scan_cfg: dict) -> dict[str, dict[str, dict]]
     for key, entry in stats.items():
         role_a, role_b = entry["roles"]
         lang_entries = {}
-        for lang, c in langs_passing(entry, scan_cfg).items():
+        for lang, c in langs_passing(entry, scan_cfg, key).items():
             total = c["total"]
 
             def cell(n, total=total):
@@ -295,6 +326,10 @@ def build_lang_config(stats: dict, scan_cfg: dict) -> dict[str, dict[str, dict]]
                 "both": cell(c["yes"] + c["no"]),
                 "total": total,
             }
+            values = entry["lang_values"].get(lang)
+            if values:
+                lang_entries[lang]["head_values"], lang_entries[lang]["chance_adjusted"] = agreement_diagnostics(
+                    values["head"], values["child"], c["yes"], c["no"])
         if lang_entries:
             config[key] = lang_entries
     return config
@@ -312,6 +347,7 @@ def build_lang_csv(config: dict, stats: dict) -> pd.DataFrame:
                 "both": s["both"]["abs"], "both_%": s["both"]["rel"],
                 "neither": s["neither"]["abs"], "neither_%": s["neither"]["rel"],
                 "total": s["total"],
+                "head_values": s.get("head_values"), "chance_adjusted": s.get("chance_adjusted"),
             })
     return pd.DataFrame(rows)
 

@@ -14,8 +14,9 @@ from multiblimp.swap_features import (
     swap_number_iobj_any, swap_gender_iobj_any, swap_person_iobj_any,
 )
 from agreement_trees.extract.prediction_target import (
-    PredictionTarget, nsubj_target, obj_agr_target, iobj_agr_target, filter_head_feats, filter_other_verb_form,
+    PredictionTarget, nsubj_target, obj_agr_target, iobj_agr_target, filter_head_feats,
 )
+from agreement_trees.taxonomy import OTHER_VERB_FORMS
 from agreement_trees.aux.redirect import nsubj_aux_target, obj_aux_target, iobj_aux_target
 
 FEATURES = {"Na": "Number", "Ga": "Gender", "Pa": "Person"}
@@ -50,7 +51,8 @@ class Condition:
     id: str
     base_target: PredictionTarget
     feature_suffix: str
-    # "fin" (finite), "part" (participles), "other" (anything else, incl. no VerbForm) or None (no VerbForm filter)
+    # "fin" (finite), "part" (participles), a family of OTHER_VERB_FORMS ("sxinf": that VerbForm only) or None
+    # (no VerbForm filter, auxiliaries)
     verb_form: str | None
     unimorph_args: dict
     word_order_subdir: str
@@ -66,6 +68,8 @@ class Condition:
     def head_label(self):
         if self.is_aux:
             return "Aux"
+        if self.verb_form in OTHER_VERB_FORMS:
+            return OTHER_VERB_FORMS[self.verb_form][1]
         return "Participle" if self.verb_form == "part" else "Verb"
 
     @property
@@ -90,8 +94,8 @@ class Condition:
         if self.is_aux:
             return target
         # "fin" means strictly finite (VerbForm=Fin), not merely "not a participle"
-        if self.verb_form == "other":
-            target.head_feats = {"VerbForm": filter_other_verb_form}
+        if self.verb_form in OTHER_VERB_FORMS:
+            target.head_feats = {"VerbForm": partial(filter_head_feats, require=OTHER_VERB_FORMS[self.verb_form][0])}
         else:
             target.head_feats = {"VerbForm": partial(
                 filter_head_feats, require="Part" if self.verb_form == "part" else "Fin")}
@@ -107,7 +111,7 @@ def _build_conditions():
     families = [
         ("sv", nsubj_target, "fin", None),
         ("sp", nsubj_target, "part", None),
-        ("sx", nsubj_target, "other", None),
+        *[(prefix, nsubj_target, prefix, None) for prefix in OTHER_VERB_FORMS],
         ("sa", nsubj_target, None, nsubj_aux_target),
         ("ov", obj_agr_target, "fin", None),
         ("op", obj_agr_target, "part", None),
@@ -125,7 +129,7 @@ def _build_conditions():
                 unimorph_args=AUX_UNIMORPH_ARGS if aux_target else VERB_UNIMORPH_ARGS,
                 # sa keeps its original cache dir name
                 word_order_subdir=(("subj_aux" if deprel == "nsubj" else f"{deprel}_aux")
-                                   if aux_target else f"{deprel}_{verb_form}"),
+                                   if aux_target else f"{deprel}_{verb_form[2:] if verb_form in OTHER_VERB_FORMS else verb_form}"),
                 rm_columns=(f"{deprel}_child-deprel_conj",),
                 aux_target=aux_target,
             )

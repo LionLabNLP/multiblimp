@@ -24,7 +24,7 @@ def create_html(sections_html, all_data_json, back_links=(("../index.html", "Mai
             if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
         }} catch (e) {{}}
     </script>
-    <title>MultiBLiMP – Morphological Agreement – Decision Trees</title>
+    <title>MultiBLiMP – Agreement – Decision Trees</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
@@ -295,7 +295,7 @@ def create_html(sections_html, all_data_json, back_links=(("../index.html", "Mai
         <div class="header">
             <div class="title-section">
                 <div class="back-links">{back_links_html}</div>
-                <h1>MultiBLiMP &ndash; Morphological Agreement &ndash; Decision Trees</h1>
+                <h1>MultiBLiMP &ndash; Agreement &ndash; Decision Trees</h1>
                 <p class="description">
                     This page gives an overview of agreement predictability across dependency relations and languages,
                     grouped by what the subject agrees with (verb, participle, auxiliary, ...). Each panel shows the

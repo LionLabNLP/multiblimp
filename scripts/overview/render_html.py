@@ -1,5 +1,5 @@
 """Render output/overview/stats.json (see build_stats.py) into a self-
-contained html/index.html — samples/minimal-pair counts per language, per
+contained html/data.html — samples/minimal-pair counts per language, per
 condition, and per language x condition, for the sva-dt project.
 
 Run from the repo root: python scripts/overview/render_html.py
@@ -15,7 +15,7 @@ from agreement_trees.report.html.html_dataset import render_dataset_page  # noqa
 from multiblimp.config import HTML_DIR, OUTPUT_OVERVIEW_DIR  # noqa: E402
 
 STATS_PATH = os.path.join(OUTPUT_OVERVIEW_DIR, "stats.json")
-OUT_PATH = os.path.join(HTML_DIR, "index.html")
+OUT_PATH = os.path.join(HTML_DIR, "data.html")
 
 
 def main():

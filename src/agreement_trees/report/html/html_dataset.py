@@ -1,15 +1,16 @@
-"""The dataset landing page (html/index.html): samples and minimal-pair counts per language, per condition and
+"""The dataset page (html/data.html, linked from the benchmark page at html/index.html): samples and minimal-pair counts per language, per condition and
 per language x condition, rendered from the stats blob of agreement_trees.report.overview.build_stats into one
 self-contained HTML string. The command line is scripts/overview/render_html.py."""
 import json
+import math
 
-from agreement_trees.taxonomy import GROUP_PREFIXES
+from agreement_trees.taxonomy import GROUP_PREFIXES, OTHER_VERB_FORMS_GROUP
 
 
 # category tabs in display order, from GROUP_PREFIXES (the taxonomy build_stats assigns conditions from) plus
 # "Noun Phrase", which has no flat prefix
 GROUP_ORDER = list(dict.fromkeys(GROUP_PREFIXES.values())) + ["Noun Phrase", "Other"]
-GROUP_SLUGS = {label: prefix for prefix, label in GROUP_PREFIXES.items()} | {"Noun Phrase": "npa", "Other": "other"}
+GROUP_SLUGS = {label: prefix for prefix, label in GROUP_PREFIXES.items()} | {"Noun Phrase": "npa", "Other": "other", OTHER_VERB_FORMS_GROUP: "sx"}
 
 
 def _category_items(data: dict, group: str) -> list[dict]:
@@ -158,25 +159,34 @@ def _category_tab_html(data: dict, group: str, lang_idx: dict, npa_lang_idx: dic
     items = _category_items(data, group)
     totals = _category_totals(data, group, items, lang_idx, npa_lang_idx)
 
-    # Sparkbar width is each item's pairs relative to the category's biggest
+    # Sparkbar width (log scale for noun phrases) is each item's pairs relative to the category's biggest
     # picker item -- a tiny small-multiples comparison (Number vs. Gender vs.
     # Person, at a glance) riding along the picker itself, rather than a
     # separate chart grid competing with the detail view below it.
     max_pairs = max((it["pairs"] for it in items), default=0) or 1
+    matrix_view = group in ("Noun Phrase", OTHER_VERB_FORMS_GROUP)   # rows x features; the small conditions would vanish on a linear scale
+    log_scale = matrix_view
+    row_noun = "role" if group == "Noun Phrase" else "verb form"
+
+    def spark_width(pairs):
+        if not log_scale:
+            return round(100 * pairs / max_pairs)
+        return round(100 * math.log10(1 + pairs) / math.log10(1 + max_pairs)) if pairs else 0
 
     def picker_button(it, text, active):
+        title = f'{it["label"]}: {it["pairs"]:,} pairs' if log_scale else it["label"]
         return (
             f'<button class="picker-btn{" active" if active else ""}" role="radio" '
-            f'aria-checked="{"true" if active else "false"}" aria-label="{it["label"]}" title="{it["label"]}" '
+            f'aria-checked="{"true" if active else "false"}" aria-label="{it["label"]}" title="{title}" '
             f'data-cond="{it["id"]}" data-npasub="{"true" if it["isNpaSub"] else "false"}">'
             f'<span>{text}</span>'
             f'<span class="picker-spark"><span class="picker-spark-fill" '
-            f'style="width:{round(100 * it["pairs"] / max_pairs)}%"></span></span>'
+            f'style="width:{spark_width(it["pairs"])}%"></span></span>'
             f'</button>'
         )
 
-    if group == "Noun Phrase":
-        # Matrix: one row per role pair (ordered by its biggest condition),
+    if matrix_view:
+        # Matrix: one row per role pair (or verb form) (ordered by its biggest condition),
         # one column per feature (Number, Gender, Person, Case, ...); a cell
         # is the condition's button, or blank where that pair has none.
         pair_groups: dict[str, dict[str, dict]] = {}
@@ -217,8 +227,8 @@ def _category_tab_html(data: dict, group: str, lang_idx: dict, npa_lang_idx: dic
         picker_filter_html = (
             f'<div class="picker-filter" data-picker="cat-{slug}-picker">'
             '<input type="search" class="search picker-filter-search" autocomplete="off" '
-            'placeholder="Search role pairs or features&hellip;" aria-label="Search conditions">'
-            '<select class="picker-filter-role" aria-label="Role"><option value="">Any role</option>'
+            f'placeholder="Search {"role pairs" if group == "Noun Phrase" else "verb forms"} or features&hellip;" aria-label="Search conditions">'
+            f'<select class="picker-filter-role" aria-label="{row_noun.title()}"><option value="">Any {row_noun}</option>'
             + "".join(f'<option value="{r}">{r}</option>' for r in roles)
             + '</select><select class="picker-filter-feature" aria-label="Feature">'
             '<option value="">Any feature</option>'
@@ -230,8 +240,8 @@ def _category_tab_html(data: dict, group: str, lang_idx: dict, npa_lang_idx: dic
             picker_button(it, it["label"], i == 0) for i, it in enumerate(items)
         )
         picker_filter_html = ""
-    picker_bar_class = "picker-bar picker-matrix" if group == "Noun Phrase" else "picker-bar"
-    picker_bar_style = f' style="--cols: {matrix_cols}"' if group == "Noun Phrase" else ""
+    picker_bar_class = "picker-bar picker-matrix" if matrix_view else "picker-bar"
+    picker_bar_style = f' style="--cols: {matrix_cols}"' if matrix_view else ""
     n = totals["conditions"]
 
     return f"""
@@ -307,7 +317,7 @@ def _category_tab_html(data: dict, group: str, lang_idx: dict, npa_lang_idx: dic
 
 
 def render_dataset_page(data: dict) -> str:
-    """The self-contained dataset landing page (html/index.html) for a stats blob built by
+    """The self-contained dataset page (html/data.html) for a stats blob built by
     agreement_trees.report.overview.build_stats."""
     totals = data["totals"]
     data_json = json.dumps(data, ensure_ascii=False).replace("</", "<\\/").replace("<!--", "<\\!--")
@@ -358,7 +368,7 @@ def render_dataset_page(data: dict) -> str:
             if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
         }} catch (e) {{}}
     </script>
-    <title>MultiBLiMP – Morphological Agreement</title>
+    <title>MultiBLiMP – Agreement</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
@@ -1085,7 +1095,7 @@ def render_dataset_page(data: dict) -> str:
         <header class="card">
             <div class="header">
                 <div>
-                    <h1>MultiBLiMP – Morphological Agreement</h1>
+                    <h1>MultiBLiMP – Agreement</h1>
                     <p class="description">
                         How many candidate samples were considered and how many minimal pairs were actually
                         generated from them &mdash; broken down per language, per grammatical condition (subject
@@ -1100,6 +1110,7 @@ def render_dataset_page(data: dict) -> str:
                 </div>
                 <div class="header-right">
                     <a class="nav-link nav-link-lg" href="decision_trees/index.html">Decision Trees Overview &rarr;</a>
+                    <a class="nav-link nav-link-lg" href="index.html">&larr; Benchmark</a>
                 </div>
             </div>
             <button type="button" class="theme-toggle" id="themeToggleBtn" title="Toggle light/dark theme">☾</button>

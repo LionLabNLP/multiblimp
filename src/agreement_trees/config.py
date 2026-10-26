@@ -10,7 +10,7 @@ import functools
 import json
 import os
 
-from agreement_trees.taxonomy import FEATURE_SUFFIXES, GROUP_PREFIXES
+from agreement_trees.taxonomy import FEATURE_SUFFIXES, GROUP_PREFIXES, OTHER_VERB_FORMS
 from multiblimp.config import RESOURCE_DIR, SCAN_RESULTS_DIR
 
 AGREEMENT_CONFIG_PATH = os.path.join(RESOURCE_DIR, "agreement_config.json")
@@ -24,7 +24,7 @@ VP_GROUPS = {
     "verb": ["sv", "ov", "iov"],
     "participle": ["sp", "op", "iop"],
     "aux": ["sa", "oa", "ioa"],
-    "other": ["sx"],
+    "other": list(OTHER_VERB_FORMS),
 }
 _SUFFIX_OF_FEATURE = {feature: suffix for suffix, feature in FEATURE_SUFFIXES.items()}
 
@@ -49,6 +49,7 @@ def load_agreement_config(path: str | None = None) -> dict:
     if bad_modes:
         raise SystemExit(f"{path}: modes must be 'vp' and/or 'np', got {sorted(bad_modes)}")
     config["vp"]["families"] = expand_families(config["vp"]["families"])
+    config["scan"]["min_agree_share_families"] = expand_families(config["scan"]["min_agree_share_families"])
     return config
 
 

@@ -15,7 +15,7 @@ import sys
 _repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.path.append(os.path.join(_repo_root, "src"))
 
-from agreement_trees.eval.benchmark import downsample, load_pairs
+from agreement_trees.eval.benchmark import cap_per_cond, load_pairs
 from agreement_trees.eval.score import evaluate
 from multiblimp.config import OUTPUT_BENCHMARK_DIR, OUTPUT_MODEL_RESULTS_DIR
 
@@ -42,7 +42,7 @@ if __name__ == "__main__":
 
     pairs = load_pairs(args.pairs_dir, args.langs, args.conds)
     if args.max_per_cond:
-        pairs = downsample(pairs, args.max_per_cond, args.seed)
+        pairs = cap_per_cond(pairs, args.max_per_cond, args.seed)
 
     scored, acc, out_dir = evaluate(args.model, pairs, args.results_dir, args.dtype, args.device,
                                     args.batch_size, args.max_batch_size)

@@ -3,7 +3,7 @@ def create_html(
     languages_json, leaf_threshold=None,
     agreement_label="Subject-Verb", head_role_label="head",
     subject_label="subject", nsubj_label="nsubj", overview_href="../",
-    stats_overview_href="../../index.html", show_diagnostics=True,
+    stats_overview_href="../../data.html", show_diagnostics=True,
 ):
     """The language-overview (deprel index) page of an agreement target: scatter plot, sortable per-language
     rows built client-side from languages_json (matching agreement_trees.pairs.diagnostics.diagnostics_row_to_json's
@@ -81,7 +81,7 @@ def create_html(
             if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
         }} catch (e) {{}}
     </script>
-    <title>MultiBLiMP – Morphological Agreement – {agreement_label}</title>
+    <title>MultiBLiMP – Agreement – {agreement_label}</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
     <script src="https://cdn.plot.ly/plotly-2.27.0.min.js"></script>
@@ -548,17 +548,17 @@ def create_html(
     <div class="container">
         <div class="header">
             <div class="title-section">
-                <h1>MultiBLiMP – Morphological Agreement – {agreement_label}</h1>
+                <h1>MultiBLiMP – Agreement – {agreement_label}</h1>
                 <div class="subtitle">
                     {subtitle_html}
                 </div>
             </div>
             <div class="top-controls">
-                <a href="{stats_overview_href}" class="back-btn" title="Back to the sva-dt dataset stats overview">
+                <a href="{stats_overview_href}" class="back-btn" title="Back to the dataset overview">
                     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
                         <path d="M10 12L6 8L10 4" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
                     </svg>
-                    Main Page
+                    Data overview
                 </a>
                 <a href="{overview_href}" class="back-btn">
                     <svg width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -693,7 +693,7 @@ def create_html(
                 <tr><td>% undefined feature</td><td># undefined feature (<code>undefined_features</code>)</td><td>swap_items</td><td><code>items_seen &minus; no_match &minus; no_inflection</code></td><td>item</td><td>Fires once per attempted swap_form.</td></tr>
                 <tr><td>% conflicting features</td><td># conflicting features (<code>conflicting_features</code>)</td><td>swap_items</td><td><code>items_seen &minus; no_match &minus; no_inflection</code></td><td>item</td><td>Fires once per attempted swap_form. Always 0 for NPA.</td></tr>
                 <tr><td>% ambiguous {subject_label}</td><td># ambiguous {subject_label} (<code>ambiguous_subjects</code>)</td><td>swap_items</td><td><code>items_seen &minus; no_match &minus; no_inflection</code></td><td>item</td><td>Fires once per attempted swap_form.</td></tr>
-                <tr><td>% invalid surface</td><td># invalid surface (<code>invalid_surface</code>)</td><td>swap_items</td><td><code>items_seen &minus; no_match &minus; no_inflection</code></td><td>item</td><td>A valid pair whose written form could not be built: the swapped word sits in a contraction (<code>de le</code> = <code>du</code>) and its new components are neither a known contraction nor an attested word sequence. Left out of the pairs.</td></tr>
+                <tr><td>% invalid surface</td><td># invalid surface (<code>invalid_surface</code>)</td><td>swap_items</td><td><code>items_seen &minus; no_match &minus; no_inflection</code></td><td>item</td><td>A valid pair whose written form could not be built: the swapped word sits in a contraction (<code>de le</code> = <code>du</code>) and its new components are not a known contraction (kept as separate words now; this bucket stays empty).</td></tr>
                 <tr><td>(not shown) extra_pairs</td><td><code>extra_pairs</code></td><td>swap_items</td><td><code>items_seen &minus; no_match &minus; no_inflection</code></td><td>item</td><td>Would collect otherwise-valid swaps (same eligibility as correct_swaps) that get capped once their FROM&rarr;TO combination hits the max_num_of_pairs limit. Always 0 today since create_pairs is never called with that limit set.</td></tr>
               </tbody>
             </table>

@@ -12,7 +12,7 @@
                    skipped unless something that feeds its index is newer than the index.
 
 Command lines: scripts/overview/generate_html_indexes.py and build_stats.py (rendering the stats into
-html/index.html is agreement_trees.report.html.html_dataset).
+html/data.html is agreement_trees.report.html.html_dataset).
 """
 import contextlib
 import glob
@@ -120,7 +120,7 @@ def _record(entry: dict, cond: str, subgroup: str, dir_rel: str) -> dict:
         # tree accuracy (None, not 0, when absent, so weighted averages skip it)
         acc=_nan_to_none(entry.get("acc")),
         # langUrl is the bare filename relative to the condition's index.html; dir_rel is that condition's
-        # directory under HTML_ROOT: joined into a path from html/index.html
+        # directory under HTML_ROOT: joined into a path from html/data.html
         url=(f"decision_trees/{dir_rel}/{lang_url}" if lang_url else None),
         # distinct lemmas / forms: a rough treebank-richness signal
         n_lemma=diag.get("nLemma") or 0, n_form=diag.get("nForm") or 0,
@@ -359,7 +359,7 @@ def build_stats(out_path: str = STATS_PATH) -> dict:
         c["samples"] += r["samples"]; c["pairs"] += r["pairs"]; c["langs"].add(lang)
 
         l = lang_agg[lang]
-        l["samples"] += r["samples"]; l["pairs"] += r["pairs"]; l["conds"].add(cond)
+        l["samples"] += r["samples"]; l["pairs"] += r["pairs"]; l["conds"].add((cond, r["subgroup"]))   # each NP role pair x feature counts
         l["n_lemma"] += r["n_lemma"]; l["n_form"] += r["n_form"]
 
         matrix_pairs[(lang, cond)] += r["pairs"]

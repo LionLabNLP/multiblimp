@@ -298,7 +298,7 @@ def generate_html_deprel_index(
         depth = 1
     overview_href = "../" * depth
     # decision_trees/ sits directly under the site root, where the stats overview lives
-    stats_overview_href = "../" * (depth + 1) + "index.html"
+    stats_overview_href = "../" * (depth + 1) + "data.html"
 
     # trivial / too-small languages from the placeholder pages (also "too few samples to fit a tree")
     trivial_langs = {}

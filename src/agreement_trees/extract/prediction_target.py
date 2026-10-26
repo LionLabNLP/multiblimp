@@ -23,14 +23,6 @@ def filter_head_feats(value, exclude=None, require=None):
     return True
 
 
-def filter_other_verb_form(value):
-    """head_feats predicate for the "other" verb forms: anything that is not, unambiguously, Fin or Part
-    (infinitive, supine, converb, ... a missing VerbForm, or several values)."""
-    if value is None or not isinstance(value, str) or "," in value:
-        return True
-    return not value.startswith(("Fin", "Part"))
-
-
 @dataclass
 class PredictionTarget:
     """What to predict: the child deprel(s) of a head, optionally restricted by the head's deprel, POS or
@@ -51,7 +43,7 @@ class PredictionTarget:
     # child's POS: one list for all children or {deprel: list}
     child_pos: list[str] | dict[str, list[str]] | None = None
 
-    # {feature: predicate on the head's value}, e.g. {"VerbForm": filter_other_verb_form}
+    # {feature: predicate on the head's value}, e.g. {"VerbForm": partial(filter_head_feats, require="Inf")}
     head_feats: dict[str, Callable] | None = None
 
     # feature to swap inflection for

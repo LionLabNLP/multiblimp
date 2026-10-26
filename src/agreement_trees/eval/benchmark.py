@@ -1,12 +1,19 @@
-"""Pair ids, loading and downsampling of correct_swaps, and the benchmark directory built from them."""
+"""Pair ids, loading of correct_swaps, and the benchmark directory built from them (sampling: multiblimp.downsample)."""
 import hashlib
 import json
 import os
+from collections import defaultdict
 from datetime import date
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
+
+from multiblimp.downsample import (
+    CATEGORICAL, LEMMA_CAP, MIN_PAIRS, N_ITEMS, Condition, balance_columns, balance_features, condition_roles, language_seed,
+    select_pairs,
+)
 
 PAIR_COLUMNS = ["treebank", "sent_id", "sen_str", "wrong_sen_str", "swap_kind", "swap_idx", "swap_ufeat", "pair_key"]
 SURFACE_FILE = "surface_strings.parquet"
@@ -69,71 +76,149 @@ def load_pairs(pairs_dir, langs=None, conds=None) -> pd.DataFrame:
     return pairs.drop_duplicates("pair_id").reset_index(drop=True)
 
 
-def downsample(pairs: pd.DataFrame, max_per_cond: int = 1000, seed: int = 0) -> pd.DataFrame:
-    """At most max_per_cond pairs per (lang, cond), taken round-robin over treebanks in a pair_id-hash order.
-
-    Deterministic, and independent of the other rows: a pair's position depends only on its own id and
-    its rank among its treebank's ids, so data changes only move the pairs next to the changed ones.
-    """
+def cap_per_cond(pairs: pd.DataFrame, max_per_cond: int, seed: int = 0) -> pd.DataFrame:
+    """At most max_per_cond pairs per (lang, cond), in sha1(seed|pair_id) order: a quick, deterministic cap for
+    test runs (eval_model.py --max_per_cond). The benchmark itself is sampled by build_benchmark."""
     order = pairs["pair_id"].map(lambda pid: _hash(f"{seed}|{pid}", 8))
-    ranked = pairs.assign(_order=order)
-    # the same sentence pair under several sentence ids (duplicated sentences, overlapping treebanks) counts once
-    ranked = ranked.sort_values("_order").drop_duplicates(["lang", "cond", "sen_str", "wrong_sen_str"])
-    ranked["_rank"] = ranked.groupby(["lang", "cond", "treebank"])["_order"].rank(method="first")
-    ranked = ranked.sort_values(["lang", "cond", "_rank", "_order"])
+    ranked = pairs.assign(_order=order).sort_values("_order")
     kept = ranked.groupby(["lang", "cond"]).head(max_per_cond)
-    return kept.drop(columns=["_order", "_rank"]).sort_values("pair_id").reset_index(drop=True)
+    return kept.drop(columns="_order").sort_values("pair_id").reset_index(drop=True)
 
 
-def build_benchmark(pairs_dir, out_dir, langs=None, conds=None, max_per_cond=1000, seed=0):
-    """Downsample the correct_swaps under pairs_dir into out_dir, keeping the <cond>/<cond>_<deprel>/<lang>/ layout.
+MARKERS = (*CATEGORICAL, "second_chance", "surface_status")
+DISTANCE_LABELS = ("1", "2", "3-4", "5-8", "9+")
 
-    Each file holds the kept rows with all their columns plus pair_id and sen_hash, with the surface strings
-    applied; meta.json is copied without its HTML examples. manifest.json records the settings and the
-    treebank counts before and after."""
-    pairs = load_pairs(pairs_dir, langs, conds)
-    kept = downsample(pairs, max_per_cond, seed)
-    print(f"{len(kept)} of {len(pairs)} pairs kept")
 
-    # one source file at a time: the full frames are ~1,350 columns wide
-    for path, lang, cond, deprel in pair_files(pairs_dir, langs, conds):
-        keep_ids = set(kept.loc[(kept["lang"] == lang) & (kept["cond"] == cond) & (kept["deprel"] == deprel), "pair_id"])
-        if not keep_ids:
+def _clean(path: Path, columns):
+    """The given columns of a correct_swaps file with the surface strings applied and repeated sentence pairs
+    dropped once."""
+    df = pq.read_table(path, columns=columns).to_pandas()
+    if (path.parent / SURFACE_FILE).exists():
+        df = apply_surface(df, path.parent / SURFACE_FILE)
+    # the same sentence pair under several sentence ids (duplicated sentences, overlapping treebanks) counts once
+    return df.drop_duplicates(["sen_str", "wrong_sen_str"]).drop_duplicates("pair_key").reset_index(drop=True)
+
+
+def _ambiguous(features: pd.DataFrame) -> int:
+    """Pairs whose swap value is ambiguous (feature_vals like "3 -> 1|2": the swapped form also spells another value)."""
+    return int(features["feature_vals"].str.contains("|", regex=False).sum())
+
+
+def _distribution(features: pd.DataFrame) -> dict:
+    out = {}
+    for marker in MARKERS:
+        if marker not in features:
             continue
-        df = pd.read_parquet(path)
-        if (path.parent / SURFACE_FILE).exists():
-            df = apply_surface(df, path.parent / SURFACE_FILE)
-        df.insert(0, "pair_id", [pair_id(lang, cond, deprel, key) for key in df["pair_key"]])
-        df["sen_hash"] = [_hash(sen, 12) for sen in df["sen_str"]]
-        df = df[df["pair_id"].isin(keep_ids)].drop_duplicates("pair_id")
+        values = features[marker].astype(str)
+        if marker == "distance":
+            values = values.map(lambda v: DISTANCE_LABELS[int(v)])
+        out[marker] = {k: int(v) for k, v in values.value_counts().items()}
+    return out
 
-        target = os.path.join(out_dir, *path.relative_to(pairs_dir).parts[:-1])
-        os.makedirs(target, exist_ok=True)
-        df.to_parquet(os.path.join(target, "correct_swaps.parquet"), index=False)
 
-        meta_path = path.parent / "meta.json"
-        if meta_path.exists():
-            meta = json.loads(meta_path.read_text())
-            meta.pop("examples", None)
-            with open(os.path.join(target, "meta.json"), "w") as f:
-                json.dump(meta, f, indent=1)
+def build_benchmark(pairs_dir, out_dir, langs=None, conds=None, n_items=N_ITEMS, lemma_cap=LEMMA_CAP, seed=0,
+                    min_pairs=MIN_PAIRS):
+    """Sample up to n_items pairs per language across all its conditions (multiblimp.downsample) from the
+    correct_swaps under pairs_dir into out_dir, keeping the <cond>/<cond>_<deprel>/<lang>/ layout.
 
-    def counts(df):
-        return {
-            f"{lang}/{cond}": {tb: int(n) for tb, n in grp["treebank"].value_counts().items()}
-            for (lang, cond), grp in df.groupby(["lang", "cond"])
+    Each file holds the chosen rows with all their columns plus pair_id and sen_hash, with the surface strings
+    applied; meta.json is copied without its HTML examples. manifest.json records the settings and the
+    treebank counts before and after (and the languages left out for having fewer than min_pairs pairs); stats.json the per language x condition counts and marker distributions
+    (the benchmark page, scripts/benchmark/render_page.py, is built from it)."""
+    by_lang = defaultdict(list)
+    for path, lang, cond, deprel in pair_files(pairs_dir, langs, conds):
+        if pq.ParquetFile(path).metadata.num_rows:   # empty buckets are written without columns
+            by_lang[lang].append((path, cond, deprel))
+
+    cells, languages, before, after, n_pairs = [], {}, {}, {}, 0
+    too_small = {}
+    for lang, files in sorted(by_lang.items()):
+        conditions, kept_files = [], []
+        for path, cond, deprel in files:
+            name = f"{cond}/{deprel}" if deprel else cond
+            roles = condition_roles(cond, deprel)
+            names = set(pq.ParquetFile(path).schema_arrow.names)
+            df = _clean(path, [c for c in balance_columns(roles) + ["wrong_sen_str"] if c in names])
+            if not len(df):
+                continue
+            conditions.append(Condition(name, roles, balance_features(df, roles, name)))
+            kept_files.append((path, cond, deprel))
+        if not conditions:
+            continue
+        available = sum(len(c) for c in conditions)
+        if available <= n_items:
+            chosen = {c.name: np.arange(len(c)) for c in conditions}
+            limits = {"lemma_cap_count": None, "sentence_limit": None}
+        else:
+            chosen, limits = select_pairs(conditions, n_items, lemma_cap, np.random.default_rng(language_seed(lang, seed)))
+        total = sum(len(v) for v in chosen.values())
+        if total < min_pairs:
+            too_small[lang] = total
+            cells = [c for c in cells if c["lang"] != lang]
+            print(f"{lang}: {total} pairs, left out", flush=True)
+            continue
+        n_pairs += total
+
+        selected_rows = []
+        for (path, cond, deprel), c in zip(kept_files, conditions):
+            rows = chosen[c.name]
+            picked = c.features.iloc[rows]
+            keep_ids = {pair_id(lang, cond, deprel, key) for key in picked["pair_key"]}
+            cells.append({"lang": lang, "cond": cond, "deprel": deprel, "available": len(c), "selected": len(rows),
+                          "ambiguous": _ambiguous(c.features), "ambiguous_selected": _ambiguous(picked),
+                          "available_markers": _distribution(c.features), "selected_markers": _distribution(picked)})
+            selected_rows.append(picked)
+            before[f"{lang}/{cond}"] = {tb: int(n) for tb, n in c.features["treebank"].value_counts().items()}
+            after[f"{lang}/{cond}"] = {tb: int(n) for tb, n in picked["treebank"].value_counts().items()}
+            if not keep_ids:
+                continue
+            df = pd.read_parquet(path)
+            if (path.parent / SURFACE_FILE).exists():
+                df = apply_surface(df, path.parent / SURFACE_FILE)
+            df.insert(0, "pair_id", [pair_id(lang, cond, deprel, key) for key in df["pair_key"]])
+            df["sen_hash"] = [_hash(sen, 12) for sen in df["sen_str"]]
+            df = df[df["pair_id"].isin(keep_ids)].drop_duplicates("pair_id")
+
+            target = os.path.join(out_dir, *path.relative_to(pairs_dir).parts[:-1])
+            os.makedirs(target, exist_ok=True)
+            df.to_parquet(os.path.join(target, "correct_swaps.parquet"), index=False)
+            meta_path = path.parent / "meta.json"
+            if meta_path.exists():
+                meta = json.loads(meta_path.read_text())
+                meta.pop("examples", None)
+                with open(os.path.join(target, "meta.json"), "w") as f:
+                    json.dump(meta, f, indent=1)
+
+        chosen_all = pd.concat(selected_rows)
+        languages[lang] = {
+            "available": available, "selected": int(len(chosen_all)), "kept_all": available <= n_items, **limits,
+            "conditions": sum(1 for r in selected_rows if len(r)),
+            "treebanks": int(chosen_all["treebank"].nunique()),
+            "head_lemmas": int(chosen_all["lemma_a"].nunique()), "child_lemmas": int(chosen_all["lemma_b"].nunique()),
         }
+        print(f"{lang}: {len(chosen_all)} of {available} pairs", flush=True)
 
+    os.makedirs(out_dir, exist_ok=True)
     manifest = {
         "built": date.today().isoformat(),
         "source": os.path.abspath(pairs_dir),
-        "max_per_cond": max_per_cond,
+        "n_items": n_items,
+        "lemma_cap": lemma_cap,
         "seed": seed,
-        "method": "round-robin over treebanks in sha1(seed|pair_id) order",
-        "n_pairs": len(kept),
-        "treebank_counts_before": counts(pairs),
-        "treebank_counts_after": counts(kept),
+        "method": "per language: conditions served round-robin; within a condition a greedy draw with weight "
+                  "prod(1 / (1 + times the value is already sampled)) over " + ", ".join((*CATEGORICAL, "lemmas")) +
+                  "; a lemma takes at most lemma_cap of the sample, a sentence one pair (both relaxed if the quota is not met); pairs with an ambiguous swap value (feature_vals with '|') are drawn only once a condition has no other pair left and count fractionally for each of their values",
+        "n_pairs": n_pairs,
+        "ambiguous_available": sum(c["ambiguous"] for c in cells),
+        "ambiguous_selected": sum(c["ambiguous_selected"] for c in cells),
+        "min_pairs": min_pairs,
+        "languages_left_out": too_small,
+        "treebank_counts_before": before,
+        "treebank_counts_after": after,
     }
-    os.makedirs(out_dir, exist_ok=True)
     with open(os.path.join(out_dir, "manifest.json"), "w") as f:
         json.dump(manifest, f, indent=1)
+    with open(os.path.join(out_dir, "stats.json"), "w") as f:
+        json.dump({"built": manifest["built"], "n_items": n_items, "lemma_cap": lemma_cap, "seed": seed,
+                   "languages": languages, "cells": cells}, f)
+    return manifest

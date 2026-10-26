@@ -12,7 +12,7 @@ whose sentence contains a multiword token, or whose swapped word may now form on
        otherwise look up the swapped components' contracted form in the language's spans:
        i)  a contracted form exists: use it if it is more frequent than the uncontracted component sequence
            in the language's treebanks (not counting span components), else keep the uncontracted words;
-       ii) none exists: keep the uncontracted words if that sequence occurs in the treebanks, else drop the pair.
+       ii) none exists: keep the uncontracted words (whether or not that sequence occurs in the treebanks).
 A contraction only counts for a swapped word if the contracted span has that word's UPOS at that position.
 The statistics are those of the language's non-excluded treebanks (agreement_trees.eval.mwt_cache).
 """
@@ -27,7 +27,6 @@ from agreement_trees.eval.conllu_spans import Unit, language_of, norm, recase, r
 from agreement_trees.eval.mwt_cache import load_stats
 from agreement_trees.pairs.sentence_text import add_sentence_strings
 
-DROPPED = "dropped:no_valid_form"
 # a plain word that now fuses with its neighbour (a') is merged only where the contraction is the norm: seen at least
 # MERGE_MIN_CONTRACTED times, with the plain sequence at most MERGE_MAX_PLAIN_SHARE of that (de le -> du, but not the
 # optional enclitic hyphen of pode se -> pode-se, which the sentence's own spelling does not use)
@@ -145,8 +144,7 @@ def validate_language(stats, rows, pos_guard: bool = True, strict_merge: bool = 
         elif uncontracted_count > 0:
             chosen, status = plain, "uncontracted_attested"
         else:
-            final[i] = (None, None, DROPPED)
-            continue
+            chosen, status = plain, "uncontracted_unattested"
         final[i] = (sen, (before + chosen + (" " if u.space else "") + after).strip(), status)
 
     for _, _, status in final.values():
@@ -192,20 +190,17 @@ def validate_frame(frame: pd.DataFrame, pos_guard: bool = True, stats_for=load_s
 
 def with_surface_strings(frame: pd.DataFrame, pos_guard: bool = True):
     """(kept, invalid): `frame` (a correct_swaps frame after add_sentence_strings, changed in place) with the written forms
-    in sen_str and wrong_sen_str and a surface_status column, and the pairs with no valid written form split off. A frame
+    in sen_str and wrong_sen_str and a surface_status column; `invalid` is empty, as every pair has a written form. A frame
     without the sentence-location columns (an old cache) is returned as it is."""
     if not len(frame) or not {"conllu_file", "conllu_sent_line", "swap_kind", "sen"} <= set(frame.columns):
         return frame, frame.iloc[0:0]
     result, _ = validate_frame(frame, pos_guard)
     status = result["status"]
-    changed = status.notna() & (status != DROPPED)
+    changed = status.notna()
     frame.loc[changed, "sen_str"] = result.loc[changed, "sen_final"]
     frame.loc[changed, "wrong_sen_str"] = result.loc[changed, "wrong_final"]
     frame["surface_status"] = status.fillna("plain")
-    dropped = (status == DROPPED).to_numpy()
-    if not dropped.any():
-        return frame, frame.iloc[0:0]
-    return frame[~dropped].reset_index(drop=True), frame[dropped].reset_index(drop=True)
+    return frame, frame.iloc[0:0]
 
 
 def read_pair_frame(path) -> pd.DataFrame:

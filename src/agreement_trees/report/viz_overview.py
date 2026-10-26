@@ -269,7 +269,7 @@ def generate_html_overview_index(html_directory: str) -> None:
         return _grid_html(subgroups[None])
 
     # the VP groups in their fixed reading order, other named groups alphabetically, "Other" last
-    group_order = [g for g in _GROUP_PREFIXES.values() if g in groups]
+    group_order = [g for g in dict.fromkeys(_GROUP_PREFIXES.values()) if g in groups]
     group_order += sorted(g for g in groups if g not in group_order and g != "Other")
     if "Other" in groups:
         group_order.append("Other")

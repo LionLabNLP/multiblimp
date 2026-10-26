@@ -25,7 +25,7 @@ from multiblimp.ud_inflector import load_ud_inflector, nominal_inflector
 from multiblimp.ud_table import ud_lookup_table, um_lookup_table
 from agreement_trees.pipeline_utils import parquet_current, sentinel_current, write_sentinel
 from agreement_trees.config import lexical_features
-from agreement_trees.taxonomy import FEATURE_SUFFIXES
+from agreement_trees.taxonomy import FEATURE_SUFFIXES, OTHER_VERB_FORMS
 from multiblimp.config import (
     HTML_DECISION_TREES_DIR, OUTPUT_DECISION_TREES_DIR, OUTPUT_MINIMAL_PAIRS_DIR,
     OUTPUT_DIAGNOSTICS_DIR,
@@ -48,7 +48,7 @@ _DEPREL_ROLE_LABELS = {
 _TARGET_PREFIX_GROUP_LABELS = {
     "sv": "Subject-Verb",
     "sp": "Subject-Participle",
-    "sx": "Subject-Other verb forms",
+    **{prefix: f"Subject-{label}" for prefix, (_, label) in OTHER_VERB_FORMS.items()},
     "ov": "Object-Verb",
     "iov": "Indirect-Object-Verb",
     "sa": "Subject-Auxiliary",
@@ -59,7 +59,7 @@ _TARGET_PREFIX_GROUP_LABELS = {
 }
 
 
-_CONDITION_ID_RE = re.compile(r"^(iov|iop|ioa|sv|sp|sx|sa|ov|op|oa)([A-Z][A-Za-z]*)")
+_CONDITION_ID_RE = re.compile(r"^(iov|iop|ioa|sv|sp|sx[a-z]+|sa|ov|op|oa)([A-Z][A-Za-z]*)")
 
 
 def _split_condition_id(condition_id):
