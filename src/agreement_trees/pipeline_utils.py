@@ -324,7 +324,7 @@ def wilson_lower_bound(both: int, total: int, z: float = 1.96) -> float:
 
 def passes_agreement_bar(yes: int, no: int, total: int, wilson_floor: float = 0.01,
                          min_both: int = 10, min_yes: int = 10,
-                         yes_rate_floor: float = 0.15, min_agree_share: float = 0.0) -> bool:
+                         yes_rate_floor: float = 0.15) -> bool:
     """Whether a (target_col, lang) is worth attempting: enough jointly-tagged
     rows (both=yes+no, Wilson-floored against the co-occurrence total), AND
     enough actual "yes" rows, whose Wilson lower bound against both must clear
@@ -333,10 +333,8 @@ def passes_agreement_bar(yes: int, no: int, total: int, wilson_floor: float = 0.
     is tagged on both sides constantly but almost always with different
     values ("no"), so it clears the both-based bar without being agreement."""
     both = yes + no
-    # min_agree_share: the agreeing share of the jointly-tagged rows must be strictly above it (0.5: a majority)
     return (both >= min_both and wilson_lower_bound(both, total) >= wilson_floor
-            and yes >= min_yes and wilson_lower_bound(yes, both) >= yes_rate_floor
-            and yes > min_agree_share * both)
+            and yes >= min_yes and wilson_lower_bound(yes, both) >= yes_rate_floor)
 
 
 # ---- Version stamp for the treebank feature caches (word_order and np_instances parquets, and their .empty.json sentinels). ----

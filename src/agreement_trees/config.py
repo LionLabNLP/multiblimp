@@ -49,7 +49,6 @@ def load_agreement_config(path: str | None = None) -> dict:
     if bad_modes:
         raise SystemExit(f"{path}: modes must be 'vp' and/or 'np', got {sorted(bad_modes)}")
     config["vp"]["families"] = expand_families(config["vp"]["families"])
-    config["scan"]["min_agree_share_families"] = expand_families(config["scan"]["min_agree_share_families"])
     return config
 
 

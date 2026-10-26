@@ -18,3 +18,5 @@ transformers
 lm_eval
 unidecode
 umsc
+udapi
+regex

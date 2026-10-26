@@ -222,10 +222,18 @@ def unit_key(mode: str, family: str | None, lang: str) -> str:
     return f"{family}/{lang}" if mode == "vp" else lang
 
 
+# settings an earlier version recorded in the saved scans; they no longer count when a saved scan is compared
+RETIRED_THRESHOLD_KEYS = ("min_agree_share", "min_agree_share_families")
+
+
 def scan_thresholds(scan_cfg: dict) -> dict:
-    keys = ("wilson_floor", "min_both", "min_yes", "yes_rate_floor", "split_head_upos", "min_agree_share")
-    return {**{k: scan_cfg[k] for k in keys}, "exclude_features": sorted(scan_cfg["exclude_features"]),
-            "min_agree_share_families": sorted(scan_cfg["min_agree_share_families"])}
+    keys = ("wilson_floor", "min_both", "min_yes", "yes_rate_floor", "split_head_upos")
+    return {**{k: scan_cfg[k] for k in keys}, "exclude_features": sorted(scan_cfg["exclude_features"])}
+
+
+def same_thresholds(saved: dict | None, current: dict) -> bool:
+    """Whether a saved scan's settings equal the current ones, ignoring the retired keys."""
+    return {k: v for k, v in (saved or {}).items() if k not in RETIRED_THRESHOLD_KEYS} == current
 
 
 def scan_vp(langs: list[str] | None = None, families: list[str] | None = None,
@@ -295,14 +303,11 @@ def build_summary(stats: dict, mode: str) -> pd.DataFrame:
     return df.reset_index(drop=True)
 
 
-def langs_passing(entry: dict, scan_cfg: dict, key: str = "") -> dict[str, Counter]:
-    """The languages of a scan entry (key: its target, "sxinf:Number") that clear the bar; the families in
-    scan_cfg["min_agree_share_families"] must also have a majority of agreeing rows."""
-    share = scan_cfg["min_agree_share"] if key.split(":", 1)[0] in scan_cfg["min_agree_share_families"] else 0.0
+def langs_passing(entry: dict, scan_cfg: dict) -> dict[str, Counter]:
     return {
         lang: c for lang, c in sorted(entry["lang_counts"].items())
         if passes_agreement_bar(c["yes"], c["no"], c["total"], scan_cfg["wilson_floor"],
-                                scan_cfg["min_both"], scan_cfg["min_yes"], scan_cfg["yes_rate_floor"], share)
+                                scan_cfg["min_both"], scan_cfg["min_yes"], scan_cfg["yes_rate_floor"])
     }
 
 
@@ -313,7 +318,7 @@ def build_lang_config(stats: dict, scan_cfg: dict) -> dict[str, dict[str, dict]]
     for key, entry in stats.items():
         role_a, role_b = entry["roles"]
         lang_entries = {}
-        for lang, c in langs_passing(entry, scan_cfg, key).items():
+        for lang, c in langs_passing(entry, scan_cfg).items():
             total = c["total"]
 
             def cell(n, total=total):
@@ -382,7 +387,7 @@ def save_results(mode: str, results: dict, units: dict, thresholds: dict, scanne
     only what it scanned, unless the thresholds changed: then nothing older is valid
     and the file starts over."""
     old = load_scan_results(mode)
-    if old and old.get("thresholds") != thresholds:
+    if old and not same_thresholds(old.get("thresholds"), thresholds):
         (log.info if log else print)(
             f"{mode}: thresholds changed since the saved scan; starting the file over "
             "(languages not scanned now count as unscanned)")
@@ -421,7 +426,7 @@ def resolve_target_langs(mode: str, target: str, universe: list[str], scan_cfg: 
     A language without a current cache file (empty, missing, outdated) is not
     considered. Returns (languages, info with n_cached, n_saved, n_scanned_now)."""
     saved = load_scan_results(mode)
-    current = saved.get("thresholds") == scan_thresholds(scan_cfg)
+    current = same_thresholds(saved.get("thresholds"), scan_thresholds(scan_cfg))
     scanned = saved.get("scanned", {}) if current else {}
     key = vp_scan_key(*parse_vp_target(target)) if mode == "vp" else target
     qualifying = saved.get("targets", {}).get(key, {}) if current else {}

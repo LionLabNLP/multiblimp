@@ -10,6 +10,11 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fi
 # Input data (UD/UniMorph checkouts and pickles, scan configs); never redirected by MULTIBLIMP_RUN_DIR.
 RESOURCE_DIR = os.path.join(REPO_ROOT, "resources")
 
+# Checkout of UniversalDependencies/tools (validate.py + udtools); override with UD_TOOLS_DIR.
+UD_TOOLS_DIR = os.environ.get("UD_TOOLS_DIR") or os.path.join(os.path.dirname(REPO_ROOT), "tools")
+# Per-treebank validator results (see multiblimp.validation); input-side data like the pickles.
+VALIDATION_DIR = os.path.join(RESOURCE_DIR, "ud", "validation")
+
 # MULTIBLIMP_RUN_DIR redirects every generated artifact (output/, html/,
 # treebank_features/) into that directory, e.g. for a single-language run
 # that must not touch the main caches. Resources stay in resources/.

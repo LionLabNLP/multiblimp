@@ -2,5 +2,97 @@
   "ud_tables": {
     "dup_form_threshold": 3.0,
     "dup_feat_threshold": 10.0
+  },
+  "validation": {
+    "level": 5,
+    "default_class": "cosmetic",
+    "classes": {
+      "malformed": {
+        "action": "drop_sentence",
+        "description": "Columns, relation labels or word forms are broken or do not match the text; the sentence cannot be trusted."
+      },
+      "agreement_relevant": {
+        "action": "drop_sentence",
+        "description": "Mis-annotation of the relations or auxiliaries the agreement extraction reads (subjects, aux, cop)."
+      },
+      "feature_legality": {
+        "action": "skip_token",
+        "description": "The token's feature bundle is not valid for its language/UPOS; the token is left out of the UD tables, the sentence stays."
+      },
+      "tag_quality": {
+        "action": "keep",
+        "description": "Missing or unusual lexical annotation that does not change what we extract; reported only."
+      },
+      "cosmetic": {
+        "action": "keep",
+        "description": "Format, metadata and other relations the pipeline does not read; reported only."
+      }
+    },
+    "testids": {
+      "invalid-feature": "malformed",
+      "invalid-deprel": "malformed",
+      "unknown-udeprel": "malformed",
+      "empty-column": "malformed",
+      "text-form-mismatch": "malformed",
+      "text-extra-chars": "malformed",
+      "goeswith-lemma": "malformed",
+      "goeswith-upos": "malformed",
+      "goeswith-missing-typo": "malformed",
+      "goeswith-gap": "malformed",
+      "leaf-goeswith": "malformed",
+      "right-to-left-goeswith": "malformed",
+      "trailing-whitespace": "malformed",
+      "leading-whitespace": "malformed",
+      "repeated-whitespace": "malformed",
+      "invalid-whitespace-mwt": "malformed",
+      "too-many-subjects": "agreement_relevant",
+      "rel-upos-aux": "agreement_relevant",
+      "leaf-aux-cop": "agreement_relevant",
+      "rel-upos-cop": "agreement_relevant",
+      "rel-upos-expl": "agreement_relevant",
+      "aux-lemma": "agreement_relevant",
+      "cop-lemma": "agreement_relevant",
+      "feature-unknown": "feature_legality",
+      "feature-value-unknown": "feature_legality",
+      "feature-upos-not-permitted": "feature_legality",
+      "feature-value-upos-not-permitted": "feature_legality",
+      "invalid-word-with-space": "feature_legality",
+      "pron-det-without-prontype": "tag_quality",
+      "verbform-fin-without-mood": "tag_quality",
+      "mood-without-verbform-fin": "tag_quality",
+      "flat-foreign-upos-feats": "tag_quality",
+      "fixed-without-extpos": "tag_quality",
+      "unknown-deprel": "tag_quality",
+      "fixed-gap": "cosmetic",
+      "obl-should-be-nmod": "cosmetic",
+      "too-many-objects": "cosmetic",
+      "orphan-parent": "cosmetic",
+      "misc-attr-typo": "cosmetic",
+      "misc-extra-space": "cosmetic",
+      "empty-misc-key": "cosmetic",
+      "nospaceafter-yes": "cosmetic",
+      "spaceafter-value": "cosmetic",
+      "text-trailing-whitespace": "cosmetic",
+      "missing-sent-id": "cosmetic",
+      "invalid-sent-id": "cosmetic",
+      "unknown-edeprel": "cosmetic",
+      "leaf-det": "cosmetic",
+      "leaf-clf": "cosmetic",
+      "leaf-punct": "cosmetic",
+      "leaf-cc": "cosmetic",
+      "right-to-left-conj": "cosmetic",
+      "right-to-left-flat": "cosmetic",
+      "right-to-left-appos": "cosmetic",
+      "rel-upos-advmod": "cosmetic",
+      "rel-upos-cc": "cosmetic",
+      "rel-upos-mark": "cosmetic",
+      "rel-upos-det": "cosmetic",
+      "rel-upos-punct": "cosmetic",
+      "rel-upos-nummod": "cosmetic",
+      "rel-upos-case": "cosmetic",
+      "rel-upos-fixed": "cosmetic",
+      "upos-rel-punct": "cosmetic",
+      "punct-causes-nonproj": "cosmetic"
+    }
   }
 }

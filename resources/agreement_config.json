@@ -36,8 +36,6 @@
     "min_both": 10,
     "min_yes": 10,
     "yes_rate_floor": 0.15,
-    "min_agree_share": 0.5,
-    "min_agree_share_families": ["other"],
     "min_langs": 1,
     "split_head_upos": false,
     "exclude_features": [
