@@ -776,7 +776,7 @@ def create_html(
       {{ key: "undefined_feature", label: "undefined feature", desc: "The target feature was undefined or missing for this form." }},
       {{ key: "ambiguous_subject", label: "ambiguous {subject_label}", desc: "The row's {subject_label} couldn't be uniquely resolved." }},
       {{ key: "conflicting_features", label: "conflicting features", desc: "The reinflected form directly opposes the original on another feature (or adds an argument slot or feature dimension), so it isn't a minimal pair." }},
-      {{ key: "invalid_surface", label: "invalid surface", desc: "The swapped word sits in a contraction (de le = du) and the new components have no valid written form, so the pair is left out." }},
+      {{ key: "invalid_surface", label: "invalid surface", desc: "The swapped word sits in a contraction (de le = du) and the new components have no valid written form, or the contraction spells the original and the swapped form alike (Sicilian pî), so the pair is left out." }},
     ];
 
     // Fixed left-to-right order for the distribution bar -- matches

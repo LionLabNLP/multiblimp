@@ -6,13 +6,13 @@ import difflib
 import json
 import os
 import unicodedata
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
 
-from agreement_trees.eval.benchmark import pair_files
-from multiblimp.downsample import balance_columns, balance_features, condition_roles
+from multiblimp.downsample import condition_roles
 from agreement_trees.taxonomy import (
     FEATURE_SUFFIXES, GROUP_PREFIXES, NPA_FEATURE_NAMES, OTHER_VERB_FORMS, other_verb_form, NPA_ROLE_ORDER, NPA_ROLE_PROSE, classify_flat_condition, npa_subgroup_label,
 )
@@ -68,7 +68,6 @@ def condition_info(cond: str) -> dict:
             "category": "Noun Phrase", "head": pair, "feature": feature, "sort_key": key}
 
 
-PAIR_EXTRA_COLUMNS = ["pair_id", "wrong_sen_str", "swap_ufeat", "swap_kind", "sen"]
 
 
 def _bare(text: str) -> str:
@@ -134,36 +133,30 @@ def write_pair_files(bench_dir: str, out_dir: str) -> dict:
     uf swapped feature, sk swapped role, tb treebank, sid sent_id, sc second chance, ss written-form status,
     at attractor class, d distance in tokens, la/lb the two lemmas, ci the controller's word position(s) in s. Returns {language: number of pairs}."""
     os.makedirs(out_dir, exist_ok=True)
-    by_lang = {}
-    for path, lang, cond, deprel in pair_files(bench_dir):
-        by_lang.setdefault(lang, []).append((path, cond, deprel))
+    columns = ["pair_id", "phenomenon", "deprel", "treebank", "sent_id", "sen_tokens", "sen", "wrong_sen", "feature_vals",
+               "swap_ufeat", "swap_kind", "second_chance", "surface_status", "attractors", "idx_a", "idx_b", "lemma_a", "lemma_b"]
     counts = {}
-    for lang, files in sorted(by_lang.items()):
+    for path in sorted(Path(bench_dir).glob("*.parquet")):
+        lang = path.stem
+        df = pq.read_table(path, columns=[c for c in columns if c in set(pq.ParquetFile(path).schema_arrow.names)]).to_pandas()
         conditions, pairs = {}, []
-        for path, cond, deprel in files:
+        for (cond, deprel), group in df.groupby(["phenomenon", "deprel"], sort=True):
             roles = condition_roles(cond, deprel)
-            names = set(pq.ParquetFile(path).schema_arrow.names)
-            wanted = [c for c in dict.fromkeys(balance_columns(roles) + PAIR_EXTRA_COLUMNS) if c in names]
-            df = pq.read_table(path, columns=wanted).to_pandas()
-            feats = balance_features(df, roles, cond)
-            idx_a, idx_b = (pd.to_numeric(df.get(f"{r}_idx"), errors="coerce") for r in roles)
-            gap = (idx_a - idx_b).abs()
             info = condition_info(cond)
-            conditions[cond] = {"label": info["label"], "dir": os.path.relpath(os.path.dirname(path), bench_dir),
-                                "roles": list(roles), "n": int(len(df))}
-            for i in range(len(df)):
-                row = df.iloc[i]
-                g = gap.iloc[i]
+            conditions[cond] = {"label": info["label"], "dir": f"features/{lang}.parquet", "roles": list(roles), "n": int(len(group))}
+            for _, row in group.iterrows():
+                idx_a, idx_b = (pd.to_numeric(row.get(c), errors="coerce") for c in ("idx_a", "idx_b"))
+                gap = abs(idx_a - idx_b)
                 swapped = str(row.get("swap_kind"))
-                other = [r for r in roles if r.lower() != swapped.lower()]
-                controller = other[0] if len(other) == 1 else None
-                ci = controller_word(row["sen"], str(row["sen_str"]).split(), row.get(f"{controller}_idx")) if controller else None
+                other = [i for i, r in enumerate(roles) if r.lower() != swapped.lower()]
+                controller_idx = (idx_a, idx_b)[other[0]] if len(other) == 1 else None
+                ci = controller_word(row["sen_tokens"], str(row["sen"]).split(), controller_idx) if controller_idx is not None else None
                 pairs.append({
-                    "c": cond, "id": row["pair_id"], "s": row["sen_str"], "w": row["wrong_sen_str"], "fv": row["feature_vals"],
+                    "c": cond, "id": row["pair_id"], "s": row["sen"], "w": row["wrong_sen"], "fv": row["feature_vals"],
                     "uf": row.get("swap_ufeat"), "sk": row.get("swap_kind"), "tb": row["treebank"], "sid": str(row["sent_id"]),
-                    "sc": int(bool(feats["second_chance"].iloc[i])), "ss": row.get("surface_status"),
-                    "at": feats["attractors"].iloc[i], "d": None if pd.isna(g) else int(g),
-                    "la": feats["lemma_a"].iloc[i], "lb": feats["lemma_b"].iloc[i], "ci": ci,
+                    "sc": int(bool(row.get("second_chance"))), "ss": row.get("surface_status"),
+                    "at": row.get("attractors"), "d": None if pd.isna(gap) else int(gap),
+                    "la": row.get("lemma_a"), "lb": row.get("lemma_b"), "ci": ci,
                 })
         clean = lambda v: None if (v is None or (isinstance(v, float) and np.isnan(v))) else v
         pairs = [{k: clean(v) for k, v in p.items()} for p in pairs]
@@ -362,23 +355,24 @@ table.cols td:first-child { white-space:nowrap; font-family:ui-monospace,monospa
 </section>
 
 <section class="card" id="use"><h2>Using the data</h2>
-  <p class="small">The benchmark is a directory of parquet files, one per language and condition, next to a <code>manifest.json</code> (settings, treebank counts before and after, languages left out) and a <code>stats.json</code> (the counts and distributions on this page).</p>
+  <p class="small">The benchmark is a directory with two parquet files per language, joined by <code>pair_id</code>, next to a <code>manifest.json</code> (settings, treebank counts before and after, languages left out) and a <code>stats.json</code> (the counts and distributions on this page).</p>
   <pre class="code" id="layout"></pre>
   <table class="cols"><thead><tr><th>Column</th><th>Meaning</th></tr></thead><tbody>
+    <tr><td>phenomenon, deprel</td><td>The condition of the pair (such as <code>svNa</code>) and its relation (<code>nsubj</code>; empty for noun-phrase conditions).</td></tr>
     <tr><td>pair_id</td><td>Stable id of the pair (language, condition, relation and the swapped token), the same across rebuilds with the same source.</td></tr>
-    <tr><td>sen_str / wrong_sen_str</td><td>The original sentence and the sentence with the swapped word, as written (contractions such as <i>du</i> or <i>ins</i> restored).</td></tr>
+    <tr><td>sen / wrong_sen</td><td>The original sentence and the sentence with the swapped word (the pair a model is scored on), as written (contractions such as <i>du</i> or <i>ins</i> restored).</td></tr>
     <tr><td>sen_hash</td><td>Hash of the original sentence, to spot edits to the treebank.</td></tr>
     <tr><td>feature_vals</td><td>Original and swapped value, such as <code>Sing -&gt; Plur</code>; <code>|</code> lists values the swapped form also spells.</td></tr>
     <tr><td>swap_kind, swap_idx, swap_&lt;kind&gt;</td><td>Which token was reinflected, its position in the sentence, and the new form.</td></tr>
     <tr><td>leaf_id, second_chance</td><td>The decision-tree leaf the pair stems from, and whether its fit was accepted at the laxer second-chance accuracy.</td></tr>
     <tr><td>surface_status</td><td>How the written form was built (plain, contracted, merged, uncontracted, …).</td></tr>
+    <tr><td>alt_phenomena</td><td>Other phenomena in which the same sentence pair was found; the pair is kept only under the rarest of them.</td></tr>
     <tr><td>treebank, sent_id</td><td>Where the sentence comes from.</td></tr>
   </tbody></table>
-  <p class="small">All columns of the source tables are kept, including the attractor flags and the lemma and POS columns of both tokens.</p>
-  <pre class="code">import pandas as pd, glob
-files = glob.glob("output/benchmark/*/*/German/correct_swaps.parquet")
-pairs = pd.concat([pd.read_parquet(f).assign(condition=f.split("/")[-3]) for f in files])
-pairs[["sen_str", "wrong_sen_str", "feature_vals", "condition"]].head()</pre>
+  <p class="small"><code>&lt;Language&gt;.parquet</code> holds these columns plus the attractor flags, the lemmas, POS tags, order and distance of both tokens (<code>idx_a</code>/<code>idx_b</code>, <code>word_order</code>, <code>distance</code>). <code>features/&lt;Language&gt;.parquet</code> holds the same pairs with every tree and feature column of the source tables.</p>
+  <pre class="code">import pandas as pd
+pairs = pd.read_parquet("output/benchmark/German.parquet")
+pairs[["sen", "wrong_sen", "feature_vals", "phenomenon"]].head()</pre>
   <p class="small muted" id="provenance"></p>
 </section>
 <section class="card" id="method"><h2>How the pairs were chosen</h2>
@@ -420,7 +414,7 @@ $('methodList').innerHTML = [
   `A language with ${DATA.n_items} pairs or fewer keeps all of them; larger ones are sampled down to ${DATA.n_items}.`,
   `Pairs whose swap value is ambiguous (for example <code>Masc → Fem|Neut</code>, where the swapped form also spells another value) are used last, only once a condition has no other pair left, and count for each of their values in equal parts, so one such pair is never counted twice (${pct(ambiguousAvail, totalAvail)} of the available pairs, ${pct(ambiguousSel, totalSel)} of the benchmark).`,
   `The conditions share the sample equally: the condition with the fewest pairs so far goes next, so a small condition simply runs out and the others take over its share.`,
-  'Within a condition each pair is drawn with a weight that falls with every time its value is already in the sample (original → swap value, role order, attractor class, part of speech of both tokens, distance, decision-tree leaf, treebank, both lemmas), so the sample flattens on all markers at once.',
+  'Within a condition each pair is drawn with a weight that falls with every time its value is already in the sample (original → swap value, role order, attractor class, part of speech of both tokens, distance, sentence length, decision-tree leaf, treebank, both lemmas), so the sample flattens on all markers at once.',
   `A lemma may appear in at most ${(100 * DATA.lemma_cap).toFixed(0)}% of a language's sample (${capCount} of ${DATA.n_items}) and a sentence at most once; if the quota cannot be filled the lemma limit rises ${(100 * DATA.lemma_cap).toFixed(0)}% at a time` + (relaxed ? ` (${relaxed} languages needed it)` : '') + ', and only then may sentences repeat.',
   ...(DATA.min_pairs && Object.keys(DATA.left_out).length ? [`Languages with fewer than ${DATA.min_pairs} pairs in total are left out (${Object.keys(DATA.left_out).length}: ${Object.entries(DATA.left_out).map(([l, n]) => l.replace(/_/g, ' ') + ' ' + n).join(', ')}).`] : []),
   'Every column of the source tables is kept, including <code>second_chance</code> (fits accepted at the laxer second-chance accuracy), and each pair gets a stable <code>pair_id</code> and a <code>sen_hash</code> of its sentence.',
@@ -442,7 +436,7 @@ $('methodList').innerHTML = [
     note(`${relaxedL.length}`, 'languages with a relaxed lemma limit', `Their sample could not be filled with at most ${Math.ceil(DATA.lemma_cap * DATA.n_items)} pairs per lemma${relaxedL.length ? ': ' + list(relaxedL) : ''}. Sentences repeat in ${repeatL.length} language${repeatL.length === 1 ? '' : 's'}.`),
     note(`${DATA.left_out ? Object.keys(DATA.left_out).length : 0}`, 'languages left out', `Fewer than ${DATA.min_pairs} pairs in total${DATA.left_out && Object.keys(DATA.left_out).length ? ': ' + Object.keys(DATA.left_out).map(l => l.replace(/_/g, ' ')).join(', ') : ''}.`),
   ].join('');
-  $('layout').textContent = 'output/benchmark/\n  manifest.json  stats.json\n  <condition>/<condition>_<relation>/<Language>/correct_swaps.parquet   (verb conditions, e.g. svNa/svNa_nsubj)\n  npa/<role pair>_<feature>/<Language>/correct_swaps.parquet           (noun-phrase conditions, e.g. npa/HEAD-ADJ_N)';
+  $('layout').textContent = 'output/benchmark/\n  manifest.json  stats.json\n  <Language>.parquet            one row per pair: sentences, phenomenon, balance markers\n  features/<Language>.parquet   the same pairs with all tree and feature columns (join on pair_id)\n  meta/<Language>.json          coverage figures of each condition';
   $('provenance').textContent = `Built ${DATA.built} from ${DATA.source || 'the correct_swaps tables'}, seed ${DATA.seed}.`;
 })();
 
@@ -586,7 +580,7 @@ function drawPairs2() {
   $('pPage').textContent = `page ${pairs.page + 1} of ${pages}`; $('pPrev').disabled = pairs.page === 0; $('pNext').disabled = pairs.page >= pages - 1;
   const c = cond ? pairs.data.conditions[cond] : null, cell = cond ? cells.find(x => x.lang === pairs.lang && x.cond === cond) : null;
   $('pLinks').innerHTML = `<a href="pairs/${encodeURIComponent(pairs.lang)}.json" download>language JSON</a>` + (cell ? ` · <a href="${treeLink(cell, pairs.lang)}">decision tree</a> · <a href="${condLink(cell)}">condition overview</a>` : '');
-  $('pFoot').textContent = c ? `All columns of these pairs: output/benchmark/${c.dir}/correct_swaps.parquet` : 'All columns of the pairs: output/benchmark/<condition>/<target>/<Language>/correct_swaps.parquet';
+  $('pFoot').textContent = c ? `All columns of these pairs: output/benchmark/${c.dir} (phenomenon ${cond})` : 'All columns of the pairs: output/benchmark/features/<Language>.parquet';
 }
 async function loadLanguage(lang, cond) {
   pairs.lang = lang; $('pLang').value = lang;
@@ -629,12 +623,13 @@ const MARKERS = [
   ['pos_a', 'UPOS of the first role', 'the head for verb families'],
   ['pos_b', 'UPOS of the second role', 'the controller (subject) for verb families'],
   ['distance', 'Distance in tokens', 'between the two tokens'],
+  ['length', 'Sentence length', 'characters of the written sentence'],
   ['treebank', 'Treebank', 'the largest ones; the rest are grouped'],
   ['second_chance', 'Second-chance fit', 'True: the tree\'s leaf accuracy is 0.90–0.95 instead of at least 0.95'],
   ['surface_status', 'Written form', 'how the sentence was turned into its written form (contractions and the like)'],
 ];
 const ROLE_LABELS = { a_first: 'first role first', b_first: 'second role first' };
-const ORDER = { distance: ['1', '2', '3-4', '5-8', '9+'], attractors: ['none', 'congruent', 'weakly_congruent', 'incongruent', 'mixed', 'unknown'] };
+const ORDER = { distance: ['1', '2', '3-4', '5-8', '9+'], length: ['up to 40', '41-80', '81-140', '141-240', '241+'], attractors: ['none', 'congruent', 'weakly_congruent', 'incongruent', 'mixed', 'unknown'] };
 $('selLang').innerHTML = '<option value="">All languages</option>' + langNames.map(l => `<option value="${esc(l)}">${esc(l.replace(/_/g, ' '))}</option>`).join('');
 const condOptions = [...condRows].sort((a, b) => a.name.localeCompare(b.name));
 $('selCond').innerHTML = '<option value="">All conditions</option>' + condOptions.map(r => `<option value="${esc(r.id)}">${esc(r.name)}</option>`).join('');

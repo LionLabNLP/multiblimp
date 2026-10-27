@@ -12,9 +12,10 @@ N_ITEMS = 1000
 LEMMA_CAP = 0.01
 MIN_PAIRS = 10   # a language with fewer pairs in total is left out of the benchmark
 DISTANCE_BINS = (1, 2, 4, 8)   # upper bounds of the bins 1, 2, 3-4, 5-8; larger distances share the last bin
+LENGTH_BINS = (40, 80, 140, 240)   # upper bounds, in characters of the written sentence, of the bins up to 40, 41-80, 81-140, 141-240; longer ones share the last bin
 
 ATTRACTOR_FLAGS = ("has_attractors", "only_has_fully_congruent", "only_has_weakly_congruent", "only_has_incongruent")
-CATEGORICAL = ("feature_vals", "word_order", "attractors", "pos_a", "pos_b", "distance", "leaf_id", "treebank")
+CATEGORICAL = ("feature_vals", "word_order", "attractors", "pos_a", "pos_b", "distance", "length", "leaf_id", "treebank")
 SINGLE_VALUED = tuple(name for name in CATEGORICAL if name != "feature_vals")
 PASS_THROUGH = ("pair_key", "surface_status")
 NO_LEMMA = {"", "_"}
@@ -71,6 +72,8 @@ def balance_features(df: pd.DataFrame, roles: tuple, name: str) -> pd.DataFrame:
     out["word_order"] = np.where(idx_a < idx_b, "a_first", "b_first")
     gap = (idx_a - idx_b).abs()
     out["distance"] = np.digitize(gap.fillna(DISTANCE_BINS[-1] + 1), DISTANCE_BINS, right=True)
+    chars = df["sen_str"].astype(str).str.len() if "sen_str" in df else pd.Series(0, index=df.index)
+    out["length"] = np.digitize(chars, LENGTH_BINS, right=True)
     out["pos_a"] = column(f"{role_a}_pos", role_a).astype(str)
     out["pos_b"] = column(f"{role_b}_pos", role_b).astype(str)
     out["leaf_id"] = column("leaf_id", -1).fillna(-1).astype(int).astype(str)

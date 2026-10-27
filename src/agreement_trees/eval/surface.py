@@ -190,8 +190,9 @@ def validate_frame(frame: pd.DataFrame, pos_guard: bool = True, stats_for=load_s
 
 def with_surface_strings(frame: pd.DataFrame, pos_guard: bool = True):
     """(kept, invalid): `frame` (a correct_swaps frame after add_sentence_strings, changed in place) with the written forms
-    in sen_str and wrong_sen_str and a surface_status column; `invalid` is empty, as every pair has a written form. A frame
-    without the sentence-location columns (an old cache) is returned as it is."""
+    in sen_str and wrong_sen_str and a surface_status column. `invalid` holds the pairs whose two written sentences are
+    identical (a contraction that spells the original and the swapped form alike, Sicilian pi lu / pi i = pî), which cannot be
+    scored; they are not in `kept`. A frame without the sentence-location columns (an old cache) is returned as it is."""
     if not len(frame) or not {"conllu_file", "conllu_sent_line", "swap_kind", "sen"} <= set(frame.columns):
         return frame, frame.iloc[0:0]
     result, _ = validate_frame(frame, pos_guard)
@@ -200,7 +201,8 @@ def with_surface_strings(frame: pd.DataFrame, pos_guard: bool = True):
     frame.loc[changed, "sen_str"] = result.loc[changed, "sen_final"]
     frame.loc[changed, "wrong_sen_str"] = result.loc[changed, "wrong_final"]
     frame["surface_status"] = status.fillna("plain")
-    return frame, frame.iloc[0:0]
+    identical = frame["sen_str"] == frame["wrong_sen_str"]
+    return frame[~identical], frame[identical].assign(surface_status="identical_surface")
 
 
 def read_pair_frame(path) -> pd.DataFrame:
