@@ -42,7 +42,7 @@ def accuracy(scored: pd.DataFrame, by=("lang", "phenomenon")) -> pd.DataFrame:
 
 
 def evaluate(model: str, pairs: pd.DataFrame, results_dir, dtype="float32", device="cuda", batch_size="auto:8",
-             max_batch_size=1024, lm=None, rescore=False):
+             max_batch_size=1024, lm=None, rescore=False, softmax_dtype="float32"):
     """Score the pairs not yet in <results_dir>/<model>__<dtype>/scores.parquet with an lm-eval HFLM and write the
     scores and accuracy.csv (lang x phenomenon) there. A stored score counts only for the same pair_id and the same
     two sentences (text_hash); the scores are saved after each language. lm: an already loaded model (tests).
@@ -50,7 +50,8 @@ def evaluate(model: str, pairs: pd.DataFrame, results_dir, dtype="float32", devi
     an interrupted rescore leaves scores.parquet untouched and the next --rescore picks up where it stopped; when it
     completes they replace the old scores and the staging file is removed.
     Returns (scored pairs, accuracy table, output dir)."""
-    out_dir = os.path.join(results_dir, f"{model.replace('/', '__')}__{dtype}")
+    suffix = "" if softmax_dtype == "float32" else f"__softmax_{softmax_dtype}"
+    out_dir = os.path.join(results_dir, f"{model.replace('/', '__')}__{dtype}{suffix}")
     os.makedirs(out_dir, exist_ok=True)
     scores_path = os.path.join(out_dir, "scores.parquet")
     staging_path = os.path.join(out_dir, "scores.rescore.parquet")
@@ -68,7 +69,8 @@ def evaluate(model: str, pairs: pd.DataFrame, results_dir, dtype="float32", devi
         if lm is None:
             from lm_eval.models.huggingface import HFLM
 
-            lm = HFLM(pretrained=model, batch_size=batch_size, max_batch_size=max_batch_size, dtype=dtype, device=device)
+            lm = HFLM(pretrained=model, batch_size=batch_size, max_batch_size=max_batch_size, dtype=dtype, device=device,
+                      softmax_dtype=softmax_dtype)
         target = staged[~staged["pair_id"].isin(todo["pair_id"])] if rescore else old[~old["pair_id"].isin(todo["pair_id"])]
         for lang, chunk in todo.groupby("lang", sort=True):
             target = pd.concat([target, score_pairs(lm, chunk)], ignore_index=True)
@@ -85,6 +87,9 @@ def evaluate(model: str, pairs: pd.DataFrame, results_dir, dtype="float32", devi
             os.remove(staging_path)
 
     scored = pairs.drop(columns=["sen", "wrong_sen"]).merge(old.drop(columns="text_hash"), on="pair_id")
+    ties = float((scored["delta"] == 0).mean())
+    if ties > 0.005:
+        print(f"WARNING: {ties:.1%} of the pairs have exactly equal scores; the dtype ({dtype}) is probably too coarse")
     acc = accuracy(scored)
     acc.to_csv(os.path.join(out_dir, "accuracy.csv"), index=False)
     return scored, acc, out_dir

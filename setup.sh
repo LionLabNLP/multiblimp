@@ -16,7 +16,9 @@ git clone https://github.com/LionLabNLP/um2ud_annotation.git resources/um2ud_ann
 # Compare UD flags (scraped + README) against the exclusion lists; review any output
 python3 scripts/agreement_trees/supplementary/flag_treebanks_report.py
 
-# UD pickles, then UD-derived tables
+# UD validator results (needs a UniversalDependencies/tools checkout, see UD_TOOLS_DIR), then the UD pickles
+# without the sentences flagged by validation.drop_testids (resources/data_prep_config.json), then UD-derived tables
+python3 scripts/data_caching/validate_treebanks.py
 python3 scripts/data_caching/pickle_treebanks.py
 python3 scripts/data_caching/ud_tables.py
 

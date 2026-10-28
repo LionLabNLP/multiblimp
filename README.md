@@ -9,8 +9,9 @@ This repository contains the code for creating the corpus and the scripts for LL
 This branch builds minimal pairs from UD treebanks and explains them with decision trees: which treebank annotations
 predict whether a subject, object, indirect object or noun-phrase dependent agrees with its head. Pipeline, from raw data to pages:
 
-1. **Resources** (`setup.sh`): UD treebanks, `resources/um2ud_annotation` (UniMorph-to-UD value mapper), treebank pickles
-   (`scripts/data_caching/pickle_treebanks.py`), UD-derived tables (`scripts/data_caching/ud_tables.py` -> `resources/ud_tables/`), UniMorph and its tables in
+1. **Resources** (`setup.sh`): UD treebanks, `resources/um2ud_annotation` (UniMorph-to-UD value mapper), UD validator results
+   (`scripts/data_caching/validate_treebanks.py` -> `resources/ud/validation/`), treebank pickles without the sentences flagged by the
+   validator tests listed in `validation.drop_testids` of `resources/data_prep_config.json` (`scripts/data_caching/pickle_treebanks.py`), UD-derived tables (`scripts/data_caching/ud_tables.py` -> `resources/ud_tables/`), UniMorph and its tables in
    UD notation (`scripts/data_caching/um2ud.py` -> `resources/um_tables/`), and the multiword-token statistics of the raw UD files
    (`scripts/data_caching/mwt_stats.py` -> `resources/ud_mwt/`, built on demand when missing). All four scripts take `--langs`.
 2. **Extraction and scan** (`cache_data.sh`): `scripts/agreement_trees/cache_treebank_features.py` writes one feature cache per language and

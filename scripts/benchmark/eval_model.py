@@ -32,6 +32,7 @@ if __name__ == "__main__":
     parser.add_argument("--batch_size", default="auto:8")
     parser.add_argument("--max_batch_size", type=int, default=1024)
     parser.add_argument("--dtype", default="float32", help="bfloat16 rounds the summed log-probs into ties")
+    parser.add_argument("--softmax_dtype", default="float32", help="dtype of the log-softmax over the vocabulary")
     parser.add_argument("--device", default="cuda", help="cuda, mps or cpu")
     parser.add_argument("--hf_token", default="hf_token.txt", help="File containing an HF token")
     args = parser.parse_args()
@@ -46,6 +47,6 @@ if __name__ == "__main__":
         pairs = cap_per_cond(pairs, args.max_per_cond, args.seed)
 
     scored, acc, out_dir = evaluate(args.model, pairs, args.results_dir, args.dtype, args.device,
-                                    args.batch_size, args.max_batch_size, rescore=args.rescore)
+                                    args.batch_size, args.max_batch_size, rescore=args.rescore, softmax_dtype=args.softmax_dtype)
     print(acc.to_string(index=False))
     print(f"Overall accuracy: {(scored['delta'] > 0).mean():.3f}  ({out_dir})")

@@ -14,6 +14,7 @@ from bs4 import BeautifulSoup
 from .config import RESOURCE_DIR, UD_PATH
 from .excluded_treebanks import is_treebank_excluded, is_treebank_row_excluded, split_treebank_folder
 from .script_log import append_log
+from .validation import dropped_sentence_lines, sentence_start_lines
 from .languages import add_langs, sent_id_prefix_keep
 
 _SENT_ID_PREFIX_RE = re.compile(r"^[a-z]+")
@@ -51,6 +52,25 @@ def tree_is_malformed(tree):
         return True
 
     return False
+
+
+def _flagged_sentences(trees, filename: str, dropped_lines: set[int]) -> list[bool]:
+    """Which parsed trees of the file are sentences the validator flagged (their first token line is in
+    dropped_lines). Matched by position in the file; if the parser and the line scan disagree on the number
+    of sentences, by sent_id instead."""
+    if not dropped_lines:
+        return [False] * len(trees)
+    starts = sentence_start_lines(filename)
+    if len(starts) == len(trees):
+        return [start in dropped_lines for start in starts]
+    rel_path = "/".join(filename.split("/")[-2:])
+    append_log("validation_filter_fallback", f"{rel_path}\t{len(starts)} sentences by line scan, {len(trees)} parsed; matched by sent_id")
+    index = _index(rel_path)
+    flagged = []
+    for tree in trees:
+        entry = index.get(tree.metadata.get("sent_id"))
+        flagged.append(entry is not None and entry[1] in dropped_lines)
+    return flagged
 
 
 def _iter_treebank_dirs(resource_dir: str, ud_dir: str):
@@ -289,6 +309,7 @@ class Treebank:
         remove_typo: bool = True,
         pickle_path: str = "ud/ud_pickles",
         only_excluded: bool = False,
+        drop_validation_errors: bool = True,
     ):
         if resource_dir is None:
             resource_dir = "."
@@ -333,17 +354,29 @@ class Treebank:
             print("Loading:\n", "\n".join(treebank_paths))
 
         treebank = []
+        dropped_by_folder = {}
         for filename in treebank_paths:
             file_treebank_id = Path(filename).parent.name.rsplit("-", 1)[-1]
             keep_prefixes = sent_id_prefix_keep(lang, file_treebank_id)
             with open(filename, encoding="utf-8") as f:
-                for tree in parse_incr(f):
-                    if keep_prefixes is not None:
-                        prefix_match = _SENT_ID_PREFIX_RE.match(tree.metadata.get("sent_id", ""))
-                        if not prefix_match or prefix_match.group(0) not in keep_prefixes:
-                            continue
-                    tree.metadata["treebank"] = "/".join(filename.split("/")[-2:])
-                    treebank.append(tree)
+                file_trees = list(parse_incr(f))
+            folder = Path(filename).parent.name
+            flagged = [False] * len(file_trees)
+            if drop_validation_errors:
+                if folder not in dropped_by_folder:
+                    dropped_by_folder[folder] = dropped_sentence_lines(folder)
+                flagged = _flagged_sentences(file_trees, filename, dropped_by_folder[folder].get(Path(filename).name, set()))
+                if any(flagged):
+                    append_log("validation_dropped", f"{lang}\t{folder}/{Path(filename).name}\t{sum(flagged)}")
+            for tree, is_flagged in zip(file_trees, flagged):
+                if is_flagged:
+                    continue
+                if keep_prefixes is not None:
+                    prefix_match = _SENT_ID_PREFIX_RE.match(tree.metadata.get("sent_id", ""))
+                    if not prefix_match or prefix_match.group(0) not in keep_prefixes:
+                        continue
+                tree.metadata["treebank"] = "/".join(filename.split("/")[-2:])
+                treebank.append(tree)
 
         if remove_typo:
             treebank = [tree for tree in treebank if not tree_is_malformed(tree)]
