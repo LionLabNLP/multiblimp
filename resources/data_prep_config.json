@@ -7,7 +7,18 @@
     "level": 5,
     "drop_testids": [
       "too-many-objects",
-      "too-many-subjects"
+      "too-many-subjects",
+      "rel-upos-advmod",
+      "rel-upos-aux",
+      "rel-upos-case",
+      "rel-upos-cc",
+      "rel-upos-cop",
+      "rel-upos-det",
+      "rel-upos-expl",
+      "rel-upos-fixed",
+      "rel-upos-mark",
+      "rel-upos-nummod",
+      "rel-upos-punct"
     ]
   }
 }
