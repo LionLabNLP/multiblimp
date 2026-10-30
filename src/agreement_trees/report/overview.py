@@ -29,6 +29,7 @@ from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 import pandas as pd
+import pyarrow.parquet as pq
 
 from agreement_trees.npa.agreement import refresh_deprel_index as refresh_npa_index
 from agreement_trees.pairs.diagnostics import BUCKET_JSON_KEYS
@@ -37,7 +38,7 @@ from agreement_trees.report.viz_overview import generate_html_overview_index
 from agreement_trees.taxonomy import FLAT_CONDITION_META, classify_flat_condition, NPA_FEATURE_NAMES, npa_subgroup_label, GROUP_PREFIXES
 from agreement_trees.vp.conditions import CONDITIONS
 from agreement_trees.vp.pipeline import refresh_deprel_index as refresh_sva_index
-from multiblimp.config import OUTPUT_OVERVIEW_DIR, HTML_DECISION_TREES_DIR, OUTPUT_DECISION_TREES_DIR, RESOURCE_DIR, OUTPUT_MINIMAL_PAIRS_DIR, OUTPUT_DIAGNOSTICS_DIR, REPO_ROOT
+from multiblimp.config import TREEBANK_FEATURES_DIR, OUTPUT_OVERVIEW_DIR, HTML_DECISION_TREES_DIR, OUTPUT_DECISION_TREES_DIR, RESOURCE_DIR, OUTPUT_MINIMAL_PAIRS_DIR, OUTPUT_DIAGNOSTICS_DIR, REPO_ROOT
 from multiblimp.languages import get_lang_treebanks
 
 
@@ -114,7 +115,12 @@ def _record(entry: dict, cond: str, subgroup: str, dir_rel: str) -> dict:
         if k in PUBLISHED_BUCKET_KEYS
     }
     lang_url = entry.get("langUrl")
+    # rows of the condition's cache for this language (every label, "unk" included), and those with the feature on
+    # both tokens (yes or no); "samples" below are the agreeing ones
+    dist = diag.get("labelDistribution") or entry.get("labelDistribution") or {}
     return dict(
+        instances=sum(int(v) for v in dist.values()),
+        annotated=sum(int(v) for k, v in dist.items() if str(k).lower() in ("yes", "no")),
         cond=cond, subgroup=subgroup, lang=NAME_ALIASES.get(entry["name"], entry["name"]),
         samples=entry.get("nRaw") or 0, pairs=entry.get("nPairs") or 0,
         # tree accuracy (None, not 0, when absent, so weighted averages skip it)
@@ -147,6 +153,41 @@ def _tried_languages(dir_path: str) -> set[str]:
             and not fn.endswith("__unk.html")  # per-treebank incl.-unk view of a language
         )
     }
+
+
+def _processed_languages() -> set[str]:
+    """Every language with a feature cache or an empty marker (extraction ran, whatever it found) in any family's
+    cache directory or in the noun-phrase instances."""
+    dirs = [d for d in glob.glob(os.path.join(TREEBANK_FEATURES_DIR, "*")) if os.path.isdir(d)]
+    dirs += glob.glob(os.path.join(TREEBANK_FEATURES_DIR, "npa", "*"))
+    names = set()
+    for d in dirs:
+        for fn in os.listdir(d):
+            for suffix in (".parquet", ".empty.json"):
+                if fn.endswith(suffix):
+                    names.add(fn[:-len(suffix)].replace("_", " "))
+    return {NAME_ALIASES.get(name, name) for name in names}
+
+
+def _cache_instances(languages) -> dict:
+    """{language: {cache directory: rows}} for the given (display-named) languages, read off the parquet metadata of
+    every family's feature cache and of the noun-phrase instances."""
+    wanted = {name: name for name in languages}
+    out = {}
+    dirs = [d for d in glob.glob(os.path.join(TREEBANK_FEATURES_DIR, "*")) if os.path.isdir(d) and os.path.basename(d) != "npa"]
+    dirs += glob.glob(os.path.join(TREEBANK_FEATURES_DIR, "npa", "np_instances"))
+    for d in sorted(dirs):
+        label = "npa" if os.path.basename(d) == "np_instances" else os.path.basename(d)
+        for fn in os.listdir(d):
+            if not fn.endswith(".parquet"):
+                continue
+            stem = fn[:-len(".parquet")].replace("_", " ")
+            name = NAME_ALIASES.get(stem, stem)
+            if name in wanted:
+                rows = pq.ParquetFile(os.path.join(d, fn)).metadata.num_rows
+                if rows:
+                    out.setdefault(name, {})[label] = rows
+    return out
 
 
 def _discover_conditions() -> tuple[list[str], list[str]]:
@@ -279,6 +320,8 @@ def build_stats(out_path: str = STATS_PATH) -> dict:
         CONDITION_META[cond] = _flat_meta(cond)
     conditions += unknown
 
+    total_instances = sum(r["instances"] for r in records)
+    total_annotated = sum(r["annotated"] for r in records)
     total_samples = sum(r["samples"] for r in records)
     total_pairs = sum(r["pairs"] for r in records)
 
@@ -306,6 +349,7 @@ def build_stats(out_path: str = STATS_PATH) -> dict:
     # per language (summed across every condition/subgroup)
     lang_agg = defaultdict(lambda: {
         "samples": 0, "pairs": 0, "conds": set(), "acc_num": 0.0, "acc_den": 0,
+        "instances": 0, "annotated": 0,
         "n_lemma": 0, "n_form": 0, "top_pairs": -1, "url": None,
     })
     # language x condition matrix -- pairs/samples/lexical-diversity sum
@@ -359,6 +403,7 @@ def build_stats(out_path: str = STATS_PATH) -> dict:
         c["samples"] += r["samples"]; c["pairs"] += r["pairs"]; c["langs"].add(lang)
 
         l = lang_agg[lang]
+        l["instances"] += r["instances"]; l["annotated"] += r["annotated"]
         l["samples"] += r["samples"]; l["pairs"] += r["pairs"]; l["conds"].add((cond, r["subgroup"]))   # each NP role pair x feature counts
         l["n_lemma"] += r["n_lemma"]; l["n_form"] += r["n_form"]
 
@@ -448,7 +493,7 @@ def build_stats(out_path: str = STATS_PATH) -> dict:
             "zero_languages": zero_langs,
         }
 
-    def coverage_union(keys: list[tuple[str, bool]]) -> dict:
+    def coverage_union(keys: list[tuple[str, bool]], also_tried: set = frozenset()) -> dict:
         """Same shape as coverage_stats, but unioned across several
         conditions/subgroups at once (e.g. every condition in one category
         tab, or the whole corpus) -- a language's samples/pairs get summed
@@ -456,7 +501,7 @@ def build_stats(out_path: str = STATS_PATH) -> dict:
         only clears "ge100" here if its combined total across the group
         does, not any single condition alone.
         """
-        tried_langs = set()
+        tried_langs = set(also_tried)   # also_tried: processed languages that no condition was run for (no samples)
         lang_samples = defaultdict(int)
         lang_pairs = defaultdict(int)
         for key, is_npa_sub in keys:
@@ -523,10 +568,13 @@ def build_stats(out_path: str = STATS_PATH) -> dict:
         "totals": {
             "languages": len(languages),
             "conditions": len(conditions),
+            "instances": total_instances,
+            "annotated": total_annotated,
             "samples": total_samples,
             "pairs": total_pairs,
             "ratio": ratio(total_pairs, total_samples),
-            "coverage": coverage_union(global_coverage_keys),
+            "coverage": {**(_cov := coverage_union(global_coverage_keys, _processed_languages())),
+                         "zero_language_instances": _cache_instances(_cov["zero_languages"])},
         },
         "conditions": [
             {
@@ -546,6 +594,8 @@ def build_stats(out_path: str = STATS_PATH) -> dict:
         "languages": [
             {
                 "name": lang,
+                "instances": lang_agg[lang]["instances"],
+                "annotated": lang_agg[lang]["annotated"],
                 "samples": lang_agg[lang]["samples"],
                 "pairs": lang_agg[lang]["pairs"],
                 "n_conditions": len(lang_agg[lang]["conds"]),

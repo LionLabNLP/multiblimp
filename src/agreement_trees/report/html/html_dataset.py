@@ -120,7 +120,7 @@ def _mini_stat_html(value: str, label: str) -> str:
     return f'<div class="mini-stat"><div class="mini-stat-value">{value}</div><div class="mini-stat-label">{label}</div></div>'
 
 
-def _zero_languages_html(zero_langs: list[str]) -> str:
+def _zero_languages_html(zero_langs: list[str], instances: dict | None = None) -> str:
     """The tried-but-nothing gap between the ladder's first two steps names
     no one -- 'tried' and 'any samples' just differ by a count. This makes
     that gap inspectable: which specific languages were attempted here and
@@ -131,9 +131,17 @@ def _zero_languages_html(zero_langs: list[str]) -> str:
     if not zero_langs:
         return ""
     n = len(zero_langs)
+    names = []
+    for lang in zero_langs:
+        caches = (instances or {}).get(lang)
+        if caches:   # extracted but without a single labelled row: show what the caches hold
+            detail = ", ".join(f"{k} {v:,}" for k, v in caches.items())
+            names.append(f'<span title="rows per cache: {detail}">{lang} ({sum(caches.values()):,} instances)</span>')
+        else:
+            names.append(lang)
     return f"""<details class="zero-langs">
-                    <summary>{n} language{"s" if n != 1 else ""} tried, zero samples anywhere</summary>
-                    <p class="zero-lang-list">{", ".join(zero_langs)}</p>
+                    <summary title="Extracted and scanned or fitted, but no condition produced samples (for example a treebank without morphological features)">{n} language{"s" if n != 1 else ""} tried, zero samples anywhere</summary>
+                    <p class="zero-lang-list">{", ".join(names)}</p>
                 </details>"""
 
 
@@ -151,7 +159,7 @@ def _coverage_ladder_html(cov: dict, chart_id: str) -> str:
         "ge100": cov["ge100"], "ge500": cov["ge500"],
     })
     chart = f"<div class=\"ladder-chart\" id=\"{chart_id}\" data-cov='{payload}' style=\"height: 220px;\"></div>"
-    return chart + _zero_languages_html(cov.get("zero_languages", []))
+    return chart + _zero_languages_html(cov.get("zero_languages", []), cov.get("zero_language_instances"))
 
 
 def _category_tab_html(data: dict, group: str, lang_idx: dict, npa_lang_idx: dict) -> str:
@@ -1100,8 +1108,10 @@ def render_dataset_page(data: dict) -> str:
                         How many candidate samples were considered and how many minimal pairs were actually
                         generated from them &mdash; broken down per language, per grammatical condition (subject
                         agreement with the verb/participle/auxiliary, and noun-phrase agreement across its role
-                        pairs), and per language&times;condition. "Samples" are the raw UD-derived candidate
-                        instances a condition considered; "minimal pairs" are the rows that came out the other end
+                        pairs), and per language&times;condition. "Instances" are the rows of a
+                        condition's feature cache, "annotated" the ones where both tokens carry the feature (they
+                        agree or not), and "samples" the annotated ones that agree: the candidates a pair can be
+                        built from; "minimal pairs" are the rows that came out the other end
                         as usable contrastive pairs &mdash; one sample can yield more than one pair when several
                         inflected forms are valid contrasts, so pairs isn't a subset of samples and the ratio
                         between them can exceed 1&times;.
@@ -1142,7 +1152,15 @@ def render_dataset_page(data: dict) -> str:
                         <div class="kpi-value">{totals["conditions"]}</div>
                         <div class="kpi-label">Conditions tracked</div>
                     </div>
-                    <div class="kpi-tile">
+                    <div class="kpi-tile" title="Rows of the feature caches the conditions were fitted on, every label included">
+                        <div class="kpi-value">{totals["instances"]:,}</div>
+                        <div class="kpi-label">Instances</div>
+                    </div>
+                    <div class="kpi-tile" title="Instances where both tokens carry the feature, whether they agree or not">
+                        <div class="kpi-value">{totals["annotated"]:,}</div>
+                        <div class="kpi-label">Annotated instances</div>
+                    </div>
+                    <div class="kpi-tile" title="Annotated instances that agree: the rows a minimal pair can be built from">
                         <div class="kpi-value">{totals["samples"]:,}</div>
                         <div class="kpi-label">Candidate samples</div>
                     </div>
@@ -1182,6 +1200,8 @@ def render_dataset_page(data: dict) -> str:
                                 {_sortable_th("acc", "Accuracy", num=True)}
                                 {_sortable_th("n_lemma", "Lemmas", num=True)}
                                 {_sortable_th("n_conditions", "# Conditions", num=True)}
+                                {_sortable_th("instances", "Instances", num=True)}
+                                {_sortable_th("annotated", "Annotated", num=True)}
                             </tr>
                         </thead>
                         <tbody id="language-tbody"></tbody>
@@ -1779,6 +1799,8 @@ def render_dataset_page(data: dict) -> str:
                         <td class="num">${{fmtAcc(l.acc)}}</td>
                         <td class="num">${{l.n_lemma.toLocaleString()}}</td>
                         <td class="num">${{l.n_conditions}}</td>
+                        <td class="num">${{(l.instances || 0).toLocaleString()}}</td>
+                        <td class="num">${{(l.annotated || 0).toLocaleString()}}</td>
                     </tr>`).join('');
                 countNote.textContent = `${{rows.length}} of ${{DATA.languages.length}} languages`;
                 updateSortIndicators('language-table', sortKey, sortDir);
