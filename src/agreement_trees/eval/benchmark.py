@@ -3,7 +3,7 @@ import hashlib
 import json
 import os
 import shutil
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import date
 from pathlib import Path
 
@@ -179,16 +179,23 @@ DISTANCE_LABELS = ("1", "2", "3-4", "5-8", "9+")
 LENGTH_LABELS = ("up to 40", "41-80", "81-140", "141-240", "241+")
 
 
-def _clean(path: Path, columns):
+def _clean(path: Path, columns, counts: Counter = None):
     """The given columns of a correct_swaps file with the surface strings applied and repeated sentence pairs
-    dropped once."""
+    dropped once; `counts` (if given) gains the pairs written, without a written form, identical and repeated."""
     df = pq.read_table(path, columns=columns).to_pandas()
+    written = len(df)
     if (path.parent / SURFACE_FILE).exists():
         df = apply_surface(df, path.parent / SURFACE_FILE)
+    unwritten = written - len(df)
     # a pair whose two written sentences coincide (a contraction that absorbs the swap) cannot be scored
-    df = df[df["sen_str"] != df["wrong_sen_str"]]
+    same = df["sen_str"] == df["wrong_sen_str"]
+    df = df[~same]
     # the same sentence pair under several sentence ids (duplicated sentences, overlapping treebanks) counts once
-    return df.drop_duplicates(["sen_str", "wrong_sen_str"]).drop_duplicates("pair_key").reset_index(drop=True)
+    unique = df.drop_duplicates(["sen_str", "wrong_sen_str"]).drop_duplicates("pair_key").reset_index(drop=True)
+    if counts is not None:
+        counts.update({"written": written, "no_written_form": unwritten, "identical": int(same.sum()),
+                       "repeated_in_condition": len(df) - len(unique)})
+    return unique
 
 
 def dedupe_across_conditions(frames: dict, phenomena: dict):
@@ -274,13 +281,13 @@ def build_benchmark(pairs_dir, out_dir, langs=None, conds=None, n_items=N_ITEMS,
             by_lang[lang].append((path, cond, deprel))
 
     cells, languages, before, after, n_pairs = [], {}, {}, {}, 0
-    too_small, n_repeats = {}, 0
+    too_small, n_repeats, cleaning = {}, 0, Counter()
     for lang, files in sorted(by_lang.items()):
         conditions, kept_files, cleaned, phenomena = [], [], {}, {}
         for path, cond, deprel in files:
             name = f"{cond}/{deprel}" if deprel else cond
             names = set(pq.ParquetFile(path).schema_arrow.names)
-            df = _clean(path, [c for c in balance_columns(condition_roles(cond, deprel)) + ["wrong_sen_str"] if c in names])
+            df = _clean(path, [c for c in balance_columns(condition_roles(cond, deprel)) + ["wrong_sen_str"] if c in names], cleaning)
             if len(df):
                 cleaned[name], phenomena[name] = df, cond
         cleaned, alternatives, removed = dedupe_across_conditions(cleaned, phenomena)
@@ -301,6 +308,7 @@ def build_benchmark(pairs_dir, out_dir, langs=None, conds=None, n_items=N_ITEMS,
         total = sum(len(v) for v in chosen.values())
         if total < min_pairs:
             too_small[lang] = total
+            cleaning["left_out_languages"] += available
             cells = [c for c in cells if c["lang"] != lang]
             print(f"{lang}: {total} pairs, left out", flush=True)
             continue
@@ -359,6 +367,7 @@ def build_benchmark(pairs_dir, out_dir, langs=None, conds=None, n_items=N_ITEMS,
         "ambiguous_selected": sum(c["ambiguous_selected"] for c in cells),
         "min_pairs": min_pairs,
         "cross_condition_repeats_removed": n_repeats,
+        "cleaning": dict(cleaning),
         "languages_left_out": too_small,
         "treebank_counts_before": before,
         "treebank_counts_after": after,

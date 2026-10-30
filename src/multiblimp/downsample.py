@@ -15,8 +15,8 @@ DISTANCE_BINS = (1, 2, 4, 8)   # upper bounds of the bins 1, 2, 3-4, 5-8; larger
 LENGTH_BINS = (40, 80, 140, 240)   # upper bounds, in characters of the written sentence, of the bins up to 40, 41-80, 81-140, 141-240; longer ones share the last bin
 
 ATTRACTOR_FLAGS = ("has_attractors", "only_has_fully_congruent", "only_has_weakly_congruent", "only_has_incongruent")
-CATEGORICAL = ("feature_vals", "word_order", "attractors", "pos_a", "pos_b", "distance", "length", "leaf_id", "treebank")
-SINGLE_VALUED = tuple(name for name in CATEGORICAL if name != "feature_vals")
+CATEGORICAL = ("feature_vals", "word_order", "swap_kind", "attractors", "pos_a", "pos_b", "distance", "length", "leaf_id", "treebank")
+SINGLE_VALUED = tuple(name for name in CATEGORICAL if name not in ("feature_vals", "swap_kind"))   # weighted; the others are handled separately
 PASS_THROUGH = ("pair_key", "surface_status")
 NO_LEMMA = {"", "_"}
 
@@ -51,7 +51,7 @@ def value_alternatives(feature_vals: str) -> list:
 
 def balance_columns(roles: tuple) -> list:
     """The source columns balance_features reads (those a table lacks are skipped)."""
-    wanted = ["feature_vals", "leaf_id", "treebank", "sen_str", "sent_id", "tree_idx", "second_chance",
+    wanted = ["feature_vals", "leaf_id", "treebank", "sen_str", "sent_id", "tree_idx", "second_chance", "swap_kind",
               *ATTRACTOR_FLAGS, *PASS_THROUGH]
     for role in roles:
         wanted += [f"{role}_idx", f"{role}_lemma", f"{role}_pos"]
@@ -70,6 +70,7 @@ def balance_features(df: pd.DataFrame, roles: tuple, name: str) -> pd.DataFrame:
     out["feature_vals"] = column("feature_vals", "?").astype(str)
     idx_a, idx_b = (pd.to_numeric(column(f"{r}_idx"), errors="coerce") for r in roles)
     out["word_order"] = np.where(idx_a < idx_b, "a_first", "b_first")
+    out["swap_kind"] = column("swap_kind", "?").astype(str)
     gap = (idx_a - idx_b).abs()
     out["distance"] = np.digitize(gap.fillna(DISTANCE_BINS[-1] + 1), DISTANCE_BINS, right=True)
     chars = df["sen_str"].astype(str).str.len() if "sen_str" in df else pd.Series(0, index=df.index)
@@ -129,7 +130,7 @@ def encode(conditions: list):
     lemmas, sentences = {"": 0}, {}
     for cond in conditions:
         f = cond.features
-        cond.codes = {name: _codes(f[name]) for name in SINGLE_VALUED}
+        cond.codes = {name: _codes(f[name]) for name in (*SINGLE_VALUED, "swap_kind")}
         cond.codes["lemma_a"] = _codes(f["lemma_a"], lemmas)
         cond.codes["lemma_b"] = _codes(f["lemma_b"], lemmas)
         cond.codes["sentence"] = _codes(f["sentence"], sentences)
@@ -143,7 +144,9 @@ def select_pairs(conditions: list, n_items: int, lemma_cap: float, rng: np.rando
     and a small condition simply runs out). Within a condition, a pair is drawn with probability proportional to the
     product over the balance features of 1 / (1 + times that feature value is already in the sample). Pairs with
     an ambiguous swap value (feature_vals like "Masc|Neut -> Fem") are drawn only once the condition has no other
-    eligible pair; they count fractionally for each of their values.
+    eligible pair; they count fractionally for each of their values. Of the pairs left, only those whose reinflected
+    token (swap_kind) has been picked least so far are drawn from, so the two sides of a noun-phrase pair of two
+    dependents stay even as far as the data allows.
     A lemma may appear in at most `lemma_cap` of the sample and a sentence once; if the quota cannot be
     filled, the lemma cap rises by one step at a time, and only then sentences may repeat."""
     n_lemmas, n_sentences = encode(conditions)
@@ -154,6 +157,7 @@ def select_pairs(conditions: list, n_items: int, lemma_cap: float, rng: np.rando
     lemma_count = np.zeros(n_lemmas, dtype=np.int64)
     sentence_count = np.zeros(n_sentences, dtype=np.int64)
     taken = [np.zeros(len(c), dtype=bool) for c in conditions]
+    kind_count = [np.zeros(c.codes["swap_kind"].max() + 1, dtype=np.int64) for c in conditions]
     feature_count = [{name: np.zeros(c.codes[name].max() + 1, dtype=np.int64) for name in SINGLE_VALUED}
                      for c in conditions]
     value_count = [np.zeros(n) for n in n_values]
@@ -185,6 +189,8 @@ def select_pairs(conditions: list, n_items: int, lemma_cap: float, rng: np.rando
             continue
         if not cond.ambiguous[rows].all():
             rows = rows[~cond.ambiguous[rows]]
+        kinds = codes["swap_kind"][rows]
+        rows = rows[kind_count[c][kinds] == kind_count[c][kinds].min()]   # the reinflected side picked least so far
         log_weight = np.zeros(len(rows))
         log_weight -= np.log1p((cond.shares[rows] * value_count[c][cond.values[rows]]).sum(axis=1))
         for name in SINGLE_VALUED:
@@ -195,6 +201,7 @@ def select_pairs(conditions: list, n_items: int, lemma_cap: float, rng: np.rando
         row = int(rng.choice(rows, p=weight / weight.sum()))
 
         taken[c][row] = True
+        kind_count[c][codes["swap_kind"][row]] += 1
         for name in SINGLE_VALUED:
             feature_count[c][name][codes[name][row]] += 1
         np.add.at(value_count[c], cond.values[row], cond.shares[row])

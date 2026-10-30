@@ -174,7 +174,8 @@ def render_benchmark_page(stats: dict, manifest: dict) -> str:
     data = {
         "n_items": stats["n_items"], "lemma_cap": stats["lemma_cap"], "seed": stats["seed"], "built": stats["built"],
         "method": manifest.get("method", ""), "languages": stats["languages"], "cells": cells,
-        "min_pairs": manifest.get("min_pairs"), "source": manifest.get("source"), "left_out": manifest.get("languages_left_out", {}), "overview_href": OVERVIEW_HREF, "trees_href": TREES_HREF,
+        "min_pairs": manifest.get("min_pairs"), "source": manifest.get("source"), "left_out": manifest.get("languages_left_out", {}),
+        "cleaning": {**manifest.get("cleaning", {}), "cross_condition": manifest.get("cross_condition_repeats_removed")}, "overview_href": OVERVIEW_HREF, "trees_href": TREES_HREF,
     }
     blob = json.dumps(data, ensure_ascii=False).replace("</", "<\\/").replace("<!--", "<\\!--")
     return TEMPLATE.replace("__DATA__", blob)
@@ -299,7 +300,7 @@ table.cols td:first-child { white-space:nowrap; font-family:ui-monospace,monospa
 </header>
 <nav class="topnav" aria-label="Sections"><a href="#glance">At a glance</a><a href="#matrix">Pairs per language &amp; condition</a><a href="#languages">Languages</a><a href="#conditions">Conditions</a><a href="#pairs">Browse pairs</a><a href="#markers">Marker distributions</a><a href="#quality">Quality notes</a><a href="#use">Using the data</a><a href="#method">How the pairs were chosen</a></nav>
 
-<section class="card" id="glance"><h2>At a glance</h2><div class="tiles" id="tiles"></div></section>
+<section class="card" id="glance"><h2>At a glance</h2><div class="tiles" id="tiles"></div><p class="muted small" id="tilesNote" style="margin:.9rem 0 0"></p></section>
 
 <section class="card" id="origin"><h2>Where the pairs come from</h2>
   <div class="steps">
@@ -343,7 +344,7 @@ table.cols td:first-child { white-space:nowrap; font-family:ui-monospace,monospa
 </section>
 
 <section class="card" id="markers"><h2>Marker distributions</h2>
-  <p class="muted small">The sampler balances on these markers. Each bar shows the share of the pairs available before sampling (grey) and in the benchmark (blue), summed over the chosen scope; bars are scaled to the longest one in their panel.</p>
+  <p class="muted small">The sampler balances on these markers. Each bar shows the share of the unique pairs available before downsampling (grey) and in the benchmark (blue), summed over the chosen scope; bars are scaled to the longest one in their panel.</p>
   <div class="controls"><label>Language <select id="selLang"></select></label><label>Condition <select id="selCond"></select></label><span class="chip" id="scopeCount"></span></div>
   <div class="legend"><span class="avail">available</span><span>in the benchmark</span></div>
   <div class="markers" id="markerGrid"></div>
@@ -406,11 +407,21 @@ const secondSel = sum(cells.map(c => (c.selected_markers.second_chance || {})['T
 
 $('intro').textContent = `The final benchmark: up to ${DATA.n_items} minimal pairs per language, drawn across all of the language's verb and noun-phrase agreement conditions. Built ${DATA.built}, seed ${DATA.seed}.`;
 const tiles = [[langNames.length, 'languages'], [condIds.length, 'conditions with pairs'], [fmt(totalSel), 'pairs in the benchmark'],
-  [fmt(totalAvail), 'pairs available before sampling'], [atCap, `languages sampled down to ${DATA.n_items}`],
+  [fmt(totalAvail), 'unique pairs available before downsampling'], [atCap, `languages sampled down to ${DATA.n_items}`],
   [langNames.length - atCap, 'languages kept in full'], [pct(secondSel, totalSel), 'pairs from second-chance fits'], [pct(ambiguousSel, totalSel), 'pairs with an ambiguous swap value']];
 $('tiles').innerHTML = tiles.map(([v, l]) => `<div class="tile"><div class="v">${v}</div><div class="l">${l}</div></div>`).join('');
+const cl = DATA.cleaning || {};
+const cleaningText = cl.written ? `The fits wrote ${fmt(cl.written)} pairs, which the data overview counts. Each sentence pair is counted once here, so ${fmt(cl.written - totalAvail)} are not unique pairs available for the benchmark: ${[
+  [cl.identical, 'pairs whose two written sentences are identical (a contraction absorbed the swap, so they cannot be scored)'],
+  [cl.repeated_in_condition, 'repeats of a sentence pair within a condition (the same sentence under several ids, or in overlapping treebanks)'],
+  [cl.cross_condition, 'sentence pairs found in several conditions of a language, kept only in the condition with the fewest pairs (the others are listed in <code>alt_phenomena</code>)'],
+  [cl.no_written_form, 'pairs without a valid written form'],
+  [cl.left_out_languages, `pairs of languages with fewer than ${DATA.min_pairs} pairs in total`],
+].filter(([n]) => n).map(([n, t]) => `${fmt(n)} ${t}`).join('; ')}.` : '';
+if (cleaningText) $('tilesNote').innerHTML = cleaningText;
 const capCount = Math.ceil(DATA.lemma_cap * DATA.n_items);
 $('methodList').innerHTML = [
+  ...(cleaningText ? ['<b>Unique pairs.</b> ' + cleaningText] : []),
   `A language with ${DATA.n_items} pairs or fewer keeps all of them; larger ones are sampled down to ${DATA.n_items}.`,
   `Pairs whose swap value is ambiguous (for example <code>Masc → Fem|Neut</code>, where the swapped form also spells another value) are used last, only once a condition has no other pair left, and count for each of their values in equal parts, so one such pair is never counted twice (${pct(ambiguousAvail, totalAvail)} of the available pairs, ${pct(ambiguousSel, totalSel)} of the benchmark).`,
   `The conditions share the sample equally: the condition with the fewest pairs so far goes next, so a small condition simply runs out and the others take over its share.`,
@@ -530,7 +541,7 @@ function drawList() {
 }
 function drawPairs() {
   $('matrixHint').textContent = view.view === 'matrix'
-    ? 'Pairs per language (rows) and condition (columns, grouped by category and head; the slanted names are the agreement feature, hover for the full condition). Hover a cell for the pairs available before sampling, click it to browse that language\'s pairs. Blank cells have no pairs.'
+    ? 'Pairs per language (rows) and condition (columns, grouped by category and head; the slanted names are the agreement feature, hover for the full condition). Hover a cell for the unique pairs available before downsampling, click it to browse that language\'s pairs. Blank cells have no pairs.'
     : 'One row per language and condition with pairs; sort by any column.';
   (view.view === 'matrix' ? drawMatrix : drawList)();
 }
@@ -619,6 +630,7 @@ if (location.hash.startsWith('#pairs/')) routePairs(); else if (langsWithPairs.l
 const MARKERS = [
   ['feature_vals', 'Original → swap value', 'the feature value of the pair and the one it was swapped to; the ten most frequent, the rest grouped'],
   ['word_order', 'Role order', 'which of the pair\'s two tokens comes first (verb families: the verb or the subject; noun phrases: the first or second role in the pair name)'],
+  ['swap_kind', 'Reinflected token', 'which token of the pair was reinflected (only noun-phrase pairs of two dependents, such as determiner and adjective, can go either way)'],
   ['attractors', 'Attractors', 'tokens between the two that carry the feature, against the controller\'s value'],
   ['pos_a', 'UPOS of the first role', 'the head for verb families'],
   ['pos_b', 'UPOS of the second role', 'the controller (subject) for verb families'],
