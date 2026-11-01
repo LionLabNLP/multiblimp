@@ -9,6 +9,17 @@ def text_hash(sen: str, wrong_sen: str) -> str:
     return hashlib.sha1(f"{sen}\n{wrong_sen}".encode("utf-8")).hexdigest()[:12]
 
 
+def load_tokenizer(model: str):
+    """AutoTokenizer, falling back to the plain tokenizer.json when the model's tokenizer class fails to build
+    (transformers 5 AlbertTokenizer on Goldfish models, whose [CLS]/[SEP] are added tokens)."""
+    from transformers import AutoTokenizer, PreTrainedTokenizerFast
+
+    try:
+        return AutoTokenizer.from_pretrained(model)
+    except TypeError:
+        return PreTrainedTokenizerFast.from_pretrained(model)
+
+
 def score_sentences(lm, sentences: list[str]) -> dict[str, float]:
     """Log-probability of each unique sentence given only BOS, via the batched loglikelihood of an
     lm-eval HFLM (the batch size is picked by its autobatching)."""
@@ -69,8 +80,8 @@ def evaluate(model: str, pairs: pd.DataFrame, results_dir, dtype="float32", devi
         if lm is None:
             from lm_eval.models.huggingface import HFLM
 
-            lm = HFLM(pretrained=model, batch_size=batch_size, max_batch_size=max_batch_size, dtype=dtype, device=device,
-                      softmax_dtype=softmax_dtype)
+            lm = HFLM(pretrained=model, tokenizer=load_tokenizer(model), batch_size=batch_size,
+                      max_batch_size=max_batch_size, dtype=dtype, device=device, softmax_dtype=softmax_dtype)
         target = staged[~staged["pair_id"].isin(todo["pair_id"])] if rescore else old[~old["pair_id"].isin(todo["pair_id"])]
         for lang, chunk in todo.groupby("lang", sort=True):
             target = pd.concat([target, score_pairs(lm, chunk)], ignore_index=True)

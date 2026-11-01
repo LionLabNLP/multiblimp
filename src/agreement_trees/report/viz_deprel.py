@@ -13,6 +13,7 @@ import pyarrow.parquet as pq
 from sklearn.pipeline import Pipeline
 from tqdm import tqdm
 
+from agreement_trees.fit.decision_tree import UNK_LABELS
 from agreement_trees.pipeline_utils import read_label_distribution, wilson_lower_bound
 
 from agreement_trees.fit.entropy import (
@@ -29,6 +30,15 @@ UNDERSIZED_MAX_N_RAW = 10
 
 def is_undersized(n_raw: int) -> bool:
     return 0 < n_raw < UNDERSIZED_MAX_N_RAW
+
+
+def _fitted_labels(dist: dict) -> set[str]:
+    """The labels of a {label: count} distribution a tree fit would see (non-zero, unk labels dropped)."""
+    return {str(k).lower() for k, v in dist.items() if v and str(k).lower() not in UNK_LABELS}
+
+
+def _yes_count(dist: dict) -> int:
+    return int(sum(v for k, v in dist.items() if str(k).lower() == "yes"))
 
 
 # The scan's wilson_floor default: a language with enough "Yes" rows in absolute terms can still have a Wilson
@@ -324,6 +334,15 @@ def generate_html_deprel_index(
         except (OSError, json.JSONDecodeError):
             continue
 
+    # languages without a fitted tree (single label, too few rows) get a root-card page and no saved
+    # .joblib/.parquet, so neither check above sees them: their label distribution file is the only trace
+    saved_models = {Path(fn).stem for fn in glob(os.path.join(glob_escape(data_dir), "*.joblib"))}
+    for dist_fn in glob(os.path.join(glob_escape(data_dir), "*_label_distribution.json")):
+        lang_name = Path(dist_fn).name.removesuffix("_label_distribution.json")
+        if lang_name in trivial_langs or lang_name in no_data_langs or lang_name in saved_models:
+            continue
+        trivial_langs[lang_name] = read_label_distribution(data_dir, lang_name)
+
     if language_data is None:
         language_data = {}
 
@@ -361,11 +380,11 @@ def generate_html_deprel_index(
 
     # an all-"yes" language above the undersized bar is real data with nothing to fit: keep it,
     # scored as a trivial tree (root = tree = smoothed 100%)
+    # unk rows are dropped before the fit, so they don't count against "all yes"
     single_yes = {
         lang: dist for lang, dist in trivial_langs.items()
-        if {str(k).lower() for k in dist} == {"yes"}
-        and not is_undersized(sum(dist.values()))
-        and sum(dist.values()) >= UNDERSIZED_MAX_N_RAW
+        if _fitted_labels(dist) == {"yes"}
+        and _yes_count(dist) >= UNDERSIZED_MAX_N_RAW
     }
     for lang in single_yes:
         omit_langs.pop(lang, None)
@@ -374,7 +393,7 @@ def generate_html_deprel_index(
     for lang, dist in single_yes.items():
         if lang in have:
             continue
-        n_raw = int(sum(dist.values()))
+        n_raw = _yes_count(dist)
         n_pairs = 0
         if pairs_dir is not None:
             pairs_fn = os.path.join(pairs_dir, lang, "correct_swaps.parquet")
