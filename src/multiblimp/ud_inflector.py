@@ -2,12 +2,13 @@
 not SG) and a row is a bit-mask vector, so matching a lemma's paradigm is a few array operations.
 
 inflect(form, ud_features):
-  1. rows for `form` that agree with the token's features (tightest only);
-  2. per row: its own stated features, with the swap feature replaced by the swap map's target
-     (or "any other value" when the map is None), are looked up among the rows of the same lemma
-     and UPOS; the matching rows' forms are the swapped forms.
-The first try leaves out the Mood/Voice/VerbForm/Degree defaults, the second adds them if that did
-not give exactly one form. The fallback inflector (the UD-derived table) adds its forms.
+  1. source cells: the rows for `form` that agree with the token's features (tightest only);
+  2. target cells: per source cell, the rows of the same lemma and UPOS with the swap feature changed
+     (the swap map's target, or "any other value" when the map is None) and every other feature as in
+     the source cell. Only the swapped slot's AGREEMENT_FEATURES, which change together across a
+     paradigm, may be stated on one side; stated on both, they must share a value. Per target value,
+     the rows stating the most of the source's agreement features are kept.
+The fallback inflector (the UD-derived table) adds its forms.
 """
 import copy
 from collections import Counter
@@ -15,7 +16,7 @@ from typing import Dict, List, Optional, Sequence, Set
 
 import numpy as np
 
-from .ud_table import UNMAPPED_PREFIX, UDSlice, UDTable   # first: puts the repo root on sys.path
+from .ud_table import SHADOW_PREFIX, UNMAPPED_PREFIX, UDSlice, UDTable   # first: puts the repo root on sys.path
 from resources.um2ud_annotation.UD2UM_mapper import UD2UM, expand_ud_feats, widen_ud_value
 from resources.um2ud_annotation.UM2UD_mapper import um_tag_upos
 from .um2ud import um_table_path
@@ -25,8 +26,8 @@ def _shown(value: str) -> str:
     return value[len(UNMAPPED_PREFIX):] if value.startswith(UNMAPPED_PREFIX) else value
 
 
-DEFAULTS = {"Mood": "Ind", "Voice": "Act", "VerbForm": "Fin", "Degree": "Pos"}
 VERBAL_UPOS = {"VERB", "AUX"}
+AGREEMENT_FEATURES = {"Person", "Number", "Gender", "Animacy", "Clusivity", "NounClass", "Polite", "Case"}
 
 
 def _assume_finite(piece: UDSlice) -> UDSlice:
@@ -46,12 +47,9 @@ def _assume_finite(piece: UDSlice) -> UDSlice:
 
 class UDInflector:
     def __init__(self, table: Optional[UDTable], inflection_map, fallback: Optional["UDInflector"] = None,
-                 upos: Optional[Sequence[str]] = None, inflect_wo_ud_features: bool = False,
-                 prefer_tight_match: bool = True, remove_multiword_forms: bool = False,
+                 upos: Optional[Sequence[str]] = None, remove_multiword_forms: bool = False,
                  expand_values: bool = True):
         self.fallback = fallback
-        self.inflect_wo_ud_features = inflect_wo_ud_features
-        self.prefer_tight_match = prefer_tight_match
         self.remove_multiword_forms = remove_multiword_forms
         # UD_VALUE_EXPANSIONS bridge (Tense=Imp -> Past + Aspect=Imp) on the query: for a table derived
         # from UniMorph tags; off for the treebank's own UD values
@@ -174,7 +172,7 @@ class UDInflector:
     def _has_value(self, feat: str, value: str) -> bool:
         return any(piece.value_mask(feat, value) is not None for piece in self.slices if feat in piece.feature_index)
 
-    def _query(self, ud_features: Dict[str, str], slot_aliases, set_defaults: bool) -> Dict[str, str]:
+    def _query(self, ud_features: Dict[str, str], slot_aliases) -> Dict[str, str]:
         columns = self.columns
         query: Dict[str, str] = {}
         for source, value in (expand_ud_feats(ud_features) if self.expand_values else ud_features).items():
@@ -189,10 +187,6 @@ class UDInflector:
                     self.dropped_values[f"{feat}={value}"] += 1
                     continue
                 query[feat] = widen_ud_value(feat, value)
-        if set_defaults:
-            for feat, value in DEFAULTS.items():
-                if feat in columns and feat not in query:
-                    query[feat] = value
         return query
 
     def _form_rows(self, form: str, query: Dict[str, str], lemma: Optional[str] = None, upos: Optional[str] = None):
@@ -203,8 +197,6 @@ class UDInflector:
         found = self._agreeing_rows(form, query, lemma if use_lemma else None, upos)
         if not found:
             return []
-        if not self.prefer_tight_match:
-            return [(piece, rows) for piece, rows, _ in found]
         best = min(int(d.min()) for _, _, d in found)
         return [(piece, rows[d == best]) for piece, rows, d in found if (d == best).any()]
 
@@ -227,8 +219,42 @@ class UDInflector:
 
     # ---- reinflection
 
-    def _inflect_once(self, form, ud_features, swap_ufeat_override, slot_aliases, set_defaults, lemma=None):
-        query = self._query(ud_features, slot_aliases, set_defaults)
+    @staticmethod
+    def _compared_features(piece: UDSlice, swap_feat: str):
+        """(features a target must state exactly as the source, features that may be stated on one side)."""
+        slot = swap_feat.partition("[")[1:]
+        others = np.array([feat not in (swap_feat, SHADOW_PREFIX + swap_feat) for feat in piece.features], dtype=bool)
+        agreement = others & np.array([feat.partition("[")[0] in AGREEMENT_FEATURES and feat.partition("[")[1:] == slot
+                                       for feat in piece.features], dtype=bool)
+        return others & ~agreement, agreement
+
+    def _target_rows(self, piece: UDSlice, source: int, j: int, target: Optional[int], exact, agreement) -> np.ndarray:
+        """The rows of `source`'s lemma that are its cell with feature `j` changed to `target` (None: any other value)."""
+        rows = self._single_word(piece, piece.lemma_rows(piece.lemmas[source]))
+        cells, own = piece.masks[rows], piece.masks[source]
+        swapped = cells[:, j]
+        changed = swapped == np.uint64(target) if target is not None else (swapped != 0) & ((swapped & own[j]) == 0)
+        same = (cells[:, exact] == own[exact]).all(axis=1)
+        shared = cells[:, agreement]
+        compatible = ((shared == 0) | (own[agreement] == 0) | ((shared & own[agreement]) != 0)).all(axis=1)
+        return self._most_stated(piece, rows[changed & same & compatible], source, j, agreement)
+
+    @staticmethod
+    def _most_stated(piece: UDSlice, rows: np.ndarray, source: int, j: int, agreement) -> np.ndarray:
+        """Per value of feature `j`, the `rows` that state the most of `source`'s agreement features."""
+        if len(rows) < 2:
+            return rows
+        stated = piece.masks[rows][:, agreement] != 0
+        score = (stated & (piece.masks[source][agreement] != 0)).sum(axis=1)
+        values = piece.masks[rows, j]
+        keep = np.zeros(len(rows), dtype=bool)
+        for value in np.unique(values):
+            same = values == value
+            keep |= same & (score == score[same].max())
+        return rows[keep]
+
+    def _inflect_once(self, form, ud_features, swap_ufeat_override, slot_aliases, lemma=None):
+        query = self._query(ud_features, slot_aliases)
         swap_feat = self.ufeat
         if swap_ufeat_override is not None:
             swap_feat = self.resolve_column(swap_ufeat_override, slot_aliases)
@@ -244,33 +270,20 @@ class UDInflector:
             j = piece.feature_index.get(swap_feat)
             if j is None:
                 continue
-            base_wanted, base_asked, _ = piece.constraints(query, strict=True)
+            exact, agreement = self._compared_features(piece, swap_feat)
             for i in rows:
                 cell = int(piece.masks[i, j])
                 if not cell:
                     continue
                 own = piece.decode(swap_feat, cell)
-                wanted, asked = base_wanted.copy(), base_asked.copy()
-                stated = piece.masks[i] != 0
-                wanted[stated], asked[stated] = piece.masks[i][stated], True
-                exact = np.zeros(len(piece.features), dtype=bool)
-                negated = np.zeros(len(piece.features), dtype=bool)
-                if swap_map is None:
-                    negated[j] = True
-                else:
+                target = None
+                if swap_map is not None:
                     if any(v not in swap_map for v in own):
                         continue
                     target = piece.value_mask(swap_feat, ",".join(swap_map[v] for v in own))
                     if target is None:
                         continue
-                    wanted[j], exact[j] = target, True
-                candidates = self._single_word(piece, piece.lemma_rows(piece.lemmas[i]))
-                candidates = piece.agreeing(candidates, wanted, asked, exact=exact, negated=negated)
-                if swap_map is None:
-                    candidates = candidates[piece.masks[candidates, j] != 0]   # must state the swap feature
-                if self.prefer_tight_match and len(candidates) > 1:
-                    d = piece.differences(candidates, asked, np.zeros_like(asked))
-                    candidates = candidates[d == d.min()]
+                candidates = self._target_rows(piece, i, j, target, exact, agreement)
                 if not len(candidates):
                     continue
                 feature_vals.update(_shown(v) for v in own)
@@ -283,11 +296,7 @@ class UDInflector:
                         bundle.setdefault(feat, set()).update(_shown(v) for v in values)
         return forms, feature_vals, bundles, readings
 
-    @staticmethod
-    def form_found(forms) -> bool:
-        return forms is not None and len(forms) == 1
-
-    def inflect(self, form: str, ud_features: Dict[str, str], strategies=(), return_swap_feats: bool = False,
+    def inflect(self, form: str, ud_features: Dict[str, str], return_swap_feats: bool = False,
                 swap_ufeat_override: Optional[str] = None, slot_aliases: Sequence[str] = (),
                 lemma: Optional[str] = None, return_readings: bool = False):
         form = form.lower()
@@ -295,14 +304,10 @@ class UDInflector:
         key = (form, frozenset(ud_features.items()), return_swap_feats, swap_ufeat_override, tuple(slot_aliases), lemma, return_readings)
         if key in self._cache:
             return self._cache[key]
-        forms, vals, bundles, readings = self._inflect_once(form, ud_features, swap_ufeat_override, slot_aliases, False, lemma)
-        if not self.form_found(forms):
-            forms, vals, bundles, readings = self._inflect_once(form, ud_features, swap_ufeat_override, slot_aliases, True, lemma)
-        if not self.form_found(forms) and self.inflect_wo_ud_features:
-            forms, vals, bundles, readings = self._inflect_once(form, {}, swap_ufeat_override, slot_aliases, True, lemma)
+        forms, vals, bundles, readings = self._inflect_once(form, ud_features, swap_ufeat_override, slot_aliases, lemma)
         if self.fallback is not None:
             fb_forms, fb_vals, fb_bundles, fb_readings = self.fallback.inflect(
-                form, ud_features, strategies, True, swap_ufeat_override, slot_aliases, lemma, True)
+                form, ud_features, True, swap_ufeat_override, slot_aliases, lemma, True)
             readings = readings | fb_readings
             if forms is None:
                 forms, vals, bundles = (set(fb_forms) if fb_forms is not None else None), fb_vals, fb_bundles
@@ -322,29 +327,24 @@ class UDInflector:
         return result
 
     def get_form_features(self, form: str, features: Dict[str, str], ufeat: Optional[str] = None,
-                          only_try_ud_if_no_um: bool = False, prefer_tight_match: bool = False,
-                          fetch_all: bool = False, slot_aliases: Sequence[str] = (),
+                          only_try_ud_if_no_um: bool = False, slot_aliases: Sequence[str] = (),
                           upos: Optional[str] = None) -> Set[str]:
-        """The values of `ufeat` (default: the swap feature) among the rows of `form` (of part of speech
+        """The values of `ufeat` (default: the swap feature) among all rows of `form` (of part of speech
         `upos`, if given) that agree with `features`, plus the fallback table's."""
         form = form.lower()
         ufeat = self.resolve_column(ufeat, slot_aliases) if ufeat is not None else self.ufeat
         values: Set[str] = set()
-        query = self._query(features, slot_aliases, False)
+        query = self._query(features, slot_aliases)
         query.pop(ufeat, None)
-        if not fetch_all and ufeat is not None:
-            tight, self.prefer_tight_match = self.prefer_tight_match, prefer_tight_match
-            try:
-                for piece, rows in self._form_rows(form, query, upos=upos):
-                    j = piece.feature_index.get(ufeat)
-                    if j is not None:
-                        for i in rows:
-                            values.update(_shown(v) for v in piece.decode(ufeat, int(piece.masks[i, j])))
-            finally:
-                self.prefer_tight_match = tight
+        if ufeat is not None:
+            for piece, rows, _ in self._agreeing_rows(form, query, None, upos):
+                j = piece.feature_index.get(ufeat)
+                if j is not None:
+                    for i in rows:
+                        values.update(_shown(v) for v in piece.decode(ufeat, int(piece.masks[i, j])))
         if self.fallback is not None and not (only_try_ud_if_no_um and values):
             values |= self.fallback.get_form_features(form, features, ufeat, only_try_ud_if_no_um,
-                                                      prefer_tight_match, fetch_all, slot_aliases, upos)
+                                                      slot_aliases, upos)
         return values
 
 

@@ -7,6 +7,7 @@ from urllib.parse import quote, unquote
 from agreement_trees.report.html.html_overview import create_html
 from agreement_trees.taxonomy import (
     GROUP_PREFIXES as _GROUP_PREFIXES,
+    OTHER_VERB_FORMS as _OTHER_VERB_FORMS,
     classify_flat_condition,
     NPA_ROLE_PROSE as _NPA_ROLE_PROSE,
     NPA_ROLE_ORDER as _NPA_ROLE_ORDER,
@@ -83,6 +84,16 @@ def _classify_deprel(deprel: str) -> tuple[str, str, int, tuple | None]:
     flat = classify_flat_condition(deprel)
     if flat:
         group, label, order, variant = flat
+        form_ids = list(_OTHER_VERB_FORMS)
+        prefix = next((p for p in sorted(form_ids, key=len, reverse=True) if deprel.startswith(p)), None)
+        if group == "Other":
+            # ad-hoc candidates (svCase, sxinfDefinite): shown in their own family's group, after the fixed features
+            prefix = next(p for p in sorted(_GROUP_PREFIXES, key=len, reverse=True) if deprel.startswith(p))
+            group = _GROUP_PREFIXES[prefix]
+            feature = deprel[len(prefix):].split("_")[0]
+            label = f"{_OTHER_VERB_FORMS[prefix][1]} ({feature})" if prefix in _OTHER_VERB_FORMS else feature
+        if prefix in _OTHER_VERB_FORMS:
+            order += 10 * (form_ids.index(prefix) + 1)
         if variant:
             label += f" ({variant.replace('_', ' ')})"
         return group, label, order, None

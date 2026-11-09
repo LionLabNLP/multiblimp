@@ -12,6 +12,7 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from multiblimp.benchmark_exclusions import benchmark_exclusions
 from multiblimp.downsample import (
     CATEGORICAL, LEMMA_CAP, MIN_PAIRS, N_ITEMS, Condition, balance_columns, balance_features, condition_roles, language_seed,
     select_pairs,
@@ -286,6 +287,9 @@ def build_benchmark(pairs_dir, out_dir, langs=None, conds=None, n_items=N_ITEMS,
         conditions, kept_files, cleaned, phenomena = [], [], {}, {}
         for path, cond, deprel in files:
             name = f"{cond}/{deprel}" if deprel else cond
+            if cond in benchmark_exclusions.get(lang, ()):
+                cleaning["config_excluded"] += pq.ParquetFile(path).metadata.num_rows
+                continue
             names = set(pq.ParquetFile(path).schema_arrow.names)
             df = _clean(path, [c for c in balance_columns(condition_roles(cond, deprel)) + ["wrong_sen_str"] if c in names], cleaning)
             if len(df):

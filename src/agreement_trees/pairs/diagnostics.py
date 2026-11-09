@@ -261,6 +261,10 @@ def diagnostics_row_to_json(row, lang_dir: str | None = None) -> dict:
     # correct_swaps is one row per kept row, so its second-chance count is the pairs-level split;
     # the other buckets can hold several items per source row, hence nKeep's comes from meta.json
     n_pairs_second = _bucket_second_chance_count(lang_dir, "correct_swaps") if lang_dir else 0
+    # N KEEP on the page counts rows once, so its second-chance split must too (the "(kept)" columns count
+    # once per reinflected role, twice for a pair of two dependents); older meta.json files lack the row count
+    meta_rows = _read_meta(lang_dir) if lang_dir else {}
+    n_keep_second_rows = meta_rows.get("num_rows_keep_second_chance", _num(row, "# UD candidates (kept, 2nd chance)"))
     result = {
         "leafThreshold": (
             None if is_per_leaf or leaf_threshold is None or pd.isna(leaf_threshold)
@@ -273,7 +277,7 @@ def diagnostics_row_to_json(row, lang_dir: str | None = None) -> dict:
         "pctUMUD": float(_num(row, "% covered by UM+UD")),
         "nRaw": int(_num(row, "# UD candidates (raw)")),
         "nKeep": int(_num(row, "# UD candidates (kept)")),
-        "nKeepSecondChance": int(_num(row, "# UD candidates (kept, 2nd chance)")),
+        "nKeepSecondChance": int(n_keep_second_rows),
         "nLemma": int(_num(row, "# UM lemmas")),
         "nForm": int(_num(row, "# UM Forms")),
         "nValidFromMulti": int(_num(row, "# valid from multi")),

@@ -2,7 +2,7 @@
 sidecar per treebank (resources/ud/validation/, see multiblimp.validation) and summary tables
 in output/diagnostics/validation/; no treebank data is filtered or changed.
 
-Needs a checkout of UniversalDependencies/tools (default ../tools, or set UD_TOOLS_DIR) and
+Needs a checkout of UniversalDependencies/tools (default resources/ud_validator, cloned by setup.sh; or set UD_TOOLS_DIR) and
 its dependencies (udapi, regex). Treebanks run one at a time in a memory-capped worker.
 
 Usage (any directory):

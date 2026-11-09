@@ -16,6 +16,7 @@ resources/ud_tables/
 resources/um_tables/
 resources/ud_mwt/
 resources/um2ud_annotation/
+resources/ud_validator/
 resources/annotation_coverage.json
 resources/annotation_coverage_overview.tsv
 resources/flagged_treebanks.txt

@@ -21,7 +21,7 @@ from agreement_trees.pairs.sentence_text import add_sentence_strings
 from multiblimp.script_log import append_log
 
 
-PAIRS_VERSION = 1   # bump when what create_pairs writes changes (buckets, strings, meta); older directories are rebuilt
+PAIRS_VERSION = 4  # bump when what create_pairs writes changes (buckets, strings, meta); older directories are rebuilt
 
 
 def pairs_current(lang_pairs_dir: str) -> bool:
@@ -924,6 +924,8 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
             "leaf_min_acc": leaf_threshold,
             "num_ud_candidates_raw": n_raw,
             "num_ud_candidates_keep": n_keep,
+            "num_rows_keep": n_keep,
+            "num_rows_keep_second_chance": n_keep_second_chance,
             "num_ud_candidates_keep_second_chance": n_keep_second_chance,
             "items_seen": items_seen,
             "num_lemma": num_lemma,

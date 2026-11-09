@@ -18,6 +18,7 @@ ATTRACTOR_FLAGS = ("has_attractors", "only_has_fully_congruent", "only_has_weakl
 CATEGORICAL = ("feature_vals", "word_order", "swap_kind", "attractors", "pos_a", "pos_b", "distance", "length", "leaf_id", "treebank")
 SINGLE_VALUED = tuple(name for name in CATEGORICAL if name not in ("feature_vals", "swap_kind"))   # weighted; the others are handled separately
 PASS_THROUGH = ("pair_key", "surface_status")
+UNCERTAIN_SURFACE = ("uncontracted_unattested",)   # written form guessed (components joined by spaces); drawn last
 NO_LEMMA = {"", "_"}
 
 
@@ -30,6 +31,7 @@ class Condition:
     values: np.ndarray = None   # (pairs, alternatives) codes of the swap values a pair counts for, padded with 0
     shares: np.ndarray = None   # their weights per pair: 1 split over the alternatives (0 for padding)
     ambiguous: np.ndarray = None
+    uncertain: np.ndarray = None   # pairs whose written form is a guess (surface_status in UNCERTAIN_SURFACE)
 
     def __len__(self):
         return len(self.features)
@@ -134,6 +136,8 @@ def encode(conditions: list):
         cond.codes["lemma_a"] = _codes(f["lemma_a"], lemmas)
         cond.codes["lemma_b"] = _codes(f["lemma_b"], lemmas)
         cond.codes["sentence"] = _codes(f["sentence"], sentences)
+        status = f["surface_status"] if "surface_status" in f else pd.Series("", index=f.index)
+        cond.uncertain = status.isin(UNCERTAIN_SURFACE).to_numpy()
     return len(lemmas), len(sentences)
 
 
@@ -147,13 +151,16 @@ def select_pairs(conditions: list, n_items: int, lemma_cap: float, rng: np.rando
     eligible pair; they count fractionally for each of their values. Of the pairs left, only those whose reinflected
     token (swap_kind) has been picked least so far are drawn from, so the two sides of a noun-phrase pair of two
     dependents stay even as far as the data allows.
-    A lemma may appear in at most `lemma_cap` of the sample and a sentence once; if the quota cannot be
-    filled, the lemma cap rises by one step at a time, and only then sentences may repeat."""
+    Pairs whose written form is a guess (UNCERTAIN_SURFACE) are drawn only when no condition has another eligible
+    pair. A lemma may appear in at most `lemma_cap` of the sample and a sentence once; if the quota cannot be
+    filled, the uncertain pairs are allowed first, then the lemma cap rises by one step at a time, and only then
+    sentences may repeat."""
     n_lemmas, n_sentences = encode(conditions)
     n_values = [_encode_values(c) for c in conditions]
     most_per_sentence = int(sum(np.bincount(c.codes["sentence"], minlength=n_sentences) for c in conditions).max())
     step = max(1, int(np.ceil(lemma_cap * n_items)))
     cap, sentence_limit = step, 1
+    allow_uncertain = False
     lemma_count = np.zeros(n_lemmas, dtype=np.int64)
     sentence_count = np.zeros(n_sentences, dtype=np.int64)
     taken = [np.zeros(len(c), dtype=bool) for c in conditions]
@@ -168,7 +175,9 @@ def select_pairs(conditions: list, n_items: int, lemma_cap: float, rng: np.rando
     while total < n_items:
         open_conditions = np.flatnonzero(~exhausted)
         if not len(open_conditions):
-            if cap < n_items:
+            if not allow_uncertain:
+                allow_uncertain = True
+            elif cap < n_items:
                 cap += step
             else:
                 sentence_limit += 1
@@ -181,6 +190,8 @@ def select_pairs(conditions: list, n_items: int, lemma_cap: float, rng: np.rando
         cond, codes = conditions[c], conditions[c].codes
         la, lb, sent = codes["lemma_a"], codes["lemma_b"], codes["sentence"]
         eligible = ~taken[c] & (sentence_count[sent] < sentence_limit)
+        if not allow_uncertain:
+            eligible &= ~cond.uncertain
         if cap < n_items:
             eligible &= ((lemma_count[la] < cap) | (la == 0)) & ((lemma_count[lb] < cap) | (lb == 0))
         rows = np.flatnonzero(eligible)
@@ -212,7 +223,8 @@ def select_pairs(conditions: list, n_items: int, lemma_cap: float, rng: np.rando
         total += 1
 
     chosen = {cond.name: np.flatnonzero(taken[i]) for i, cond in enumerate(conditions)}
-    return chosen, {"lemma_cap_count": int(cap), "sentence_limit": int(sentence_limit)}
+    uncertain = sum(int(cond.uncertain[taken[i]].sum()) for i, cond in enumerate(conditions))
+    return chosen, {"lemma_cap_count": int(cap), "sentence_limit": int(sentence_limit), "uncertain_forms": uncertain}
 
 
 def language_seed(lang: str, seed: int) -> int:

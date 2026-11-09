@@ -31,9 +31,10 @@ from datetime import datetime, timezone
 import pandas as pd
 import pyarrow.parquet as pq
 
+from agreement_trees.config import LANGS_PATH
 from agreement_trees.npa.agreement import refresh_deprel_index as refresh_npa_index
 from agreement_trees.pairs.diagnostics import BUCKET_JSON_KEYS
-from agreement_trees.pipeline_utils import available_system_memory_bytes, guard_process_memory
+from agreement_trees.pipeline_utils import available_system_memory_bytes, guard_process_memory, read_label_distribution
 from agreement_trees.report.viz_overview import generate_html_overview_index
 from agreement_trees.taxonomy import FLAT_CONDITION_META, classify_flat_condition, NPA_FEATURE_NAMES, npa_subgroup_label, GROUP_PREFIXES
 from agreement_trees.vp.conditions import CONDITIONS
@@ -99,6 +100,28 @@ def _load_languages_six(index_html_path: str) -> list[dict] | None:
     if not match:
         return None
     return json.loads(match.group(1))
+
+
+LEFT_OUT_RE = re.compile(r"const LEFT_OUT = (\[.*?\]);\s*const LANGUAGES\b", re.S)
+
+
+def _load_left_out(index_html_path: str) -> list[dict]:
+    """The index's languages kept out of its table (viz_deprel._left_out_export); [] for an index without them."""
+    if not os.path.exists(index_html_path):
+        return []
+    match = LEFT_OUT_RE.search(open(index_html_path, encoding="utf-8").read())
+    return json.loads(match.group(1)) if match else []
+
+
+def _left_out_records(entries: list[dict], cond: str, subgroup: str, dir_rel: str) -> list[dict]:
+    """Records of the left-out languages with something to count; those failing the current scan have none."""
+    return [_record(e, cond, subgroup, dir_rel) for e in entries
+            if e["attempted"] and (e["nRaw"] or e["nPairs"])]
+
+
+def _not_attempted(entries: list[dict]) -> set[str]:
+    """Display names of the languages whose page is an older fit the current scan does not pass (or has no page)."""
+    return {NAME_ALIASES.get(e["name"], e["name"]) for e in entries if not e["attempted"]}
 
 
 def _nan_to_none(x):
@@ -221,14 +244,18 @@ def collect_records() -> tuple[list[dict], dict[str, set[str]]]:
     tried = {}
     for cond in flat_conditions:
         cond_dir = os.path.join(HTML_ROOT, cond)
-        tried[cond] = _tried_languages(cond_dir)
+        left_out = _load_left_out(os.path.join(cond_dir, "index.html"))
+        tried[cond] = _tried_languages(cond_dir) - _not_attempted(left_out)
+        records += _left_out_records(left_out, cond, cond, cond)
         six = _load_languages_six(os.path.join(cond_dir, "index.html"))
         if six:
             records += [_record(e, cond, cond, cond) for e in six]
 
     for sub in npa_subgroups:
         sub_dir = os.path.join(HTML_ROOT, "npa", sub)
-        tried[sub] = _tried_languages(sub_dir)
+        left_out = _load_left_out(os.path.join(sub_dir, "index.html"))
+        tried[sub] = _tried_languages(sub_dir) - _not_attempted(left_out)
+        records += _left_out_records(left_out, "npa", sub, f"npa/{sub}")
         six = _load_languages_six(os.path.join(sub_dir, "index.html"))
         if six:
             records += [_record(e, "npa", sub, f"npa/{sub}") for e in six]
@@ -236,73 +263,77 @@ def collect_records() -> tuple[list[dict], dict[str, set[str]]]:
     return records, tried
 
 
-def _parquet_paths(cond: str, is_npa_sub: bool) -> list[str]:
+def _condition_data_dir(cond: str, is_npa_sub: bool) -> str | None:
     # Flat conditions nest one level deeper than npa's own convention --
-    # decision_trees/{cond}/{cond}_{deprel}/*.parquet vs.
-    # decision_trees/npa/{subgroup}/*.parquet -- both observed directly on
-    # disk (see PARQUET_ROOT's comment). The nested deprel varies by
-    # condition family (svNa -> nsubj, ovNa -> obj, iovNa -> iobj, ...), so
-    # it's read off disk rather than assumed; a condition dir with more than
-    # one subdirectory (shouldn't happen -- one deprel per target_id by
-    # convention) uses whichever sorts first rather than guessing further.
+    # decision_trees/{cond}/{cond}_{deprel}/ vs. decision_trees/npa/{subgroup}/ --
+    # both observed directly on disk (see PARQUET_ROOT's comment). The nested
+    # deprel varies by condition family (svNa -> nsubj, ovNa -> obj, iovNa ->
+    # iobj, ...), so it's read off disk rather than assumed; a condition dir
+    # with more than one subdirectory (shouldn't happen -- one deprel per
+    # target_id by convention) uses whichever sorts first.
     if is_npa_sub:
-        pattern = os.path.join(PARQUET_ROOT, "npa", cond, "*.parquet")
-        return sorted(glob.glob(pattern))
-
-    cond_dir = os.path.join(PARQUET_ROOT, cond)
-    subdirs = sorted(
-        d for d in glob.glob(os.path.join(cond_dir, "*")) if os.path.isdir(d)
-    )
-    if not subdirs:
-        return []
-    return sorted(glob.glob(os.path.join(subdirs[0], "*.parquet")))
+        return os.path.join(PARQUET_ROOT, "npa", cond)
+    subdirs = sorted(d for d in glob.glob(os.path.join(PARQUET_ROOT, cond, "*")) if os.path.isdir(d))
+    return subdirs[0] if subdirs else None
 
 
-def treebank_samples() -> list[dict]:
-    """Per-sample treebank attribution from this repo's own decision-tree
-    cache (PARQUET_ROOT) -- the one thing LANGUAGES.six never carries. Real
-    counts, not estimates: each row in one of these parquet files is one raw
-    candidate sample, tagged with the exact UD treebank it came from.
+def _agreeing_by_treebank(data_dir: str, lang_stem: str, lang_treebanks: dict) -> dict[str, int]:
+    """{treebank: agreeing ("yes") rows} of one language x condition over its whole data: the per-treebank
+    summary's label counts (included treebanks only); for a language with a single eligible treebank
+    (lang_treebanks, get_lang_treebanks) its label distribution file credited to that treebank (its summary
+    has no entries, and a single-label language has none at all). {} when neither tells."""
+    summary_fn = os.path.join(data_dir, "treebanks", f"{lang_stem}.json")
+    rows = []
+    if os.path.exists(summary_fn):
+        with open(summary_fn) as f:
+            rows = json.load(f).get("treebanks", [])
+    # a single-treebank language gets an empty summary (no per-treebank trees)
+    if rows:
+        return {r["treebank"]: int((r.get("label_counts") or {}).get("yes", 0))
+                for r in rows if not r.get("excluded")}
+    treebanks = lang_treebanks.get(lang_stem, [])
+    if len(treebanks) == 1:
+        return {treebanks[0]: int(read_label_distribution(data_dir, lang_stem).get("yes", 0))}
+    return {}
 
-    Only covers whichever language x condition combinations already have a
-    cached parquet on disk -- not necessarily every combination this page's
-    other sections report on, since that depends on how far the pipeline's
-    own fitting run has gotten for each condition.
+
+def treebank_samples(published: set | None = None) -> list[dict]:
+    """Per-treebank attribution of each language x condition's samples (agreeing rows over the language's
+    whole data, the same count as the table's Samples) -- the one thing LANGUAGES.six never carries.
+
+    published: the (language, condition id) pairs shown in a table ("npa/<subgroup>" for NP); others are
+    left out, so a condition kept out of the table (too few agreeing rows, ...) isn't listed here either.
+    None keeps every combination that has a label distribution file.
 
     Deliberately reports *samples* by treebank, not *pairs* by treebank --
     there's no per-row flag distinguishing "became an accepted minimal pair"
-    from "did not" in these files (that determination happens later in the
-    pipeline, working from bucket-membership logic this function doesn't
-    re-run), so treating a sample count as a pair count would fabricate
-    precision that isn't there. Samples are still the right proxy: every
-    pair for a language/condition is drawn from exactly this sample pool, so
-    a treebank's share of samples is a treebank's share of where the pairs
-    *could* have come from.
+    from "did not" in these files, so treating a sample count as a pair count
+    would fabricate precision that isn't there. Samples are still the right
+    proxy: every pair for a language/condition is drawn from exactly this
+    sample pool, so a treebank's share of samples is a treebank's share of
+    where the pairs *could* have come from.
     """
     flat_conditions, npa_subgroups = _discover_conditions()
+    lang_treebanks = get_lang_treebanks(RESOURCE_DIR)
+    jobs = [(cond, cond, False, group, f"{group} ({label})")
+            for cond in flat_conditions for group, label in [_flat_meta(cond)]]
+    jobs += [(sub, f"npa/{sub}", True, "Noun Phrase", npa_subgroup_label(sub)) for sub in npa_subgroups]
     out = []
-    for cond in flat_conditions:
-        group, label = _flat_meta(cond)
-        for path in _parquet_paths(cond, is_npa_sub=False):
-            lang = NAME_ALIASES.get(
-                os.path.splitext(os.path.basename(path))[0].replace("_", " "),
-                os.path.splitext(os.path.basename(path))[0].replace("_", " "),
-            )
-            counts = pd.read_parquet(path, columns=["treebank"])["treebank"].value_counts()
+    for cond, condition_id, is_npa_sub, group, condition_label in jobs:
+        data_dir = _condition_data_dir(cond, is_npa_sub)
+        if data_dir is None:
+            continue
+        for dist_fn in sorted(glob.glob(os.path.join(data_dir, "*_label_distribution.json"))):
+            stem = os.path.basename(dist_fn)[: -len("_label_distribution.json")]
+            lang = NAME_ALIASES.get(stem.replace("_", " "), stem.replace("_", " "))
+            if published is not None and (lang, condition_id) not in published:
+                continue
+            counts = {tb: n for tb, n in _agreeing_by_treebank(data_dir, stem, lang_treebanks).items() if n}
+            if not counts:
+                continue
             out.append({
-                "language": lang, "condition_id": cond, "condition_label": f"{group} ({label})",
-                "group": group, "samples_by_treebank": counts.to_dict(), "total_samples": int(counts.sum()),
-            })
-    for sub in npa_subgroups:
-        for path in _parquet_paths(sub, is_npa_sub=True):
-            lang = NAME_ALIASES.get(
-                os.path.splitext(os.path.basename(path))[0].replace("_", " "),
-                os.path.splitext(os.path.basename(path))[0].replace("_", " "),
-            )
-            counts = pd.read_parquet(path, columns=["treebank"])["treebank"].value_counts()
-            out.append({
-                "language": lang, "condition_id": f"npa/{sub}", "condition_label": npa_subgroup_label(sub),
-                "group": "Noun Phrase", "samples_by_treebank": counts.to_dict(), "total_samples": int(counts.sum()),
+                "language": lang, "condition_id": condition_id, "condition_label": condition_label,
+                "group": group, "samples_by_treebank": counts, "total_samples": int(sum(counts.values())),
             })
     return out
 
@@ -541,7 +572,9 @@ def build_stats(out_path: str = STATS_PATH) -> dict:
     # part of the M samples/P pairs already shown for this combo" instead of
     # this breakdown's own figures floating unanchored from the rest of the
     # page's numbers.
-    treebank_pairs = treebank_samples()
+    treebank_pairs = treebank_samples(published={
+        (r["lang"], f"npa/{r['subgroup']}" if r["cond"] == "npa" else r["cond"]) for r in records
+    })
     for entry in treebank_pairs:
         is_sub = entry["condition_id"].startswith("npa/")
         key = entry["condition_id"].split("/", 1)[1] if is_sub else entry["condition_id"]
@@ -822,6 +855,8 @@ def needs_refresh(task: dict) -> bool:
         os.path.join(task["save_dir"], "*.parquet"),
         os.path.join(task["pairs_dir"], "*", "*.parquet"),
         os.path.join(task["pairs_dir"], "*", "meta.json"),
+        # the index lists the scan's failed languages
+        LANGS_PATH["vp" if task["kind"] == "sva" else "np"],
         *_CODE_FILES,
     )
     return input_mtime > output_mtime

@@ -1,6 +1,7 @@
-"""Build the UD-derived lexicon tables (resources/ud_tables). Duplicate-removal thresholds
-(ud_tables.dup_form_threshold / dup_feat_threshold, see
-multiblimp.ud_lexicon.remove_duplicate_features) are in resources/data_prep_config.json.
+"""Build the UD-derived lexicon tables (resources/ud_tables). Duplicate-removal and subset-merge
+thresholds (ud_tables.dup_form_threshold / dup_feat_threshold / subset_merge_ratio, see
+multiblimp.ud_lexicon.remove_duplicate_features and merge_subset_rows) are in
+resources/data_prep_config.json.
 
 Also writes the UD side of the annotation coverage statistics
 (resources/annotation_coverage.json and _overview.tsv, see
@@ -43,6 +44,7 @@ if __name__ == "__main__":
         load_from_pickle=True,
         dup_form_threshold=cfg["dup_form_threshold"],
         dup_feat_threshold=cfg["dup_feat_threshold"],
+        subset_merge_ratio=cfg["subset_merge_ratio"],
         log=log,
     )
 

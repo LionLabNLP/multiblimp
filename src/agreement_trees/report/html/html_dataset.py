@@ -256,8 +256,7 @@ def _category_tab_html(data: dict, group: str, lang_idx: dict, npa_lang_idx: dic
         <div id="tab-{slug}" role="tabpanel" aria-labelledby="tabbtn-{slug}" tabindex="0" data-group="{group}" hidden>
             <div class="card">
                 <h2>{group}</h2>
-                <p class="section-desc">{n} condition{"s" if n != 1 else ""} tracked in this category, {totals["languages"]} languages combined.
-                    Pick one below for its own breakdown &mdash; the chart shows its top 25 languages by pairs; the table has all of them.</p>
+                <p class="section-desc">{n} condition{"s" if n != 1 else ""}, {totals["languages"]} languages. Pick one for its breakdown.</p>
                 <h3 class="mini-stats-title">Total</h3>
                 <div class="mini-stats">
                     {_mini_stat_html(str(totals["languages"]), "Languages")}
@@ -269,11 +268,7 @@ def _category_tab_html(data: dict, group: str, lang_idx: dict, npa_lang_idx: dic
 
                 <details class="table-view" id="cat-{slug}-dropped-details">
                     <summary>Dropped before fitting in this category</summary>
-                    <p class="section-desc" style="margin-top: 0.6rem;">
-                        Rows across {group}'s {n} condition{"s" if n != 1 else ""} where the agreement label itself
-                        was missing (head, subject, or both), so they never reached the swap-candidate pipeline at
-                        all &mdash; see the same chart on the Overview tab for the all-conditions total this is part of.
-                    </p>
+                    <p class="section-desc" style="margin-top: 0.6rem;">Rows missing the agreement label on the head, the subject, or both.</p>
                     <div id="cat-{slug}-dropped-chart" style="height: 160px;"></div>
                 </details>
 
@@ -1105,16 +1100,9 @@ def render_dataset_page(data: dict) -> str:
                 <div>
                     <h1>MultiBLiMP – Agreement</h1>
                     <p class="description">
-                        How many candidate samples were considered and how many minimal pairs were actually
-                        generated from them &mdash; broken down per language, per grammatical condition (subject
-                        agreement with the verb/participle/auxiliary, and noun-phrase agreement across its role
-                        pairs), and per language&times;condition. "Instances" are the rows of a
-                        condition's feature cache, "annotated" the ones where both tokens carry the feature (they
-                        agree or not), and "samples" the annotated ones that agree: the candidates a pair can be
-                        built from; "minimal pairs" are the rows that came out the other end
-                        as usable contrastive pairs &mdash; one sample can yield more than one pair when several
-                        inflected forms are valid contrasts, so pairs isn't a subset of samples and the ratio
-                        between them can exceed 1&times;.
+                        Candidate samples and the minimal pairs generated from them, per language and condition.
+                        <b>Samples</b> are the annotated instances where head and dependent agree; <b>pairs</b> are the
+                        usable contrasts built from them (one sample can give several, so pairs can exceed samples).
                     </p>
                     <p class="meta-line">Generated {data["generated_at"]}</p>
                 </div>
@@ -1178,10 +1166,7 @@ def render_dataset_page(data: dict) -> str:
 
             <div class="card" id="sec-languages">
                 <h2>Samples &amp; pairs per language</h2>
-                <p class="section-desc">
-                    Totals summed across every condition a language appears in. The chart shows the top 25 languages
-                    by minimal pairs generated; the table below covers all {totals["languages"]}.
-                </p>
+                <p class="section-desc">Totals across conditions. Chart: top 25 languages by pairs; table: all {totals["languages"]}.</p>
                 <div id="language-chart" style="height: 560px;"></div>
 
                 <div class="toolbar" style="margin-top: 1.5rem;">
@@ -1211,12 +1196,7 @@ def render_dataset_page(data: dict) -> str:
 
             <div class="card" id="sec-heatmap">
                 <h2>Language &times; condition matrix</h2>
-                <p class="section-desc">
-                    Minimal pairs generated for every language/condition combination. Sort by total pairs or
-                    alphabetically; hover a cell for exact samples, pairs, ratio, and decision-tree accuracy, or
-                    click it to open that language/condition's own diagnostics page. Blank cells are combinations
-                    that were never run, not zero-pair combinations.
-                </p>
+                <p class="section-desc">Pairs per language and condition. Hover for details, click to open the diagnostics. Blank cells were never run.</p>
                 <div class="toggle-row">
                     <div class="metric-toggle" role="radiogroup" aria-label="Heatmap color metric" id="heatmap-metric-toggle">
                         <button type="button" class="metric-toggle-btn active" role="radio" aria-checked="true" data-metric="pairs">Pairs</button>
@@ -1245,30 +1225,14 @@ def render_dataset_page(data: dict) -> str:
 
             <div class="card" id="sec-scatter">
                 <h2>Samples vs. minimal pairs, per language</h2>
-                <p class="section-desc">
-                    Each dot is one language. The dashed line marks where pairs equal samples (1&times;) &mdash;
-                    languages well above it produced unusually many contrastive pairs per candidate; languages near
-                    the bottom found samples but little usable contrast. Both axes are log-scaled given the range
-                    from a handful of samples to hundreds of thousands; languages with zero pairs are nudged just
-                    above zero so they stay visible rather than dropping off a log axis. <b>Total</b> sums each
-                    language across every condition it appears in (dots aren't clickable here -- a language's
-                    condition breakdown lives behind its own name in the table below); open <b>see conditions</b>
-                    and pick a single one instead to see that condition alone, with dots linking to each language's
-                    own diagnostics page.
-                </p>
+                <p class="section-desc">One dot per language, log axes; the dashed line is pairs = samples. Pick a condition to see it alone, with dots linking to each language.</p>
                 <div class="picker-bar" id="scatter-cond-picker" role="radiogroup" aria-label="Condition"></div>
                 <div id="scatter-chart" style="height: 460px;"></div>
             </div>
 
             <div class="card" id="sec-funnel">
                 <h2>Where samples don't become pairs</h2>
-                <p class="section-desc">
-                    Aggregated outcome buckets across every language/condition (from each run's own diagnostic
-                    buckets). Not a strict partition of the sample count above &mdash; one sample can land in more
-                    than one outcome across its accepted swap candidates &mdash; but it shows where the corpus loses
-                    candidates: no matching swap candidate, an inflector that couldn't produce a contrastive form,
-                    a reinflection that came out identical, or a genuinely ambiguous subject.
-                </p>
+                <p class="section-desc">Outcome buckets across all languages and conditions. One sample can fall in several, so they don't sum to the sample count.</p>
                 <div id="funnel-chart" style="height: 300px;"></div>
 
                 <details class="table-view">
@@ -1282,17 +1246,7 @@ def render_dataset_page(data: dict) -> str:
 
             <div class="card" id="sec-treebank-pairs">
                 <h2>Samples by treebank</h2>
-                <p class="section-desc">
-                    Which treebank each language's raw candidate samples actually came from, for every minimal pair
-                    those samples could produce &mdash; not an estimate, real per-row counts straight from this
-                    repo's own decision-tree cache. Coverage depends on how far each condition's own fitting run has
-                    gotten (currently {len(data["treebank_pairs"])} language &times; condition combinations across
-                    {len(set(e["language"] for e in data["treebank_pairs"]))} languages, out of this page's full
-                    {data["totals"]["languages"]}), so it can be a subset of the rest of this page rather than a
-                    full match. Samples, not pairs, by treebank: nothing here flags which individual rows became
-                    accepted pairs, so a treebank's share of samples is used as the closest honest proxy for its
-                    share of that combination's pairs.
-                </p>
+                <p class="section-desc">Real per-row sample counts by treebank, for the {len(data["treebank_pairs"])} language &times; condition combinations fitted so far ({len(set(e["language"] for e in data["treebank_pairs"]))} of {data["totals"]["languages"]} languages). Samples, not pairs.</p>
                 <div class="toolbar">
                     <label for="treebank-pairs-search" class="sr-only">Filter languages by name</label>
                     <input class="search" id="treebank-pairs-search" type="text" placeholder="Filter languages&hellip;">
@@ -1318,14 +1272,7 @@ def render_dataset_page(data: dict) -> str:
 
             <div class="card" id="sec-treebanks">
                 <h2>Treebanks per language</h2>
-                <p class="section-desc">
-                    Every UD treebank this pipeline is eligible to draw samples from for each attempted language
-                    (some languages restrict to a specific subset; most use every treebank the UD release has for
-                    them) &mdash; an inventory of possible sources, not a per-sample or per-pair count by treebank.
-                    Includes the {len(data["totals"]["coverage"]["zero_languages"])} zero-yield languages above,
-                    since which treebank(s) a language drew from can be part of why it came back empty. For the
-                    finer, per-sample breakdown, see above.
-                </p>
+                <p class="section-desc">The UD treebanks each attempted language draws from, including the {len(data["totals"]["coverage"]["zero_languages"])} zero-yield languages above.</p>
                 <div class="toolbar">
                     <label for="treebank-search" class="sr-only">Filter languages by name</label>
                     <input class="search" id="treebank-search" type="text" placeholder="Filter languages&hellip;">
@@ -1652,8 +1599,7 @@ def render_dataset_page(data: dict) -> str:
                         </table>
                     </div>
                     ${{scope === 'npa' ? `<p class="section-desc" style="margin-top: 0.5rem;"><button type="button" class="lang-link" data-lang="${{lang.replace(/"/g, '&quot;')}}">Show all conditions</button></p>` : ''}}
-                    <p class="section-desc" style="margin-top: 0.5rem;">Noun Phrase role-pair rows overlap (one noun phrase can
-                        count under several role pairs), so the rows don't add up to the totals above.</p>
+                    <p class="section-desc" style="margin-top: 0.5rem;">Noun Phrase role-pair rows overlap, so they don't add up to the totals above.</p>
                     ${{treebankNote}}
                     ${{sampleNote}}
                 `;
@@ -1932,33 +1878,54 @@ def render_dataset_page(data: dict) -> str:
             const HEAD_ORDER = ['Verb', 'Participle', 'Auxiliary'];
             const FEAT_ORDER = ['Number', 'Gender', 'Person'];
             const rank = (list, v) => {{ const i = list.indexOf(v); return i === -1 ? list.length : i; }};
-            const colInfo = DATA.matrix.conditions.map(id => {{
+            const colInfo = DATA.matrix.conditions.map((id, idx) => {{
                 const c = DATA.conditions.find(c => c.id === id);
-                if (!c) return {{ id, arg: id, head: '', feat: '', short: id, full: id }};
+                if (!c) return {{ id, idx, arg: id, head: '', feat: '', short: id, full: id, key: id }};
                 const isNpa = id === 'npa';
                 const [arg, head = ''] = c.group.split('\u2013');
-                const feat = isNpa ? 'All role pairs' : c.label;
+                // one column per verb form (Converb, Gerund, ...), aggregated over its features
+                const form = head === 'Other verb forms' && c.label.match(/^(.+) \\(\\w+\\)$/);
+                const feat = isNpa ? 'All role pairs' : form ? form[1] : c.label;
                 return {{
-                    id, arg, head, feat,
+                    id, idx, arg, head, feat,
                     short: head ? feat : '',
-                    full: condLabel(id).full,
+                    full: form ? `${{c.group}} \u00b7 ${{form[1]}} (all features)` : condLabel(id).full,
+                    key: form ? `${{c.group}}|${{form[1]}}` : id,
                 }};
             }});
-            const colPerm = colInfo.map((_, j) => j).sort((a, b) => {{
-                const x = colInfo[a], y = colInfo[b];
+            const groups = [];
+            colInfo.forEach(c => {{
+                let g = groups.find(g => g.key === c.key);
+                if (!g) {{ g = {{ ...c, members: [] }}; groups.push(g); }}
+                g.members.push(c.idx);
+            }});
+            groups.forEach(g => {{ if (g.head && !HEAD_ORDER.includes(g.head)) HEAD_ORDER.push(g.head); }});
+            const FORM_ORDER = [...new Set(groups.filter(g => g.head === 'Other verb forms').map(g => g.feat))];
+            const colPerm = groups.map((_, j) => j).sort((a, b) => {{
+                const x = groups[a], y = groups[b];
                 return rank(ARG_ORDER, x.arg) - rank(ARG_ORDER, y.arg)
                     || rank(HEAD_ORDER, x.head) - rank(HEAD_ORDER, y.head)
+                    || (x.head === 'Other verb forms' ? rank(FORM_ORDER, x.feat) - rank(FORM_ORDER, y.feat) : 0)
                     || rank(FEAT_ORDER, x.feat) - rank(FEAT_ORDER, y.feat);
             }});
-            const cols = colPerm.map(j => colInfo[j]);
-            const permute = m => m.map(row => colPerm.map(j => row[j]));
-            const condMeta = cols.map(c => condLabel(c.id));
+            const cols = colPerm.map(j => groups[j]);
+            const aggregate = (m, how) => m.map((row, i) => cols.map(g => how(g.members.map(j => row[j]), g.members.map(j => DATA.matrix.samples[i][j]))));
+            const sum = (vals) => vals.reduce((t, v) => t + (v || 0), 0);
+            const permute = m => aggregate(m, vals => (vals.length === 1 ? vals[0] : sum(vals)));
+            const permuteAcc = m => aggregate(m, (vals, smp) => {{
+                if (vals.length === 1) return vals[0];
+                const w = smp.reduce((t, n, k) => t + (vals[k] === null ? 0 : n), 0);
+                return w ? vals.reduce((t, v, k) => t + (v === null ? 0 : v * smp[k]), 0) / w : null;
+            }});
+            const permuteUrl = m => m.map((row, i) => cols.map(g => g.members.reduce((best, j) =>
+                (best === null || DATA.matrix.pairs[i][j] > DATA.matrix.pairs[i][best]) ? j : best, null)).map((j, k) => row[j]));
+            const condMeta = cols.map(c => c.members.length > 1 ? {{ full: c.full, abbrev: c.feat }} : condLabel(c.id));
             const conds = cols.map(c => c.full);
             const shortLabels = cols.map(c => c.short);
             const pairsZ = permute(DATA.matrix.pairs);
             const samplesZ = permute(DATA.matrix.samples);
-            const accZ = permute(DATA.matrix.acc);
-            const urlsZ = permute(DATA.matrix.urls);
+            const accZ = permuteAcc(DATA.matrix.acc);
+            const urlsZ = permuteUrl(DATA.matrix.urls);
             // [pairs, samples, acc, url] per cell -- same regardless of
             // which metric is currently coloring the grid, so hover always
             // shows the full picture and the click-through url never changes.

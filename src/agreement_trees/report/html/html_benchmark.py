@@ -55,6 +55,7 @@ def condition_info(cond: str) -> dict:
             head_full = max((g for g in GROUP_PREFIXES.values() if label.startswith(g + " ")), key=len)
             arg, head = head_full.split("\u2013")
             feature, category = label[len(head_full) + 1:], "Other"
+            label = f"{head_full} \u00b7 {feature}"
         key = (_rank(ARG_ORDER, category), _rank(ARG_ORDER, arg), _rank(HEAD_ORDER, head), _rank(FEATURE_ORDER, feature), feature)
         shown = head_full if category == "Other" else head
         return {"group": group, "label": f"{group} \u00b7 {label}" if group != "Other" else label, "tree_dir": cond,
@@ -219,7 +220,10 @@ tr.lang-row { cursor:pointer; } tr.lang-row:hover { background:var(--hover); }
 tr.detail > td { background:var(--panel-bg); padding:.75rem 1rem 1rem 2rem; }
 .scroll { max-height:38rem; overflow:auto; border:1px solid var(--border); border-radius:8px; }
 .scroll thead th { position:sticky; top:0; background:var(--card); z-index:1; }
-input[type=search], select { background:var(--card); color:var(--text); border:1px solid var(--border); border-radius:8px; padding:.45rem .7rem; font:inherit; }
+input[type=search], select { background:var(--card); color:var(--text); border:1px solid var(--border); border-radius:8px; padding:.45rem .7rem; font:inherit; max-width:100%; }
+.controls label { display:flex; flex-wrap:wrap; align-items:center; gap:.4rem; max-width:100%; }
+.controls select { min-width:0; }
+.cols-wrap { overflow-x:auto; }
 .controls { display:flex; gap:1rem; flex-wrap:wrap; align-items:center; margin-bottom:1rem; }
 .markers { display:grid; grid-template-columns:repeat(auto-fit,minmax(380px,1fr)); gap:1.25rem; }
 .marker { background:var(--panel-bg); border:1px solid var(--border); border-radius:10px; padding:1rem 1.2rem; }
@@ -333,7 +337,7 @@ table.cols td:first-child { white-space:nowrap; font-family:ui-monospace,monospa
 </section>
 
 <section class="card" id="pairs"><h2>Browse the pairs</h2>
-  <p class="muted small">Every pair of the benchmark, per language and condition: the original sentence and its swapped version, with the swapped word (green originally, red reinflected) and the token it agrees with (yellow) marked. Cells of the matrix and the "pairs" links open it here.</p>
+  <p class="muted small">The original and swapped sentence of every pair; the controller is yellow, the original word green, the reinflected one red.</p>
   <div class="controls"><label>Language <select id="pLang"></select></label><label>Condition <select id="pCond"></select></label><label>Treebank <select id="pTb"></select></label>
     <label><input type="checkbox" id="pSecond"> second chance only</label><input type="search" id="pSearch" placeholder="Search sentence or lemma…" aria-label="Search pairs"></div>
   <div class="controls"><span class="chip" id="pCount"></span><span id="pLinks" class="small"></span>
@@ -344,21 +348,21 @@ table.cols td:first-child { white-space:nowrap; font-family:ui-monospace,monospa
 </section>
 
 <section class="card" id="markers"><h2>Marker distributions</h2>
-  <p class="muted small">The sampler balances on these markers. Each bar shows the share of the unique pairs available before downsampling (grey) and in the benchmark (blue), summed over the chosen scope; bars are scaled to the longest one in their panel.</p>
+  <p class="muted small">Share of pairs available before downsampling (grey) and in the benchmark (blue).</p>
   <div class="controls"><label>Language <select id="selLang"></select></label><label>Condition <select id="selCond"></select></label><span class="chip" id="scopeCount"></span></div>
   <div class="legend"><span class="avail">available</span><span>in the benchmark</span></div>
   <div class="markers" id="markerGrid"></div>
 </section>
 
 <section class="card" id="quality"><h2>Quality notes</h2>
-  <p class="muted small">What to keep in mind when reading results on this benchmark. All numbers are computed from the build.</p>
+  <p class="muted small">Caveats for reading results; all numbers come from the build.</p>
   <div class="notes" id="notes"></div>
 </section>
 
 <section class="card" id="use"><h2>Using the data</h2>
   <p class="small">The benchmark is a directory with two parquet files per language, joined by <code>pair_id</code>, next to a <code>manifest.json</code> (settings, treebank counts before and after, languages left out) and a <code>stats.json</code> (the counts and distributions on this page).</p>
   <pre class="code" id="layout"></pre>
-  <table class="cols"><thead><tr><th>Column</th><th>Meaning</th></tr></thead><tbody>
+  <div class="cols-wrap"><table class="cols"><thead><tr><th>Column</th><th>Meaning</th></tr></thead><tbody>
     <tr><td>phenomenon, deprel</td><td>The condition of the pair (such as <code>svNa</code>) and its relation (<code>nsubj</code>; empty for noun-phrase conditions).</td></tr>
     <tr><td>pair_id</td><td>Stable id of the pair (language, condition, relation and the swapped token), the same across rebuilds with the same source.</td></tr>
     <tr><td>sen / wrong_sen</td><td>The original sentence and the sentence with the swapped word (the pair a model is scored on), as written (contractions such as <i>du</i> or <i>ins</i> restored).</td></tr>
@@ -366,10 +370,10 @@ table.cols td:first-child { white-space:nowrap; font-family:ui-monospace,monospa
     <tr><td>feature_vals</td><td>Original and swapped value, such as <code>Sing -&gt; Plur</code>; <code>|</code> lists values the swapped form also spells.</td></tr>
     <tr><td>swap_kind, swap_idx, swap_&lt;kind&gt;</td><td>Which token was reinflected, its position in the sentence, and the new form.</td></tr>
     <tr><td>leaf_id, second_chance</td><td>The decision-tree leaf the pair stems from, and whether its fit was accepted at the laxer second-chance accuracy.</td></tr>
-    <tr><td>surface_status</td><td>How the written form was built (plain, contracted, merged, uncontracted, …).</td></tr>
+    <tr><td>surface_status</td><td>How the written form was built (plain, contracted, merged, uncontracted, …). uncontracted_unattested marks a guessed form (components joined by spaces, never seen in the treebanks); such pairs are drawn only when a language has nothing else.</td></tr>
     <tr><td>alt_phenomena</td><td>Other phenomena in which the same sentence pair was found; the pair is kept only under the rarest of them.</td></tr>
     <tr><td>treebank, sent_id</td><td>Where the sentence comes from.</td></tr>
-  </tbody></table>
+  </tbody></table></div>
   <p class="small"><code>&lt;Language&gt;.parquet</code> holds these columns plus the attractor flags, the lemmas, POS tags, order and distance of both tokens (<code>idx_a</code>/<code>idx_b</code>, <code>word_order</code>, <code>distance</code>). <code>features/&lt;Language&gt;.parquet</code> holds the same pairs with every tree and feature column of the source tables.</p>
   <pre class="code">import pandas as pd
 pairs = pd.read_parquet("output/benchmark/German.parquet")
@@ -411,12 +415,12 @@ const tiles = [[langNames.length, 'languages'], [condIds.length, 'conditions wit
   [langNames.length - atCap, 'languages kept in full'], [pct(secondSel, totalSel), 'pairs from second-chance fits'], [pct(ambiguousSel, totalSel), 'pairs with an ambiguous swap value']];
 $('tiles').innerHTML = tiles.map(([v, l]) => `<div class="tile"><div class="v">${v}</div><div class="l">${l}</div></div>`).join('');
 const cl = DATA.cleaning || {};
-const cleaningText = cl.written ? `The fits wrote ${fmt(cl.written)} pairs, which the data overview counts. Each sentence pair is counted once here, so ${fmt(cl.written - totalAvail)} are not unique pairs available for the benchmark: ${[
-  [cl.identical, 'pairs whose two written sentences are identical (a contraction absorbed the swap, so they cannot be scored)'],
-  [cl.repeated_in_condition, 'repeats of a sentence pair within a condition (the same sentence under several ids, or in overlapping treebanks)'],
-  [cl.cross_condition, 'sentence pairs found in several conditions of a language, kept only in the condition with the fewest pairs (the others are listed in <code>alt_phenomena</code>)'],
+const cleaningText = cl.written ? `Of ${fmt(cl.written)} pairs written, ${fmt(cl.written - totalAvail)} are not unique: ${[
+  [cl.identical, 'identical written sentences'],
+  [cl.repeated_in_condition, 'repeats within a condition'],
+  [cl.cross_condition, 'shared across conditions (kept in the rarest; see <code>alt_phenomena</code>)'],
   [cl.no_written_form, 'pairs without a valid written form'],
-  [cl.left_out_languages, `pairs of languages with fewer than ${DATA.min_pairs} pairs in total`],
+  [cl.left_out_languages, `from languages with under ${DATA.min_pairs} pairs`],
 ].filter(([n]) => n).map(([n, t]) => `${fmt(n)} ${t}`).join('; ')}.` : '';
 if (cleaningText) $('tilesNote').innerHTML = cleaningText;
 const capCount = Math.ceil(DATA.lemma_cap * DATA.n_items);
@@ -440,9 +444,9 @@ $('methodList').innerHTML = [
   const list = (ls) => ls.length > 12 ? ls.slice(0, 12).map(l => l.replace(/_/g, ' ')).join(', ') + ', …' : ls.map(l => l.replace(/_/g, ' ')).join(', ');
   const note = (v, title, text) => `<div class="note"><b>${v}</b>${title}<p>${text}</p></div>`;
   $('notes').innerHTML = [
-    note(`${fewer.length} of ${langNames.length}`, 'languages kept in full', `They have ${DATA.n_items} usable pairs or fewer, so nothing was sampled away and their distributions are the natural ones${fewer.length ? ': ' + list(fewer) : ''}.`),
+    note(`${fewer.length} of ${langNames.length}`, 'languages kept in full', `${DATA.n_items} usable pairs or fewer, so nothing was sampled away${fewer.length ? ': ' + list(fewer) : ''}.`),
     note(`${oneCond.length}`, 'languages with a single condition', `Their sample covers one agreement relation only${oneCond.length ? ': ' + list(oneCond) : ''}. Median across languages: ${med(langNames.map(l => langs[l].conditions))} conditions.`),
-    note(pct(ambiguousSel, totalSel), 'pairs with an ambiguous swap value', `The swapped form also spells another value (<code>Masc → Fem|Neut</code>). They are used only when a condition has nothing else left, so what the model sees is a small, deliberate minority (${pct(ambiguousAvail, totalAvail)} of all available).`),
+    note(pct(ambiguousSel, totalSel), 'pairs with an ambiguous swap value', `The swapped form also spells another value (<code>Masc → Fem|Neut</code>); used only when nothing else is left (${pct(ambiguousAvail, totalAvail)} of available).`),
     note(pct(secondSel, totalSel), 'pairs from second-chance fits', `Trees accepted at the laxer second-chance accuracy, in ${secondL.length} language${secondL.length === 1 ? '' : 's'}. Filter on <code>second_chance</code> to leave them out.`),
     note(`${relaxedL.length}`, 'languages with a relaxed lemma limit', `Their sample could not be filled with at most ${Math.ceil(DATA.lemma_cap * DATA.n_items)} pairs per lemma${relaxedL.length ? ': ' + list(relaxedL) : ''}. Sentences repeat in ${repeatL.length} language${repeatL.length === 1 ? '' : 's'}.`),
     note(`${DATA.left_out ? Object.keys(DATA.left_out).length : 0}`, 'languages left out', `Fewer than ${DATA.min_pairs} pairs in total${DATA.left_out && Object.keys(DATA.left_out).length ? ': ' + Object.keys(DATA.left_out).map(l => l.replace(/_/g, ' ')).join(', ') : ''}.`),
@@ -541,7 +545,7 @@ function drawList() {
 }
 function drawPairs() {
   $('matrixHint').textContent = view.view === 'matrix'
-    ? 'Pairs per language (rows) and condition (columns, grouped by category and head; the slanted names are the agreement feature, hover for the full condition). Hover a cell for the unique pairs available before downsampling, click it to browse that language\'s pairs. Blank cells have no pairs.'
+    ? 'Pairs per language and condition. Hover a cell for the pairs available before downsampling, click to browse them. Blank cells have no pairs.'
     : 'One row per language and condition with pairs; sort by any column.';
   (view.view === 'matrix' ? drawMatrix : drawList)();
 }

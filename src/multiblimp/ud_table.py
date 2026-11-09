@@ -3,9 +3,9 @@ the UD treebanks, with its frequency, stored as parquet (resources/ud_tables/<la
 
 File: columns lemma, form, upos, frequency and one string column per UD feature (comma
 values as written in the corpus, e.g. "Masc,Neut"; bracketed names like "Number[obj]" are
-columns of their own); an empty cell means the row does not state the feature. Only
-features the UniMorph<->UD mapping knows by name are stored (their values are kept as they
-are); lexical labels such as InflClass or Derivation are not.
+columns of their own); an empty cell means the row does not state the feature. The
+UD-derived table stores the treebank's features (multiblimp.ud_lexicon); the UniMorph-derived
+table (multiblimp.um2ud) only those the UniMorph<->UD mapping knows by name (is_stored_feature).
 
 In memory (UDSlice, one per UPOS): each cell is a bit mask over that feature's values, 0 =
 not stated, so a comma value is several bits and "row agrees with the token" is
@@ -185,15 +185,10 @@ class UDSlice:
                 asked[j], wanted[j] = True, mask or 0
         return wanted, asked, ignored
 
-    def agreeing(self, rows: np.ndarray, wanted, asked, exact=None, negated=None) -> np.ndarray:
-        """The `rows` that agree with the constraints: an unstated cell agrees, except for the
-        `exact` features (must state it) and the `negated` ones (must not state `wanted`)."""
+    def agreeing(self, rows: np.ndarray, wanted, asked) -> np.ndarray:
+        """The `rows` that agree with the constraints: an unstated cell agrees."""
         cells = self.masks[rows]
         ok = (cells == 0) | ((cells & wanted) != 0)
-        if exact is not None:
-            ok = np.where(exact, (cells & wanted) != 0, ok)
-        if negated is not None:
-            ok = np.where(negated, (cells & wanted) == 0, ok)
         return rows[(ok | ~asked).all(axis=1)]
 
     def differences(self, rows: np.ndarray, asked, ignored) -> np.ndarray:

@@ -11,7 +11,7 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fi
 RESOURCE_DIR = os.path.join(REPO_ROOT, "resources")
 
 # Checkout of UniversalDependencies/tools (validate.py + udtools); override with UD_TOOLS_DIR.
-UD_TOOLS_DIR = os.environ.get("UD_TOOLS_DIR") or os.path.join(os.path.dirname(REPO_ROOT), "tools")
+UD_TOOLS_DIR = os.environ.get("UD_TOOLS_DIR") or os.path.join(RESOURCE_DIR, "ud_validator")
 # Per-treebank validator results (see multiblimp.validation); input-side data like the pickles.
 VALIDATION_DIR = os.path.join(RESOURCE_DIR, "ud", "validation")
 

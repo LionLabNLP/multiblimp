@@ -14,7 +14,11 @@ from sklearn.pipeline import Pipeline
 from tqdm import tqdm
 
 from agreement_trees.fit.decision_tree import UNK_LABELS
-from agreement_trees.pipeline_utils import read_label_distribution, wilson_lower_bound
+from agreement_trees.config import load_agreement_config, load_scan_results
+from agreement_trees.fit.scan import (
+    cache_file, cache_lang, cache_state, same_thresholds, scan_thresholds, unit_key,
+)
+from agreement_trees.pipeline_utils import read_label_distribution
 
 from agreement_trees.fit.entropy import (
     chunked_leaf_ids,
@@ -22,15 +26,9 @@ from agreement_trees.fit.entropy import (
 )
 from agreement_trees.report.html.html_deprel import create_html
 from agreement_trees.utils import is_agreement_predictor
-
-# A condition with some "Yes" candidates but fewer than this is moved out of the table into the trivial note
-# (the same threshold html_deprel's MIN_N_FOR_COLOR fades the coverage colour at).
-UNDERSIZED_MAX_N_RAW = 10
-
-
-def is_undersized(n_raw: int) -> bool:
-    return 0 < n_raw < UNDERSIZED_MAX_N_RAW
-
+from multiblimp.config import RESOURCE_DIR
+from multiblimp.excluded_treebanks import excluded_treebanks
+from multiblimp.languages import get_ud_langs
 
 def _fitted_labels(dist: dict) -> set[str]:
     """The labels of a {label: count} distribution a tree fit would see (non-zero, unk labels dropped)."""
@@ -40,10 +38,6 @@ def _fitted_labels(dist: dict) -> set[str]:
 def _yes_count(dist: dict) -> int:
     return int(sum(v for k, v in dist.items() if str(k).lower() == "yes"))
 
-
-# The scan's wilson_floor default: a language with enough "Yes" rows in absolute terms can still have a Wilson
-# lower bound this low if they are a sliver of its treebank (Naija: 16 Yes in 9,634 rows).
-SPARSE_WILSON_FLOOR = 0.01
 
 # the chevron glyph of html_deprel's JS chevronSvg(), inlined for this server-side note
 _CHEVRON_SVG = (
@@ -61,6 +55,182 @@ def _notes_disclosure(summary: str, body: str) -> str:
         f'<span class="chevron">{_CHEVRON_SVG}</span>{html_lib.escape(summary)}'
         f'</summary><div class="notes-disclosure-body">{body}</div></details>'
     )
+
+
+# order of the reasons in the "not in the table" list
+LEFT_OUT_REASONS = (
+    "too few agreeing", "too few agreeing after cleaning", "too few to fit a tree",
+    "no agreement annotation", "no data",
+)
+
+
+def _label_counts(dist: dict) -> tuple[int, int, int]:
+    """(agree, disagree, unknown) of a {label: count} distribution."""
+    yes = no = 0
+    for k, v in dist.items():
+        if str(k).lower() == "yes":
+            yes += int(v)
+        elif str(k).lower() == "no":
+            no += int(v)
+    return yes, no, int(sum(dist.values())) - yes - no
+
+
+def _scan_failed_langs(langs: set, scan: dict, scan_key: str | None, scan_cfg: dict) -> set:
+    """Of `langs`, those a current saved scan covered without passing them for this target: an older fit of such a
+    language stays on disk. Nothing, if the scan is missing or was made with other settings."""
+    if not scan_key or not same_thresholds(scan.get("thresholds"), scan_thresholds(scan_cfg)):
+        return set()
+    mode, family = ("vp", scan_key.split(":", 1)[0]) if ":" in scan_key else ("np", None)
+    passed = scan.get("targets", {}).get(scan_key, {})
+    return {lang for lang in langs if lang not in passed and unit_key(mode, family, lang) in scan.get("scanned", {})}
+
+
+# accounting groups in display order: {label: what the group means}, "in the table" being the page's own table
+ACCOUNTING_GROUPS = {
+    "in the table": None,
+    "weak evidence": "enough agreeing rows, but too small a share of the rows tagged on both sides to count as agreement",
+    "not enough annotation": "too few rows tagged on both sides, or too few agreeing",
+    "too few after cleaning": "passed the agreement check, too little left after filtering for the fit",
+    "no samples": "no rows for this condition in the treebanks used",
+    "not processed": "no current cache, scan or fit; this group should be empty",
+}
+WEAK_EVIDENCE_REASONS = {"agreement rate too low"}
+
+
+def _accounting(table_langs: set, fit_left_out: set, no_data_langs: dict, scan: dict, scan_key: str | None,
+                config: dict) -> dict[str, list[str]] | None:
+    """{group: languages}, each language of the pipeline in exactly one group. None without a current scan."""
+    if not scan_key or not same_thresholds(scan.get("thresholds"), scan_thresholds(config["scan"])):
+        return None
+    mode, family = ("vp", scan_key.split(":", 1)[0]) if ":" in scan_key else ("np", None)
+    passed = scan.get("targets", {}).get(scan_key, {})
+    failed = scan.get("failed", {}).get(scan_key, {})
+    scanned = scan.get("scanned", {})
+    ud_langs = {cache_lang(lang) for lang in get_ud_langs(RESOURCE_DIR)}
+    # get_ud_langs leaves out a language with no treebank left
+    all_excluded = {cache_lang(lang) for lang in excluded_treebanks} - ud_langs
+    named = {cache_lang(lang) for lang in config["langs"]}
+    universe = (named or ud_langs | all_excluded) | table_langs | fit_left_out | set(passed) | set(failed)
+
+    def group(lang):
+        if lang in table_langs:
+            return "in the table"
+        if lang in passed:
+            return "too few after cleaning" if lang in fit_left_out else "not processed"
+        if lang in failed:
+            return "weak evidence" if failed[lang]["reason"] in WEAK_EVIDENCE_REASONS else "not enough annotation"
+        if lang in all_excluded or lang in no_data_langs:
+            return "no samples"
+        state = cache_state(mode, family, lang)
+        if state == "empty":
+            return "no samples"
+        if state != "cached" or scanned.get(unit_key(mode, family, lang), -1) < os.path.getmtime(cache_file(mode, family, lang)):
+            return "not processed"
+        return "not enough annotation"
+
+    groups = {label: [] for label in ACCOUNTING_GROUPS}
+    for lang in sorted(universe):
+        groups[group(lang)].append(lang)
+    return groups
+
+
+def _left_out_rows(omit_langs: dict, no_data_langs: dict, data_dir: str, scan: dict,
+                   scan_key: str | None, shown: set, min_yes: int, scan_failed: set) -> list[dict]:
+    """One row per language kept out of the table: {lang, yes, no, unk, reason}. Counts come from the
+    language's full label distribution file where there is one; scan failures from the scan, for languages
+    that are neither listed nor in the table."""
+    passed = set(scan.get("targets", {}).get(scan_key, {}))
+    failed = scan.get("failed", {}).get(scan_key, {})
+
+    def failed_reason(lang):
+        return f"failed agreement check: {failed[lang]['reason']}" if lang in failed else "failed agreement check"
+
+    rows = []
+    for lang, dist in omit_langs.items():
+        yes, no, unk = _label_counts(read_label_distribution(data_dir, lang) or dist)
+        if not yes + no:
+            reason = "no agreement annotation"
+        elif lang in scan_failed:
+            reason = failed_reason(lang)
+        elif yes < min_yes:
+            reason = "too few agreeing after cleaning" if lang in passed else "too few agreeing"
+        else:
+            reason = "too few to fit a tree"
+        rows.append({"lang": lang, "yes": yes, "no": no, "unk": unk, "reason": reason})
+    for lang in no_data_langs:
+        rows.append({"lang": lang, "yes": None, "no": None, "unk": None, "reason": "no data"})
+    listed = {r["lang"] for r in rows} | shown
+    for lang, c in failed.items():
+        if lang not in listed:
+            rows.append({"lang": lang, "yes": c["yes"], "no": c["no"], "unk": c["total"] - c["yes"] - c["no"],
+                         "reason": failed_reason(lang)})
+    order = {r: i for i, r in enumerate(LEFT_OUT_REASONS)}
+    return sorted(rows, key=lambda r: (order.get(r["reason"], len(order)), r["reason"], r["lang"]))
+
+
+def _left_out_export(rows: list[dict], html_files: dict, pairs_dir: str | None, diagnostics_by_lang: dict,
+                     scan_failed: set) -> list[dict]:
+    """The rows the dataset overview counts (agreeing rows or pairs, fit under the current scan), as LANGUAGES
+    entries without a tree."""
+    entries = []
+    for r in rows:
+        lang, yes = r["lang"], r["yes"] or 0
+        pairs_fn = os.path.join(pairs_dir, lang, "correct_swaps.parquet") if pairs_dir else None
+        n_pairs = pq.ParquetFile(pairs_fn).metadata.num_rows if pairs_fn and os.path.exists(pairs_fn) else 0
+        attempted = lang in html_files and lang not in scan_failed
+        page = html_files.get(lang)
+        entries.append({
+            "name": lang.replace("_", " "), "reason": r["reason"], "attempted": attempted,
+            "langUrl": quote(page.name) if page else None, "nRaw": yes, "nPairs": n_pairs,
+            "labelDistribution": {"yes": yes, "no": r["no"] or 0, "unk": r["unk"] or 0},
+            "diag": {k: v for k, v in (diagnostics_by_lang.get(lang) or {}).items() if k != "examples"},
+        })
+    return entries
+
+
+def _left_out_disclosure(rows: list[dict], html_files: dict, accounting: dict | None = None) -> str:
+    """The collapsed list of languages not in the table, one compact table with a language linked to its page
+    where it has one. With `accounting`, the summary is the accounting line and the table is grouped by it."""
+    if not rows and not accounting:
+        return ""
+
+    def num(n):
+        return "–" if n is None else f"{n:,}"
+
+    def lang_cell(lang):
+        name = html_lib.escape(lang.replace("_", " "))
+        page = html_files.get(lang)
+        return f'<a href="{quote(page.name)}">{name}</a>' if page else name
+
+    def row_html(r):
+        return (
+            f"<tr><td>{lang_cell(r['lang'])}</td><td class=\"num\">{num(r['yes'])}</td><td class=\"num\">{num(r['no'])}</td>"
+            f"<td class=\"num\">{num(r['unk'])}</td><td>{html_lib.escape(r['reason'])}</td></tr>"
+        )
+
+    if accounting is None:
+        body = [row_html(r) for r in rows]
+    else:
+        body = []
+        by_lang = {r["lang"]: r for r in rows}
+        for label, meaning in ACCOUNTING_GROUPS.items():
+            langs = accounting[label]
+            if not meaning or not langs:
+                continue
+            body.append(f'<tr><th colspan="5">{len(langs)} {label}: {html_lib.escape(meaning)}</th></tr>')
+            body += [row_html(by_lang[lang]) for lang in langs if lang in by_lang]
+            names = [lang_cell(lang) for lang in langs if lang not in by_lang]
+            if names:
+                body.append(f'<tr><td colspan="5">{", ".join(names)}</td></tr>')
+    table = (
+        '<table class="left-out-table"><thead><tr><th>Language</th><th class="num">Agree</th>'
+        '<th class="num">Disagree</th><th class="num">Unknown</th><th>Reason</th></tr></thead>'
+        f'<tbody>{"".join(body)}</tbody></table>'
+    )
+    if accounting is not None:
+        return _notes_disclosure(" · ".join(f"{len(accounting[label])} {label}" for label in ACCOUNTING_GROUPS), table)
+    n = len(rows)
+    return _notes_disclosure(f"{n} language{'s' if n != 1 else ''} not in the table — click to expand", table)
 
 
 def _dtype_coerced_metrics(dt, df, target_col, smoothing, eval_cache=None, cache_key=None):
@@ -128,14 +298,15 @@ def _metrics_df(metrics: list, columns: list) -> pd.DataFrame:
     return pd.DataFrame(metrics).sort_values("language")
 
 
-def _agreement_row_stats(df, target_col, leaf_threshold, pairs_dir, lang_name):
+def _agreement_row_stats(df, target_col, leaf_threshold, pairs_dir, lang_name, data_dir=None):
     """(n_raw, n_keep, n_pairs, retried) for one language's agreement dataframe.
 
     n_raw: rows with target_col's positive label (candidates for a feature
-        swap), labelled "yes" in both SVA and NPA.
-    n_keep: of those, how many pass the same leaf_top1_acc > leaf_threshold
-        and leaf_decision filter agreement_trees.pairs.create_pairs.create_pairs uses to pick
-        which rows to actually attempt to re-inflect. Trivial languages (no fitted
+        swap), labelled "yes" in both SVA and NPA, over the language's whole data (its label
+        distribution file in data_dir, before the train/test split); df's own count without one.
+    n_keep: of those, how many pass the leaf_top1_acc > leaf_threshold and leaf_decision filter
+        create_pairs uses to pick which rows to re-inflect (held-out rows included): the pairs'
+        meta.json num_rows_keep, else recounted on df (pairs written before it existed). Trivial languages (no fitted
         tree, hence no leaf_top1_acc/leaf_decision columns) are single-class by
         construction, so every raw row counts as kept.
     n_pairs: rows actually turned into a re-inflected minimal pair by create_pairs,
@@ -146,11 +317,13 @@ def _agreement_row_stats(df, target_col, leaf_threshold, pairs_dir, lang_name):
         "second_pass", set only on that attempt -- see agreement_trees.vp.pipeline).
     """
     is_yes = df[target_col] == "yes"
-    n_raw = int(is_yes.sum())
+    dist = read_label_distribution(data_dir, lang_name) if data_dir is not None else {}
+    n_raw = _yes_count(dist) if dist else int(is_yes.sum())
 
     # A language's own meta.json threshold wins over the pipeline-wide one, so
     # a language that got a second, laxer pass is counted at that threshold.
     retried = False
+    meta = {}
     if pairs_dir is not None:
         meta_fn = os.path.join(pairs_dir, lang_name, "meta.json")
         if os.path.exists(meta_fn):
@@ -159,8 +332,10 @@ def _agreement_row_stats(df, target_col, leaf_threshold, pairs_dir, lang_name):
             leaf_threshold = meta.get("leaf_min_acc", leaf_threshold)
             retried = bool(meta.get("second_pass"))
 
-    if "leaf_top1_acc" in df.columns and "leaf_decision" in df.columns:
-        # A second_chance depth-aware retry's meta.json stores {leaf_id: that
+    if "num_rows_keep" in meta:
+        n_keep = int(meta["num_rows_keep"])
+    elif "leaf_top1_acc" in df.columns and "leaf_decision" in df.columns:
+        # An older cache's meta.json can store {leaf_id: that
         # leaf's own cutoff} instead of one number; JSON round-trips the keys
         # as strings, so normalize back to int before mapping onto leaf_id.
         row_threshold = (
@@ -188,6 +363,7 @@ def calculate_agreement_metrics(
     pairs_dir: str | None = None,
     smoothing: float = 0.5,
     eval_cache: dict | None = None,
+    data_dir: str | None = None,
 ) -> pd.DataFrame:
     """Per-language metrics of the agreement pages (n_raw/n_keep/n_pairs: see _agreement_row_stats).
 
@@ -212,7 +388,7 @@ def calculate_agreement_metrics(
             test_acc, test_n = float("nan"), 0
 
         n_raw, n_keep, n_pairs, retried = _agreement_row_stats(
-            df, target_col, leaf_threshold, pairs_dir, lang_name
+            df, target_col, leaf_threshold, pairs_dir, lang_name, data_dir=data_dir,
         )
 
         metrics.append(
@@ -286,6 +462,7 @@ def generate_html_deprel_index(
     head_role_label: str = "head",
     subject_label: str = "subject",
     nsubj_label: str = "nsubj",
+    scan_key: str | None = None,
 ) -> None:
     """Write the deprel index.html: per-language metrics, scatter and, with diagnostics, bucket breakdowns.
 
@@ -296,10 +473,16 @@ def generate_html_deprel_index(
     agreement_label, head_role_label, subject_label, nsubj_label: prose for the subtitle, the head role
     ("Verb", "Aux") and the fixed role in the "ambiguous subject" bucket and "# nsubj unk" stat (cosmetic;
     NPA passes its own roles).
+    scan_key: the target's key in the agreement scan ("sv:Person", "HEAD-DET_Number"): languages a current scan does
+    not pass leave the table for the list under it, and its failed languages are listed there too. None skips both.
     """
     if not is_agreement_predictor(target_col):
         raise ValueError(f"{target_col!r} is not an agreement predictor")
     html_path = Path(html_directory)
+    # the scan's own bar: fewer "yes" rows than min_yes leaves the table
+    config = load_agreement_config()
+    scan_cfg = config["scan"]
+    min_yes = scan_cfg["min_yes"]
 
     # "../" reaches decision_trees/index.html from a page one directory below it; NPA nests an extra "npa/" level
     if "decision_trees" in html_path.parts:
@@ -365,7 +548,7 @@ def generate_html_deprel_index(
     eval_cache = {}
     metrics_six = calculate_agreement_metrics(
         language_data, target_col, leaf_threshold=leaf_threshold,
-        pairs_dir=pairs_dir, smoothing=smoothing, eval_cache=eval_cache,
+        pairs_dir=pairs_dir, smoothing=smoothing, eval_cache=eval_cache, data_dir=data_dir,
     )
     metrics_binary = metrics_six
 
@@ -374,8 +557,7 @@ def generate_html_deprel_index(
         if language_data[l][1][target_col].astype(str).nunique() <= 1:
             trivial_langs[l] = dict(language_data[l][1][target_col].value_counts())
 
-    # trivial-distribution languages are omitted from the table and listed with their label distribution in
-    # the trivial note
+    # trivial-distribution languages are omitted from the table and listed in the "not in the table" list
     omit_langs = dict(trivial_langs)
 
     # an all-"yes" language above the undersized bar is real data with nothing to fit: keep it,
@@ -384,7 +566,7 @@ def generate_html_deprel_index(
     single_yes = {
         lang: dist for lang, dist in trivial_langs.items()
         if _fitted_labels(dist) == {"yes"}
-        and _yes_count(dist) >= UNDERSIZED_MAX_N_RAW
+        and _yes_count(dist) >= min_yes
     }
     for lang in single_yes:
         omit_langs.pop(lang, None)
@@ -413,7 +595,6 @@ def generate_html_deprel_index(
     metrics_six = metrics_six[~metrics_six["language"].isin(omit_langs.keys())]
     metrics_binary = metrics_binary[~metrics_binary["language"].isin(omit_langs.keys())]
 
-    sparse_langs = {}
     # Pull undersized languages (real variation, even a real fitted tree
     # in some cases -- just too few "Yes" rows to mean much) out of the
     # table too, same as the trivial ones above: folded into omit_langs
@@ -424,28 +605,21 @@ def generate_html_deprel_index(
     # split like Akuntsu/Assyrian) only ever shows up as an ordinary
     # metrics_six row, never in trivial_langs -- this check has to run
     # here, against metrics_six directly, to catch those too.
-    undersized_mask = metrics_six["n_raw"].apply(is_undersized)
+    undersized_mask = metrics_six["n_raw"].between(1, min_yes - 1)
     undersized_langs = set(metrics_six.loc[undersized_mask, "language"])
     for lang in undersized_langs:
         omit_langs.setdefault(lang, read_label_distribution(data_dir, lang) or {})
     metrics_six = metrics_six[~metrics_six["language"].isin(undersized_langs)]
     metrics_binary = metrics_binary[~metrics_binary["language"].isin(undersized_langs)]
 
-    # Separately: languages with enough raw "Yes" rows to clear
-    # undersized, but whose joint-tagging rate is still too sparse
-    # relative to the full dataset -- see SPARSE_WILSON_FLOOR. Its own
-    # category/note, not folded into omit_langs -- "too little data" and
-    # "enough data but too thin a slice of a much bigger whole" are
-    # different failure modes worth telling apart.
-    sparse_langs = {}
-    for lang in metrics_six["language"]:
-        dist = read_label_distribution(data_dir, lang) or {}
-        total = sum(dist.values())
-        both = dist.get("yes", 0) + dist.get("no", 0)
-        if total and wilson_lower_bound(both, total) < SPARSE_WILSON_FLOOR:
-            sparse_langs[lang] = dist
-    metrics_six = metrics_six[~metrics_six["language"].isin(sparse_langs.keys())]
-    metrics_binary = metrics_binary[~metrics_binary["language"].isin(sparse_langs.keys())]
+    # an older fit of a language the current scan does not pass: out of the table, whatever else it looks like
+    scan = load_scan_results("vp" if ":" in scan_key else "np") if scan_key else {}
+    scan_failed = _scan_failed_langs(
+        set(metrics_six["language"]) | set(omit_langs), scan, scan_key, scan_cfg)
+    for lang in scan_failed & set(metrics_six["language"]):
+        omit_langs[lang] = read_label_distribution(data_dir, lang) or {}
+    metrics_six = metrics_six[~metrics_six["language"].isin(scan_failed)]
+    metrics_binary = metrics_binary[~metrics_binary["language"].isin(scan_failed)]
 
     # Find corresponding HTML files — stem string -> Path
     html_files = {
@@ -540,119 +714,18 @@ def generate_html_deprel_index(
             "(labels <code>--</code> and <code>+-</code>) — no Yes/No contrast was observed.</p>"
         )
 
-    def _fmt_dist(dist):
-        return "; ".join(
-            f"{value}: {n}" for value, n in sorted(dist.items(), key=lambda kv: -kv[1])
-        )
-
-    if omit_langs:
-        skipped_links = []
-        for lang, dist in sorted(omit_langs.items()):
-            lang_display = lang.replace("_", " ")
-            dist_str = _fmt_dist(dist)
-            lang_file = html_files.get(lang)  # ← stem matches directly
-            if lang_file:
-                url = f"{quote(lang_file.name)}"
-                skipped_links.append(
-                    f'<a href="{url}" style="color:#b893de;font-weight:600;">{lang_display}</a> ({dist_str})'
-                )
-            else:
-                skipped_links.append(
-                    f'<span style="color:#b893de;font-weight:600;">{lang_display}</span> ({dist_str})'
-                )
-
-        skipped_items = "".join(f"<li>{x}</li>" for x in skipped_links)
-        trivial_note = (
-            '<p class="no-data-note">The following languages were omitted for having too few or '
-            'uninformative agreement labels (label distribution shown):</p>'
-            f'<ul class="no-data-list">{skipped_items}</ul>'
-        )
-    else:
-        trivial_note = ""
-
-    if sparse_langs:
-        sparse_links = []
-        for lang, dist in sorted(sparse_langs.items()):
-            lang_display = lang.replace("_", " ")
-            dist_str = _fmt_dist(dist)
-            lang_file = html_files.get(lang)  # ← stem matches directly
-            if lang_file:
-                url = f"{quote(lang_file.name)}"
-                sparse_links.append(
-                    f'<a href="{url}" style="color:#60a5fa;font-weight:600;">{lang_display}</a> ({dist_str})'
-                )
-            else:
-                sparse_links.append(
-                    f'<span style="color:#60a5fa;font-weight:600;">{lang_display}</span> ({dist_str})'
-                )
-
-        sparse_items = "".join(f"<li>{x}</li>" for x in sparse_links)
-        sparse_note = (
-            '<p class="no-data-note">The following languages have enough raw "Yes" samples '
-            f'(&ge; {UNDERSIZED_MAX_N_RAW}) but too sparse a joint-tagging rate relative to '
-            "the full dataset to be statistically confident this isn't incidental tagging "
-            f'(Wilson lower bound below {SPARSE_WILSON_FLOOR:.0%}; label distribution shown):</p>'
-            f'<ul class="no-data-list">{sparse_items}</ul>'
-        )
-    else:
-        sparse_note = ""
-
-    if no_data_langs:
-        by_reason = {}
-        for lang, reason in no_data_langs.items():
-            by_reason.setdefault(reason, []).append(lang.replace("_", " "))
-        intro = (
-            "The following languages have NO data at all for this condition "
-            "(zero raw instances extracted -- no tree, pairs, or page was ever "
-            "produced for them)"
-        )
-        if len(by_reason) == 1:
-            ((reason, langs),) = by_reason.items()
-            groups = [(f"{intro}. {html_lib.escape(reason)}", langs)]
-        else:
-            groups = [(f"{intro}. {html_lib.escape(r)}", ls) for r, ls in by_reason.items()]
-        no_data_note = "".join(
-            f'<p class="no-data-note">{head}</p><ul class="no-data-list four-cols">'
-            + "".join(f"<li>{html_lib.escape(n)}</li>" for n in sorted(ls))
-            + "</ul>"
-            for head, ls in groups
-        )
-    else:
-        no_data_note = ""
-
-    trivial_disclosure = ""
-    if trivial_note:
-        n_trivial = len(omit_langs)
-        trivial_disclosure = _notes_disclosure(
-            f"{n_trivial} language{'s' if n_trivial != 1 else ''} omitted "
-            "(too few or uninformative labels) — click to expand",
-            trivial_note,
-        )
-
-    sparse_disclosure = ""
-    if sparse_note:
-        n_sparse = len(sparse_langs)
-        sparse_disclosure = _notes_disclosure(
-            f"{n_sparse} language{'s' if n_sparse != 1 else ''} with too sparse a "
-            "joint-tagging rate to be confident — click to expand",
-            sparse_note,
-        )
-
-    no_data_disclosure = ""
-    if no_data_note:
-        n_no_data = len(no_data_langs)
-        no_data_disclosure = _notes_disclosure(
-            f"{n_no_data} language{'s' if n_no_data != 1 else ''} with no data at all "
-            "for this condition — click to expand",
-            no_data_note,
-        )
-
-    notes = color_note + trivial_disclosure + sparse_disclosure + no_data_disclosure
+    left_out = _left_out_rows(omit_langs, no_data_langs, data_dir, scan, scan_key,
+                              shown=set(metrics_six["language"]), min_yes=min_yes, scan_failed=scan_failed)
+    accounting = _accounting(set(metrics_six["language"]), set(omit_langs) | set(no_data_langs),
+                             no_data_langs, scan, scan_key, config)
+    notes = color_note + _left_out_disclosure(left_out, html_files, accounting)
+    left_out_json = json.dumps(_left_out_export(left_out, html_files, pairs_dir, diagnostics_by_lang, scan_failed))
 
     html_content = create_html(
         plot_data_json,
         trivial_note=notes,
         languages_json=languages_json,
+        left_out_json=left_out_json,
         show_diagnostics=diagnostics_enabled,
         leaf_threshold=leaf_threshold,
         agreement_label=agreement_label,

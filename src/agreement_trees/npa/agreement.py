@@ -14,7 +14,7 @@ from tqdm import tqdm
 from agreement_trees.pairs.attractors import add_attractors_if_stored
 from agreement_trees.eval.surface import with_surface_strings
 from agreement_trees.pairs.sentence_text import add_sentence_strings
-from agreement_trees.fit.decision_tree import MISSING, MIN_DF_LEN, fit_pipeline, set_dt_features_in_df, fit_excluded_for_display
+from agreement_trees.fit.decision_tree import MISSING, MIN_DF_LEN, fit_pipeline, set_dt_features_in_df, fit_excluded_for_display, pairs_input
 from agreement_trees.extract.process_treebank import (
     META_FEATURES, is_attractor_col, is_attractor_slots_col, cast_attractor_cols,
 )
@@ -433,6 +433,10 @@ def create_npa_pairs_for_target_col(
         "num_ud_candidates_raw": n_raw,
         "num_ud_candidates_keep": total_n_keep,
         "num_ud_candidates_keep_second_chance": total_n_keep_second,
+        # kept rows counted once (num_ud_candidates_keep counts them once per swap role)
+        "num_rows_keep": int((keep & (dt_df[target_col] == "yes")).sum()),
+        "num_rows_keep_second_chance": 0 if second_chance_threshold is None else int(
+            (keep & (dt_df[target_col] == "yes") & (dt_df["leaf_top1_acc"] <= second_chance_threshold)).sum()),
         "items_seen": total_items_seen,
         "num_lemma": num_lemma,
         "num_form": num_form,
@@ -517,6 +521,7 @@ def refresh_deprel_index(target_col: str,
         head_role_label=swap_role,
         subject_label=fixed_role,
         nsubj_label=fixed_role,
+        scan_key=canonical_target_col(target_col),
     )
 
 
@@ -642,6 +647,9 @@ def _fit_language(lang: str, ctx: dict) -> None:
     lang_pairs_dir = os.path.join(pairs_dir, cached_lang)
     correct_swaps_df = None
     lang_leaf_threshold = leaf_threshold
+    label_distribution = {
+        str(k): int(v) for k, v in full_df[target_col].value_counts().items()
+    }
     if fit_rebuilt or redo_pairs or not pairs_current(lang_pairs_dir):
         inflectors = {}
         for role in {role1, role2}:
@@ -652,28 +660,26 @@ def _fit_language(lang: str, ctx: dict) -> None:
             if role == swap_role:
                 swap_num_lemma, swap_num_form = num_lemma, num_form
 
-        label_distribution = {
-            str(k): int(v) for k, v in full_df[target_col].value_counts().items()
-        }
         pairs_kwargs = dict(
             save_to=lang_pairs_dir, full_df=full_df,
             label_distribution=label_distribution,
             num_lemma=swap_num_lemma, num_form=swap_num_form, verbose=verbose,
         )
+        # the held-out rows in kept leaves become pairs too
+        pairs_df = pairs_input(model, dt_df, full_df, target_col)
         diagnostic_dfs, _ = create_npa_pairs_for_target_col(
-            dt_df, target_col, inflectors, leaf_threshold=leaf_threshold,
+            pairs_df, target_col, inflectors, leaf_threshold=leaf_threshold,
             **pairs_kwargs,
         )
         if second_chance is not None:
             retry, lax, info = second_chance_decision(
                 dt_df, target_col, label_distribution,
-                strict_threshold=leaf_threshold,
-                min_samples_leaf=min_samples_leaf, cfg=second_chance)
+                strict_threshold=leaf_threshold, cfg=second_chance)
             print(f"{lang} {target_col}: second chance: {info['reason']}")
             if retry:
                 # adopted even with zero correct_swaps: the lax pass's numbers are the ones to record
                 diagnostic_dfs, _ = create_npa_pairs_for_target_col(
-                    dt_df, target_col, inflectors, leaf_threshold=lax,
+                    pairs_df, target_col, inflectors, leaf_threshold=lax,
                     extra_meta={"second_pass": True, "second_chance_info": info},
                     second_chance_threshold=leaf_threshold,
                     **pairs_kwargs,
@@ -701,6 +707,7 @@ def _fit_language(lang: str, ctx: dict) -> None:
         palette_map=palette_map or {"yes": "#31cb9f", "no": "#f16393", "unk": "#b893de"},
         leaf_threshold=lang_leaf_threshold,
         strict_leaf_threshold=leaf_threshold,
+        full_label_distribution=label_distribution,
         head_label="NP head",
         fit_excluded=fit_excluded_for_display(npa_fit_omit_feats(full_df.columns, target_col)),
     )

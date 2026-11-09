@@ -4,7 +4,7 @@ from functools import partial
 from agreement_trees.extract.prediction_target import PredictionTarget, child_slot, filter_head_feats
 
 # Synthetic feature written into the chosen aux token's feats by redirect_to_aux ("1" or "2+" auxiliaries
-# on the predicate); extract_node_features picks it up like a real UD feature.
+# on the predicate, "0" when the AUX is the predicate itself); extract_node_features picks it up like a real UD feature.
 AUX_COUNT_FEAT = "SubjAuxCount"
 
 # Fresh PredictionTarget instances (not agreement_trees.extract.prediction_target's singletons, which callers mutate in place).
@@ -44,6 +44,9 @@ def redirect_to_aux(treebank, deprels=("nsubj",)) -> None:
     several), else the leftmost. Leftmost alone was wrong for 16/159 stacked German instances, where the finite
     auxiliary can come last ("gelesen haben wird").
 
+    A dependent that stays on an AUX-tagged head (the auxiliary is the main predicate: "ich habe einen Hund",
+    existential "be") gets AUX_COUNT_FEAT = "0" on that head, unless the head is itself attached as aux/cop.
+
     Mutates tokens in place: use a freshly loaded Treebank. One pass per tree collects the dependents and a
     head -> auxiliaries index (a separate "any aux?" pre-pass measured slower at corpus scale).
     """
@@ -57,12 +60,21 @@ def redirect_to_aux(treebank, deprels=("nsubj",)) -> None:
             elif deprel == "aux" or deprel == "aux:pass" or (deprel == "cop" and t["upos"] == "AUX"):
                 aux_by_head[t["head"]].append(t)
 
-        if not nsubj_tokens or not aux_by_head:
+        if not nsubj_tokens:
             continue
 
+        by_id = None
         for token in nsubj_tokens:
             aux_children = aux_by_head.get(token["head"])
             if not aux_children:
+                if by_id is None:
+                    by_id = {t["id"]: t for t in tree}
+                head = by_id.get(token["head"])
+                if (head is not None and head["upos"] == "AUX"
+                        and head["deprel"] not in ("aux", "aux:pass", "cop")):
+                    if type(head.get("feats")) != dict:
+                        head["feats"] = dict()
+                    head["feats"][AUX_COUNT_FEAT] = "0"
                 continue
             aux_children = sorted(aux_children, key=lambda t: t["id"])
 

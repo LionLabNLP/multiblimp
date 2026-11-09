@@ -118,6 +118,17 @@ def _compact_dtypes(X: pd.DataFrame, categorical_cols: list[str], numeric_cols: 
     return X
 
 
+def _prepare_fit_frame(X: pd.DataFrame, categorical_cols: list[str], numeric_cols: list[str]) -> pd.DataFrame:
+    """X as the tree's pipeline is fit on it: missing values filled, numeric columns as ints, compact dtypes."""
+    X = _fill_missing(X, categorical_cols, numeric_cols)
+    for col in numeric_cols:
+        if X[col].dtype == "object" or X[col].dtype.name == "category":
+            X[col] = X[col].astype(int)
+        elif X[col].dtype == "bool":
+            X[col] = X[col].astype(int)
+    return _compact_dtypes(X, categorical_cols, numeric_cols)
+
+
 def _build_and_fit_pipeline(
     model_type,
     X_train: pd.DataFrame,
@@ -186,14 +197,7 @@ def fit_pipeline(
     categorical_cols, numeric_cols = _infer_column_types(X.columns.tolist())
     min_support = max(min_samples_leaf, int(0.01 * len(X)))
     categorical_cols = _prune_rare_categoricals(X, categorical_cols, min_support)
-    X = _fill_missing(X, categorical_cols, numeric_cols)
-
-    for col in numeric_cols:
-        if X[col].dtype == "object" or X[col].dtype.name == "category":
-            X[col] = X[col].astype(int)
-        elif X[col].dtype == "bool":
-            X[col] = X[col].astype(int)
-    X = _compact_dtypes(X, categorical_cols, numeric_cols)
+    X = _prepare_fit_frame(X, categorical_cols, numeric_cols)
 
     if test_index is not None:
         test_mask = X.index.isin(test_index)
@@ -439,6 +443,43 @@ def set_dt_features_in_df(
     for col in df.columns[df.dtypes == object]:
         df[col] = df[col].astype("category")
     return pd.concat([df, pd.DataFrame(new_cols, index=df.index)], axis=1)
+
+
+LEAF_COLS = ("leaf_id", "leaf_depth", "leaf_top1_acc", "leaf_rule", "leaf_decision")
+
+
+def held_out_rows(model, dt_df: pd.DataFrame, full_df: pd.DataFrame, predictor_var: str) -> pd.DataFrame:
+    """The rows of full_df the tree was not trained on (the test split), in dt_df's columns: prepared as the
+    training rows were and sent down the tree, so their leaf columns come from the training leaves. Only rows
+    whose label the tree was fit on (model.classes_) count; empty when there are none."""
+    # row labels are only comparable if full_df comes from the cache the tree was fit on
+    if not dt_df.index.isin(full_df.index).all() or (
+            "sent_id" in dt_df.columns and "sent_id" in full_df.columns
+            and not (dt_df["sent_id"].astype(str).values
+                     == full_df.loc[dt_df.index, "sent_id"].astype(str).values).all()):
+        print("held-out rows skipped: the fit's rows no longer match the cache (refit to include them)")
+        return dt_df.iloc[0:0]
+    candidates = full_df[full_df[predictor_var].astype(str).isin(set(model.classes_))]
+    held = candidates.loc[~candidates.index.isin(dt_df.index)]
+    if not len(held):
+        return dt_df.iloc[0:0]
+    cols_by_kind = {name: list(cols) for name, _, cols in model.named_steps["preprocessor"].transformers_
+                    if name in ("cat", "num")}
+    cat_cols, num_cols = cols_by_kind.get("cat", []), cols_by_kind.get("num", [])
+    X = _prepare_fit_frame(held[cat_cols + num_cols], cat_cols, num_cols)
+    # dt_df's other columns come from full_df as they are
+    other = {c for c in dt_df.columns if c in full_df.columns and c not in X.columns and c not in LEAF_COLS}
+    # reindex: a fit older than the current cache can carry a column full_df no longer has
+    return set_dt_features_in_df(model, X, full_df, predictor_var, additional_vars=other).reindex(columns=dt_df.columns)
+
+
+def pairs_input(model, dt_df: pd.DataFrame, full_df: pd.DataFrame, predictor_var: str) -> pd.DataFrame:
+    """The rows minimal pairs are built from: the training rows plus the held-out ones (held_out_rows), which
+    pass the same leaf filter. dt_df as is when no tree was fit."""
+    if model is None or "leaf_id" not in dt_df.columns:
+        return dt_df
+    held = held_out_rows(model, dt_df, full_df, predictor_var)
+    return pd.concat([dt_df, held]) if len(held) else dt_df
 
 
 def get_rule_for_leaf(model, leaf_id, tight=False):

@@ -322,19 +322,25 @@ def wilson_lower_bound(both: int, total: int, z: float = 1.96) -> float:
     return max(0.0, center - margin)
 
 
-def passes_agreement_bar(yes: int, no: int, total: int, wilson_floor: float = 0.01,
-                         min_both: int = 10, min_yes: int = 10,
-                         yes_rate_floor: float = 0.15) -> bool:
-    """Whether a (target_col, lang) is worth attempting: enough jointly-tagged
-    rows (both=yes+no, Wilson-floored against the co-occurrence total), AND
-    enough actual "yes" rows, whose Wilson lower bound against both must clear
-    yes_rate_floor. The yes conditions matter because pairs are only ever
-    built from "yes" items -- a lexical feature like Derivation or PronType
-    is tagged on both sides constantly but almost always with different
-    values ("no"), so it clears the both-based bar without being agreement."""
+def passes_agreement_bar(yes: int, no: int, min_yes: int, yes_rate_floor: float) -> bool:
+    """Whether a (target_col, lang) is worth attempting: enough actual "yes"
+    rows, whose Wilson lower bound against the jointly-tagged rows (yes + no)
+    must clear yes_rate_floor. Both conditions are about "yes" because pairs
+    are only ever built from "yes" items -- a lexical feature like Derivation
+    or PronType is tagged on both sides constantly but almost always with
+    different values ("no"), so a bar on jointly-tagged rows alone would not
+    separate it from agreement."""
+    return agreement_bar_failure(yes, no, min_yes, yes_rate_floor) is None
+
+
+def agreement_bar_failure(yes: int, no: int, min_yes: int, yes_rate_floor: float) -> str | None:
+    """The first passes_agreement_bar condition a (target_col, lang) fails, None if it passes."""
     both = yes + no
-    return (both >= min_both and wilson_lower_bound(both, total) >= wilson_floor
-            and yes >= min_yes and wilson_lower_bound(yes, both) >= yes_rate_floor)
+    if yes < min_yes:
+        return "too few agreeing"
+    if wilson_lower_bound(yes, both) < yes_rate_floor:
+        return "agreement rate too low"
+    return None
 
 
 # ---- Version stamp for the treebank feature caches (word_order and np_instances parquets, and their .empty.json sentinels). ----

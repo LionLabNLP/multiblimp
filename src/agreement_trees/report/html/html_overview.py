@@ -18,6 +18,7 @@ def create_html(sections_html, all_data_json, back_links=(("../index.html", "Mai
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
     <script>
         try {{
             var t = localStorage.getItem('sva-dt-theme');
@@ -69,6 +70,10 @@ def create_html(sections_html, all_data_json, back_links=(("../index.html", "Mai
             background: var(--bg);
             color: var(--text);
             padding: 2rem;
+        }}
+        @media (max-width: 600px) {{
+            body {{ padding: .75rem; }}
+            .container {{ padding: 1.25rem; }}
         }}
         .container {{
             max-width: 1400px;

@@ -596,6 +596,7 @@ def _finalize_tree_html(
     leaf_threshold=None,
     strict_leaf_threshold=None,
     correct_swaps_df=None,
+    keep_all=False,
 ):
     """Build the tree page (create_html_v2) for a fitted pipeline.
 
@@ -752,6 +753,7 @@ def _finalize_tree_html(
         strict_leaf_threshold=strict_leaf_threshold,
         head_label=head_label,
         correct_swaps_df=correct_swaps_df,
+        keep_all=keep_all,
     )
 
 
@@ -789,8 +791,12 @@ def _root_card_page(dt_df, full_df, predictor_var, out_file, meta=None, **kwargs
                           "enough of them to fit a decision tree. Examples of every class are listed below."}
     meta = dict(meta or {})
     meta["rootNotice"] = notice
+    # no tree to filter by: create_pairs keeps every row, and its pairs carry no leaf_id
+    pairs = kwargs.pop("correct_swaps_df", None)
+    if pairs is not None and "leaf_id" not in pairs.columns:
+        pairs = pairs.assign(leaf_id=0)
     tree2html(model, dt_df, full_df, predictor_var, out_file, meta=meta, correlate_features=False,
-              full_tree_html=True, **kwargs)
+              full_tree_html=True, correct_swaps_df=pairs, keep_all=True, **kwargs)
 
 
 def tree2html(
@@ -815,6 +821,7 @@ def tree2html(
     treebank_nav=None,
     fit_excluded=None,
     discounted_classes=None,
+    keep_all=False,
 ):
     """Write the tree page for a fitted pipeline (a placeholder or one-node root card when full_tree_html is
     False or there is no tree).
@@ -830,6 +837,7 @@ def tree2html(
         the root legend shows them (applied to the root only; no other node sees those rows).
     head_label: display name of the "head" role ("Verb", "Aux", "NP head"; header text only).
     correct_swaps_df: create_pairs' "correct_swaps" bucket, joined by leaf_id into the pairs section.
+    keep_all: every leaf counts as kept (the root card's one node: no tree, so every row is kept).
     """
     if leaf_threshold is not None and not isinstance(leaf_threshold, dict):
         meta = dict(meta or {})
@@ -842,7 +850,7 @@ def tree2html(
                 show_features=show_features, palette_map=palette_map,
                 full_label_distribution=full_label_distribution, head_label=head_label,
                 treebank_nav=treebank_nav, fit_excluded=fit_excluded,
-                discounted_classes=discounted_classes)
+                discounted_classes=discounted_classes, correct_swaps_df=correct_swaps_df)
         except Exception as e:
             import traceback
             traceback.print_exc()
@@ -981,6 +989,7 @@ def tree2html(
         leaf_threshold=leaf_threshold,
         strict_leaf_threshold=strict_leaf_threshold,
         correct_swaps_df=correct_swaps_df,
+        keep_all=keep_all,
     )
 
 

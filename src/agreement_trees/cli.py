@@ -8,14 +8,30 @@ import subprocess
 import sys
 
 from agreement_trees.config import (
-    AGREEMENT_CONFIG_PATH, load_agreement_config, parse_vp_target, vp_scan_key, vp_target_id,
+    AGREEMENT_CONFIG_PATH, VP_FAMILIES, load_agreement_config, parse_vp_target, vp_scan_key, vp_target_id,
 )
+from agreement_trees.fit.scan import np_pair_re
 from multiblimp.config import RESOURCE_DIR
 from multiblimp.languages import get_ud_langs
 from agreement_trees.pairs.second_chance import SecondChanceConfig
 
 CACHE_SCRIPT = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
                             "scripts", "agreement_trees", "cache_treebank_features.py")
+
+
+def check_target(target: str) -> None:
+    """Exit with a hint unless `target` is a verb-phrase id ("sv:Number", "svNa") or a noun-phrase id
+    ("HEAD-DET_Number"). Anything else would otherwise run as a noun-phrase target and find no languages."""
+    if parse_vp_target(target) is not None or np_pair_re().match(target):
+        return
+    hint = ""
+    for family in sorted(VP_FAMILIES, key=len, reverse=True):
+        if target.startswith(family) and len(target) > len(family):
+            hint = (f" Did you mean {family}:{target[len(family):]}? Only Number, Gender and Person have a short "
+                    f"form ({family}Na, {family}Ga, {family}Pa).")
+            break
+    raise SystemExit(f"unrecognised target {target!r}: use family:feature (e.g. sv:Number, sa:Case; families "
+                     f"{', '.join(VP_FAMILIES)}) or ROLE1-ROLE2_Feature (e.g. HEAD-DET_Number).{hint}")
 
 
 def parse_fit_args(argv=None):
@@ -33,8 +49,8 @@ def parse_fit_args(argv=None):
                                        "or 'ROLE1-ROLE2_Feature'")
     parser.add_argument("--config", default=AGREEMENT_CONFIG_PATH, help="Agreement config JSON.")
     parser.add_argument("--langs", "-l", nargs="*", default=[],
-                        help="Languages to process. Default: those the agreement scan found worth "
-                             "attempting for this target (a live scan if it is not in the results).")
+                        help="Only consider these languages. Either way, only those the agreement scan found worth "
+                             "attempting for this target are fit (a live scan if it is not in the results).")
     parser.add_argument("--recache_data", "-rc", action="store_true",
                         help="Re-extract each language's feature cache, then redo everything downstream.")
     parser.add_argument("--refit_trees", "-rf", action="store_true",
@@ -69,6 +85,7 @@ def parse_fit_args(argv=None):
     parser.add_argument("--single_aux_only", action="store_true",
                         help="Auxiliary targets: only single-aux instances, not stacked aux.")
     args = parser.parse_args(argv)
+    check_target(args.target)
     return args, config
 
 
@@ -77,8 +94,7 @@ def second_chance_config(fit_cfg: dict):
     sc = fit_cfg["second_chance"]
     if not sc["enabled"]:
         return None
-    return SecondChanceConfig(min_keep_frac=sc["min_keep_frac"], max_unk_frac=sc["max_unk_frac"],
-                              lax_threshold=sc["lax_threshold"])
+    return SecondChanceConfig(lax_threshold=sc["lax_threshold"])
 
 
 class TargetSkipped(Exception):
@@ -102,18 +118,18 @@ def extract_missing(mode: str, langs: list[str], args) -> None:
 
 
 def target_langs(mode: str, target: str, args, config: dict) -> list[str]:
-    """--langs, else the languages that qualify for this target: out-of-date caches (and, for languages
-    listed in the config, missing ones) are extracted first, the rest judged from the saved scan where
-    valid (a scan now, saved, for the others). Raises TargetSkipped when none qualifies."""
-    from agreement_trees.fit.scan import cache_state, resolve_target_langs
-    if args.langs:
-        return args.langs
-    universe = config["langs"] or get_ud_langs(RESOURCE_DIR)
+    """The languages that qualify for this target, among --langs, else the config's "langs", else all UD
+    languages: out-of-date caches (and, for named languages, missing ones) are extracted first, the rest
+    judged from the saved scan where valid (a scan now, saved, for the others). Raises TargetSkipped when
+    none qualifies."""
+    from agreement_trees.fit.scan import cache_lang, cache_state, resolve_target_langs
+    named = [cache_lang(lang) for lang in args.langs or config["langs"]]
+    universe = named or get_ud_langs(RESOURCE_DIR)
     key = vp_scan_key(*parse_vp_target(target)) if mode == "vp" else target
     family = parse_vp_target(target)[0] if mode == "vp" else None
-    # languages named in the config are extracted when uncached; with no list, only out-of-date caches
+    # named languages are extracted when uncached; with no list, only out-of-date caches
     # are refreshed (an uncached language is simply not considered)
-    to_extract = ("missing", "outdated") if config["langs"] else ("outdated",)
+    to_extract = ("missing", "outdated") if named else ("outdated",)
     stale = [lang for lang in universe if cache_state(mode, family, lang) in to_extract]
     if stale:
         extract_missing(mode, stale, args)
@@ -125,6 +141,9 @@ def target_langs(mode: str, target: str, args, config: dict) -> list[str]:
                             f"({info['n_saved']} judged from the saved scan, {info['n_scanned_now']} scanned now)")
     print(f"{len(langs)}/{info['n_cached']} cached languages worth attempting for {key} "
           f"({info['n_saved']} from the saved scan, {info['n_scanned_now']} scanned now)")
+    not_eligible = [lang for lang in named if lang not in langs] if args.langs else []
+    if not_eligible:
+        print(f"Skipping --langs not eligible for {key}: {', '.join(not_eligible)}")
     return langs
 
 

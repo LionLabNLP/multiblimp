@@ -35,6 +35,7 @@ excluded_treebanks = {
     },
     "Chinese": {
         "CFL": "learner data",  # v2? -f
+        "HK": "spoken"
     },
     "Classical_Chinese": {
         "TueCL": "too small",  # v1: comparatively small
@@ -45,7 +46,7 @@ excluded_treebanks = {
     },
     "English": {
         "Atis": "spoken",  # v2?: ?
-       # "GENTLE": "pending review",  # v2?: ?
+        "GENTLE": "niche genre",  # v2?: ?
        # "LittlePrince": "pending review",  # v2?: ?
         "ESL": "words removed",  # -f
         "CHILDES": "child language",  # v2: child-adult spoken language
@@ -78,7 +79,11 @@ excluded_treebanks = {
         "GPS": "code switching",  # v2? -f: but is only gheg treebank
     },
     "Greek": {
+        "Cretan": "nonstandard",
         "GLCII": "learner data",  # v2? -f
+        "Lesbian": "nonstandard",
+        "Messinian": "nonstandard",
+
     },
     "Guarani": {
         "OldTuDeT": "historical",  # v2? -f: old language variant, but is only guarani treebank
@@ -103,6 +108,7 @@ excluded_treebanks = {
         "KIParlaForest": "spoken",  # v2?
         "PoSTWITA": "social media",  # v2? -f: tweets
         "TWITTIRO": "social media",  # v2? -f: tweets
+        "MarkIT": "learner data",
     },
     "Japanese": {
         "BCCWJ": "words removed",  # -f
@@ -113,6 +119,7 @@ excluded_treebanks = {
     },
     "Korean": {
         "KSL": "learner data",  # v2? -f
+        "LittlePrince": "low quality",  # v2? 
     },
     "Latvian": {
         "Cairo": "too small",  # v1: only 20 sentences
@@ -122,6 +129,13 @@ excluded_treebanks = {
     },
     "Mbya_Guarani": {
         "Dooley": "words removed",  # -f
+    },
+    "Naija": {
+        "NSC": "spoken"
+    },
+
+    "Polish": {
+        "MPDT": "historical",  # v2
     },
     "Portuguese": {
         "DANTEStocks": "social media",  # v2? -f: tweets
@@ -151,11 +165,17 @@ excluded_treebanks = {
     "Telugu_English": {
         "TECT": "code switching",  # -f
     },
+    "Turkish": {
+        "Atis": "spoken",
+    },
     "Turkish_English": {
         "BUTR": "code switching",  # -f
     },
     "Turkish_German": {
         "SAGT": "code switching",  # -f
+    },
+    "Ukrainian": {
+        "ParlaMint": "spoken",  # v2
     },
     "Vietnamese": {
         "TueCL": "spoken",  # v1

@@ -1,10 +1,12 @@
 """The UD-derived lexicon: every (lemma, form, upos, features) a language's treebank attests,
-written as resources/ud_tables/<langcode>.parquet (multiblimp.ud_table).
+written as resources/ud_tables/<langcode>.parquet (multiblimp.ud_table). A token's features are
+stored whether or not they have a UniMorph counterpart, except NON_MORPHOLOGICAL_FEATURES.
 
 Tokens without usable lemma/features are skipped, and rows that contradict a much more frequent
 one (same lemma and features with another form, or same lemma and form with other features) are
-dropped as annotation errors; the thresholds are ud_tables.dup_form_threshold / dup_feat_threshold
-in resources/data_prep_config.json.
+dropped as annotation errors; rows that only leave out features of a much more frequent row of
+the same lemma and form are merged into it. The thresholds are ud_tables.dup_form_threshold /
+dup_feat_threshold / subset_merge_ratio in resources/data_prep_config.json.
 """
 import sys
 from collections import Counter, defaultdict
@@ -19,10 +21,12 @@ from .config import REPO_ROOT
 from .languages import lang2langcode, skip_langs
 from .ud_table import clean_lemma
 from .treebank import Treebank, has_typo
-from .ud_table import is_stored_feature, table_path, write_ud_table
+from .ud_table import table_path, write_ud_table
 
 sys.path.append(REPO_ROOT)
 from resources.um2ud_annotation.UD2UM_mapper import UD2UM, feat_val_to_um_tag, upos_to_um_tag
+
+NON_MORPHOLOGICAL_FEATURES = {"Position"}   # where the word sits, not how it is inflected
 
 
 def _value_is_mapped(feat: str, raw_val: str) -> bool:
@@ -41,6 +45,7 @@ def create_all_ud_tables(
     dup_feat_threshold: float = 100.0,
     load_from_pickle=False,
     log=None,
+    subset_merge_ratio: float = 10.0,
 ):
     for lang in tqdm(sorted(ud_langs)):
         if lang in skip_langs:
@@ -59,7 +64,7 @@ def create_all_ud_tables(
         coverage = new_ud_stats()
         rows = collect_ud_rows(
             treebank, verbose=verbose, dup_form_threshold=dup_form_threshold,
-            dup_feat_threshold=dup_feat_threshold, coverage=coverage,
+            dup_feat_threshold=dup_feat_threshold, coverage=coverage, subset_merge_ratio=subset_merge_ratio,
         )
         if rows:
             write_ud_table(rows, table_path(isolang))
@@ -78,10 +83,12 @@ def collect_ud_rows(
     dup_form_threshold: float = 100.0,
     dup_feat_threshold: float = 100.0,
     coverage: Optional[dict] = None,
+    subset_merge_ratio: float = 10.0,
 ) -> list:
     """The treebank's lexicon rows, (lemma, form, upos, {feature: value}, frequency), for
     multiblimp.ud_table.write_ud_table. coverage: a multiblimp.annotation_coverage.new_ud_stats()
-    dict to fill with the token counts (every token is counted before any skip rule applies)."""
+    dict to fill with the token counts (every token is counted before any skip rule applies).
+    subset_merge_ratio: see merge_subset_rows."""
     ud_keys = []
 
     iterator = tqdm(treebank) if verbose else treebank
@@ -122,7 +129,8 @@ def collect_ud_rows(
                 skip("upos has no UniMorph tag")
                 continue
 
-            stored = {f: ",".join(sorted(set(v.split(",")))) for f, v in token_feats.items() if is_stored_feature(f)}
+            stored = {f: ",".join(sorted(set(v.split(",")))) for f, v in token_feats.items()
+                      if f not in NON_MORPHOLOGICAL_FEATURES}
             if stored:
                 ud_keys.append((lemma.lower(), form.lower(), upos, tuple(sorted(stored.items()))))
 
@@ -132,7 +140,8 @@ def collect_ud_rows(
         for (lemma, form, upos, feats), freq in Counter(ud_keys).items()
     ]
     rows = []
-    for lemma, form, encoded, freq in remove_duplicate_features(ud_freqs, dup_form_threshold, dup_feat_threshold):
+    deduplicated = remove_duplicate_features(ud_freqs, dup_form_threshold, dup_feat_threshold)
+    for lemma, form, encoded, freq in merge_subset_rows(deduplicated, subset_merge_ratio):
         feats = dict(part.split("=", 1) for part in encoded[1:])
         rows.append((lemma, form, encoded[0][len("upos="):], feats, freq))
     if coverage is not None:
@@ -223,3 +232,30 @@ def remove_duplicate_features(
     dedup_rows = sorted(set(dedup_forms) & set(dedup_feats), key=sort_key)
 
     return dedup_rows
+
+
+def merge_subset_rows(
+    row_freqs: List[Tuple[str, str, tuple, int]], ratio: float
+) -> List[Tuple[str, str, tuple, int]]:
+    """Rows of one (lemma, form, upos) that state a strict subset of another row's features
+    (same values), where that row is at least `ratio` times as frequent, are merged into it
+    (frequencies added; the most frequent such row wins): an underspecified copy of a cell is
+    the same cell. Row order is kept."""
+    groups = defaultdict(list)
+    for i, (lemma, form, features, _) in enumerate(row_freqs):
+        groups[lemma, form, features[0]].append(i)
+    freqs = [freq for *_, freq in row_freqs]
+    feats = [set(features[1:]) for _, _, features, _ in row_freqs]
+    dropped = [False] * len(row_freqs)
+    for members in groups.values():
+        if len(members) < 2:
+            continue
+        order = sorted(members, key=lambda i: freqs[i])
+        for r in order:
+            for s in reversed(order):
+                if s != r and not dropped[s] and freqs[s] >= ratio * freqs[r] and feats[r] < feats[s]:
+                    freqs[s] += freqs[r]
+                    dropped[r] = True
+                    break
+    return [(lemma, form, features, freqs[i]) for i, (lemma, form, features, _) in enumerate(row_freqs)
+            if not dropped[i]]

@@ -6,10 +6,12 @@
 
 By default the languages are those the agreement scan found worth attempting
 for the target (find_agreement_candidates.py; a live scan if it is not in the
-results). Caches that are out of date are re-extracted first, per the "vp"/"np"
+results); --langs narrows that to the languages named, and does not add any that
+do not qualify. Caches that are out of date are re-extracted first, per the "vp"/"np"
 blocks of resources/agreement_config.json, which also holds the tree settings
 ("fit") and the second-chance retry; a language with no cache is extracted only
-if the config's "langs" lists it (an uncached language is otherwise not considered).
+if --langs or the config's "langs" lists it (an uncached language is otherwise not
+considered).
 
 Exit status: 0 done, 1 failed, 3 skipped (no eligible language).
 

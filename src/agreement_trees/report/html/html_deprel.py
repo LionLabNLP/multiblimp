@@ -1,6 +1,6 @@
 def create_html(
     plot_data_json, trivial_note,
-    languages_json, leaf_threshold=None,
+    languages_json, left_out_json="[]", leaf_threshold=None,
     agreement_label="Subject-Verb", head_role_label="head",
     subject_label="subject", nsubj_label="nsubj", overview_href="../",
     stats_overview_href="../../data.html", show_diagnostics=True,
@@ -232,6 +232,17 @@ def create_html(
         .notes-disclosure[open] > summary .chevron {{ transform: rotate(90deg); }}
         .notes-disclosure-body {{ margin-top: 0.5rem; }}
         .notes-disclosure-body > *:last-child {{ margin-bottom: 0; }}
+        .left-out-table {{
+            width: 100%; border-collapse: collapse; font-size: 0.82rem; color: var(--text-muted);
+            background: var(--detail-bg); border: 1px solid var(--border); border-radius: 6px; overflow: hidden;
+        }}
+        .left-out-table th, .left-out-table td {{ padding: 0.3rem 0.875rem; text-align: left; border-bottom: 1px solid var(--border); }}
+        .left-out-table th {{ font-weight: 600; color: var(--text); background: var(--card); }}
+        .left-out-table tbody tr:last-child td {{ border-bottom: none; }}
+        .left-out-table .num {{ text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; }}
+        .left-out-table a {{ color: var(--accent); font-weight: 600; text-decoration: none; }}
+        .left-out-table a:hover {{ text-decoration: underline; }}
+        @media (max-width: 640px) {{ .left-out-table th, .left-out-table td {{ padding: 0.3rem 0.5rem; }} }}
 
         .table-toolbar {{ display: flex; align-items: center; flex-wrap: wrap; gap: 0.75rem 1rem; margin-bottom: 0.85rem; }}
         input.lang-search {{
@@ -615,8 +626,8 @@ def create_html(
                     <div class="cell c-tree sortable" data-column="tree" title="The decision tree's accuracy on the data it was fit on: (sum of each leaf's majority count + 0.5) / (N + 1) -- smoothed once for the whole dataset, same as Root Acc, so leaves are not penalised one by one.">Train Acc</div>
                     <div class="cell c-gain sortable" data-column="gain" title="Train Acc minus Root Acc, in percentage points — how much the tree improves on always guessing the majority class on its own training data. Never negative.">Δ Acc</div>
                     <div class="cell c-test sortable" data-column="test" title="Raw accuracy of this tree on the held-out split it was not fit on. Faded when the test split has fewer than 10 rows. Compare with Train Acc to spot overfitting.">Test Acc</div>
-                    <div class="cell c-raw sortable" data-column="nRaw" title="Candidate rows before the leaf-confidence filter is applied.">N RAW</div>
-                    <div class="cell c-keep sortable" data-column="nKeep" title="Of N RAW, the rows kept after the leaf-confidence filter — the ones actually attempted.">N KEEP</div>
+                    <div class="cell c-raw sortable" data-column="nRaw" title="Agreeing rows in the language&#39;s data (training and held-out alike), before the leaf-confidence filter.">N RAW</div>
+                    <div class="cell c-keep sortable" data-column="nKeep" title="Of N RAW, the rows in a kept leaf (held-out rows sent down the tree included) — the ones actually attempted.">N KEEP</div>
                     {bucket_header_html}
                     <div class="cell c-pairs sortable" data-column="nPairs" title="Rows that ended up as a correctly re-inflected minimal pair, as a fraction of N KEEP.">N PAIRS</div>
                 </div>
@@ -645,8 +656,8 @@ def create_html(
             <div><dt>Train Acc</dt><dd>The decision tree&rsquo;s accuracy on its own training data: (sum of each leaf&rsquo;s majority count + 0.5) / (N + 1). Smoothed once for the whole dataset, exactly like Root Acc, so the two are directly comparable and extra leaves are not penalised one by one (the per-leaf <code>acc</code> shown on the tree page is smoothed per leaf, for the keep test, and so does not average to this). Same colour scale as Root Acc.</dd></div>
             <div><dt>Δ Acc</dt><dd>Train Acc minus Root Acc, in percentage points; never negative. Coloured on the coverage scale (teal = good) by the share of the root&rsquo;s remaining error the tree removed, i.e. gain &divide; (100% &minus; Root Acc), clamped to 0&ndash;100%. +1 point off a root accuracy of 98% is a much bigger win than +1 point off a root accuracy of 60%.</dd></div>
             <div><dt>Test Acc</dt><dd>Raw accuracy of the same tree on the held-out split it was not fit on. Compare with Train Acc to spot overfitting: a large gap means the tree learned its training rows more than the pattern. Coloured on the same 50&ndash;100% scale, and faded (with a tooltip) when the test split has fewer than 10 rows, since that figure is then too noisy to mean much. Blank when the model has no recorded test split.</dd></div>
-            <div><dt>N RAW</dt><dd>Candidate rows before the leaf-confidence filter is applied. Not coloured. There's no cheap per-language reference point (like treebank size) to scale it against, and not informative enough to be worth adding one for. A language with more than zero but fewer than 10 is left out of this table entirely and listed instead, with its full label distribution, in the "too few or uninformative agreement labels" note above &mdash; still real data, just too little of it for this language &amp; condition to draw much of a conclusion from.</dd></div>
-            <div><dt>N KEEP</dt><dd>Of those, the rows kept after the leaf-confidence filter ({threshold_text}). The ones actually attempted. Coloured on the coverage scale, as a fraction of N RAW &mdash; faded (with a hover tooltip) when N RAW is below 10, since that fraction is too noisy to mean much at that size (2/2 reads as a perfect 100% off pure small-sample luck). The colour still shows, just dimmed, rather than disappearing outright. A language whose strict pass alone wasn't enough and got a laxer, depth-aware retry (agreement_trees.pairs.second_chance) gets a "retried" tag under its name &mdash; N KEEP then reflects that retry's own per-leaf thresholds, whether or not it produced any pairs.</dd></div>
+            <div><dt>N RAW</dt><dd>Agreeing rows in the language&rsquo;s data for this condition, training and held-out rows alike (the same count as Samples on the data overview), before the leaf-confidence filter. Not coloured. There's no cheap per-language reference point (like treebank size) to scale it against, and not informative enough to be worth adding one for. A language with more than zero but fewer than 10 is left out of this table entirely and listed instead, with its full label distribution, in the collapsible list above the table &mdash; still real data, just too little of it for this language &amp; condition to draw much of a conclusion from.</dd></div>
+            <div><dt>N KEEP</dt><dd>Of those, the rows in a leaf that passes the leaf-confidence filter ({threshold_text}). The ones actually attempted. Held-out rows count too: they are sent down the tree and kept when their leaf is, so they can become pairs as well. Coloured on the coverage scale, as a fraction of N RAW &mdash; faded (with a hover tooltip) when N RAW is below 10, since that fraction is too noisy to mean much at that size (2/2 reads as a perfect 100% off pure small-sample luck). The colour still shows, just dimmed, rather than disappearing outright. A language whose strict pass alone wasn't enough and got a laxer retry (agreement_trees.pairs.second_chance) gets a "retried" tag under its name &mdash; N KEEP then reflects that retry's lower threshold, whether or not it produced any pairs.</dd></div>
             <div><dt>N PAIRS</dt><dd>Rows that ended up as a correctly re-inflected minimal pair. Coloured on the coverage scale, as a fraction of N KEEP, with the same under-10 fade as N KEEP above (checked against N KEEP this time, not N RAW). Clickable when example rows are available &mdash; opens the same examples modal as the bucket breakdown.</dd></div>
           </dl>
         </div>
@@ -654,8 +665,8 @@ def create_html(
         <div class="legend-section">
           <h3>Results (below-row panel)</h3>
           <dl class="legend-list">
-            <div><dt># UD candidates (raw)</dt><dd>Same value as N RAW above. Candidate rows before the leaf-confidence filter.</dd></div>
-            <div><dt># UD candidates (kept)</dt><dd>Same value as N KEEP above. The rows kept after that filter.</dd></div>
+            <div><dt># UD candidates (raw)</dt><dd>Same value as N RAW above. Agreeing rows before the leaf-confidence filter.</dd></div>
+            <div><dt># UD candidates (kept)</dt><dd>The rows kept after that filter. The same value as N KEEP above, except for noun-phrase targets between two dependents (e.g. DET-ADJ), where each row is counted once per reinflected role, so twice.</dd></div>
             <div><dt># forms of interest</dt><dd>Distinct {head_role_label}/{nsubj_label} forms eligible for this prediction target at all, whether or not they ended up labelled "Yes".</dd></div>
             <div><dt>% covered by UM</dt><dd>Share of those forms found directly in UniMorph's inflection tables.</dd></div>
             <div><dt>% covered by UM+UD</dt><dd>Share covered once the UD-derived fallback is added on top of UniMorph.</dd></div>
@@ -763,6 +774,7 @@ def create_html(
       btn.style.display = '';
     }})();
 
+    const LEFT_OUT = {left_out_json};
     const LANGUAGES = {languages_json};
     const plotData = {plot_data_json};
     const SHOW_DIAGNOSTICS = {str(show_diagnostics).lower()};
@@ -958,7 +970,7 @@ def create_html(
           <div>
             <p class="section-label">Coverage &amp; volume</p>
             <div class="stat-rows">
-              <div class="stat" style="grid-column:1;grid-row:1;"><span class="label" title="Candidate rows before the leaf-confidence filter is applied. Same value as N RAW in the table."># UD candidates (raw)</span><span class="value">${{lang.nRaw.toLocaleString()}}</span></div>
+              <div class="stat" style="grid-column:1;grid-row:1;"><span class="label" title="Agreeing rows before the leaf-confidence filter, held-out rows included. Same value as N RAW in the table."># UD candidates (raw)</span><span class="value">${{lang.nRaw.toLocaleString()}}</span></div>
               <div class="stat" style="grid-column:2;grid-row:1;"><span class="label" title="Distinct {head_role_label}/{nsubj_label} forms eligible for this prediction target at all, whether or not they ended up labelled &quot;Yes&quot;."># forms of interest</span><span class="value">${{diag ? diag.nForms.toLocaleString() : "—"}}</span></div>
 
               <div class="stat" style="grid-column:1;grid-row:2;"><span class="label" title="Share of forms of interest covered once the UD-derived fallback is added on top of UniMorph.">% covered by UM+UD</span><span class="value"${{diag ? ` style="color:${{pctColor(diag.pctUMUD)}}"` : ""}}>${{diag ? diag.pctUMUD.toFixed(1) + "%" : "—"}}</span></div>
@@ -966,7 +978,7 @@ def create_html(
               <div class="stat" style="grid-column:3;grid-row:2;"><span class="label" title="Size of the UniMorph lemma inventory available for this language."># UM lemmas</span><span class="value">${{diag ? diag.nLemma.toLocaleString() : "—"}}</span></div>
               <div class="stat" style="grid-column:4;grid-row:2;"><span class="label" title="Size of the UniMorph inflected-form inventory available for this language."># UM forms</span><span class="value">${{diag ? diag.nForm.toLocaleString() : "—"}}</span></div>
 
-              <div class="stat" style="grid-column:1;grid-row:3;"><span class="label" title="Of N RAW, the rows kept after the leaf-confidence filter. Same value as N KEEP in the table."># UD candidates (kept)</span><span class="value">${{lang.nKeep.toLocaleString()}}</span></div>
+              <div class="stat" style="grid-column:1;grid-row:3;"><span class="label" title="Of N RAW, the rows in a kept leaf, held-out rows included. Same value as N KEEP in the table."># UD candidates (kept)</span><span class="value">${{lang.nKeep.toLocaleString()}}</span></div>
               <div class="stat" style="grid-column:2;grid-row:3;"><span class="label" title="Rows that ended up as a correctly re-inflected minimal pair. Same value as N PAIRS in the table."># minimal pairs</span><span class="value">${{lang.nPairs.toLocaleString()}}</span></div>
               <div class="stat" style="grid-column:3;grid-row:3;"><span class="label" title="Minimal pairs that came from a row with more than one candidate swap form, as a share of all pairs."># valid from multi</span><span class="value">${{diag ? multiValueHtml(lang, diag) : "—"}}</span></div>
             </div>
@@ -1062,7 +1074,7 @@ def create_html(
           ? `<a class="lang-name-text" href="${{lang.langUrl}}"${{nameStyle}}>${{lang.name}}</a>`
           : `<span class="lang-name-text"${{nameStyle}}>${{lang.name}}</span>`;
         const retriedBadge = lang.retried
-          ? `<span class="retried-badge" title="agreement_trees.pairs.second_chance retried this language at a laxer, depth-aware accuracy floor after the strict pass alone wasn't enough.">retried</span>`
+          ? `<span class="retried-badge" title="agreement_trees.pairs.second_chance retried this language at a laxer accuracy floor after the strict pass alone wasn't enough.">retried</span>`
           : "";
 
         const hasPairsExamples = lang.diag && lang.diag.examples && lang.diag.examples.correct_swaps && lang.nPairs > 0;

@@ -1,6 +1,7 @@
 """Which (target, language) pairs have enough real agreement evidence to be
 worth fitting. Both pipelines are scanned the same way and judged by one bar
-(agreement_trees.pipeline_utils.passes_agreement_bar):
+(agreement_trees.pipeline_utils.passes_agreement_bar: at least min_yes yes rows, and a Wilson lower bound
+of yes / (yes + no) of at least yes_rate_floor):
 
   vp  one scan target per (family, feature), keyed "sv:Number": the stored
       head_{deprel}_{feat}_agreement column of the family's cache
@@ -10,9 +11,8 @@ worth fitting. Both pipelines are scanned the same way and judged by one bar
 Per (target, language) the rows are split into yes / no (both sides tagged,
 agreeing or not), one-side-only (two buckets, named after the roles), and
 neither, all out of the rows where the two roles actually co-occur. Rows of
-excluded treebanks are not counted. Each language entry also carries two diagnostics (nothing is filtered on
-them): head_values, how many distinct values the head's feature takes over the yes/no rows, and chance_adjusted,
-the agreement beyond what independent head and child values would give.
+excluded treebanks are not counted, nor, for vp, rows the fit removes by the condition's rm_columns (conjoined
+arguments).
 """
 import glob
 import json
@@ -27,7 +27,7 @@ from agreement_trees.config import (
     LANGS_PATH, VP_FAMILIES, load_scan_results, parse_vp_target, vp_scan_key,
 )
 from agreement_trees.pipeline_utils import parquet_current, sentinel_current
-from agreement_trees.pipeline_utils import passes_agreement_bar
+from agreement_trees.pipeline_utils import agreement_bar_failure, passes_agreement_bar
 from multiblimp.config import NP_INSTANCES_DIR
 from multiblimp.languages import gblang2udlang
 from agreement_trees.extract.per_treebank import split_excluded
@@ -40,7 +40,7 @@ def new_stats():
     return defaultdict(lambda: {
         "roles": None,
         "lang_counts": defaultdict(lambda: Counter({k: 0 for k in COUNT_KEYS})),
-        "lang_values": defaultdict(lambda: {"head": Counter(), "child": Counter()}),
+        # "lang_values": defaultdict(lambda: {"head": Counter(), "child": Counter()}),
     })
 
 
@@ -53,44 +53,44 @@ def _included(path: str, schema_names, columns) -> pd.DataFrame:
     return df.drop(columns="treebank", errors="ignore")
 
 
-def _add(stats: dict, key: str, roles: tuple[str, str], lang: str, counts: tuple, values: tuple | None = None) -> None:
+def _add(stats: dict, key: str, roles: tuple[str, str], lang: str, counts: tuple) -> None:
     entry = stats[key]
     entry["roles"] = roles
     lc = entry["lang_counts"][lang]
     for name, value in zip(COUNT_KEYS, counts):
         lc[name] += value
-    if values:
-        entry["lang_values"][lang]["head"].update(values[0])
-        entry["lang_values"][lang]["child"].update(values[1])
+    # if values:
+    #     entry["lang_values"][lang]["head"].update(values[0])
+    #     entry["lang_values"][lang]["child"].update(values[1])
 
 
-def value_pairs(agreement: pd.Series, head: pd.Series | None, child: pd.Series | None) -> tuple | None:
-    """Counters of the head's and the child's feature values over the rows labelled yes or no."""
-    if head is None or child is None:
-        return None
-    rows = agreement.isin(["yes", "no"])
-    return Counter(head[rows].dropna().astype(str)), Counter(child[rows].dropna().astype(str))
-
-
-def agreement_diagnostics(head: Counter, child: Counter, yes: int, no: int) -> tuple:
-    """(distinct head values, agreement beyond chance): (observed - expected) / (1 - expected), expected being the
-    agreement of a head and a child value drawn independently; None when it cannot be told. Diagnostics only: a head
-    that never varies, or agreement no better than chance, shows up here, but nothing is filtered on it."""
-    n_head, n_child = sum(head.values()), sum(child.values())
-    if not n_head or not n_child or not yes + no:
-        return len(head), None
-    expected = sum(head[v] / n_head * child.get(v, 0) / n_child for v in head)
-    return len(head), None if expected >= 1 else round((yes / (yes + no) - expected) / (1 - expected), 3)
+# def value_pairs(agreement: pd.Series, head: pd.Series | None, child: pd.Series | None) -> tuple | None:
+#     """Counters of the head's and the child's feature values over the rows labelled yes or no."""
+#     if head is None or child is None:
+#         return None
+#     rows = agreement.isin(["yes", "no"])
+#     return Counter(head[rows].dropna().astype(str)), Counter(child[rows].dropna().astype(str))
+#
+#
+# def agreement_diagnostics(head: Counter, child: Counter, yes: int, no: int) -> tuple:
+#     """(distinct head values, agreement beyond chance): (observed - expected) / (1 - expected), expected being the
+#     agreement of a head and a child value drawn independently; None when it cannot be told."""
+#     n_head, n_child = sum(head.values()), sum(child.values())
+#     if not n_head or not n_child or not yes + no:
+#         return len(head), None
+#     expected = sum(head[v] / n_head * child.get(v, 0) / n_child for v in head)
+#     return len(head), None if expected >= 1 else round((yes / (yes + no) - expected) / (1 - expected), 3)
 
 
 # ---------------------------------------------------------------- vp
 
-def vp_family_dirs() -> dict[str, tuple[str, str]]:
-    """family -> (word_order cache dir, child deprel). One Na condition per
+def vp_family_dirs() -> dict[str, tuple[str, str, tuple]]:
+    """family -> (word_order cache dir, child deprel, rm_columns). One Na condition per
     family is enough: Na/Ga/Pa share the cache."""
     from agreement_trees.vp.conditions import CONDITIONS
     return {
-        family: (CONDITIONS[f"{family}Na"].word_order_dir(), CONDITIONS[f"{family}Na"].deprel)
+        family: (CONDITIONS[f"{family}Na"].word_order_dir(), CONDITIONS[f"{family}Na"].deprel,
+                 CONDITIONS[f"{family}Na"].rm_columns)
         for family in VP_FAMILIES
     }
 
@@ -116,7 +116,7 @@ def vp_counts(agreement: pd.Series, child: pd.Series | None) -> tuple:
 
 
 def scan_vp_language(parquet_path: str, family: str, deprel: str, stats: dict,
-                     only_feature: str | None = None, exclude_features=()) -> str | None:
+                     only_feature: str | None = None, exclude_features=(), rm_columns=()) -> str | None:
     lang = os.path.basename(parquet_path)[: -len(".parquet")]
     schema_names = pq.ParquetFile(parquet_path).schema_arrow.names
     feats = vp_features(schema_names, deprel, exclude_features)
@@ -127,13 +127,16 @@ def scan_vp_language(parquet_path: str, family: str, deprel: str, stats: dict,
     wanted = [f"head_{deprel}_{f}_agreement" for f in feats]
     wanted += [f"{deprel}_{f}" for f in feats if f"{deprel}_{f}" in schema_names]
     wanted += [f"head_{f}" for f in feats if f"head_{f}" in schema_names]
-    df = _included(parquet_path, set(schema_names), wanted)
+    removed = [c for c in schema_names if any(c.startswith(y) for y in rm_columns)]
+    df = _included(parquet_path, set(schema_names), wanted + removed)
+    for col in removed:
+        df = df[~df[col]]
     for feat in feats:
         child_col = f"{deprel}_{feat}"
         counts = vp_counts(df[f"head_{deprel}_{feat}_agreement"],
                            df[child_col] if child_col in df.columns else None)
-        values = value_pairs(df[f"head_{deprel}_{feat}_agreement"], df.get(f"head_{feat}"), df.get(child_col))
-        _add(stats, vp_scan_key(family, feat), ("head", deprel), lang, counts, values)
+        # values = value_pairs(df[f"head_{deprel}_{feat}_agreement"], df.get(f"head_{feat}"), df.get(child_col))
+        _add(stats, vp_scan_key(family, feat), ("head", deprel), lang, counts)
     return lang
 
 
@@ -205,30 +208,37 @@ def scan_np_language(parquet_path: str, stats: dict, split_head_upos: bool = Fal
         else:
             groups = [(col, df)]
         for key, group_df in groups:
-            _add(stats, key, (key.split("-", 1)[0], role2), lang, np_counts(group_df, col, role1, role2, feat),
-                 value_pairs(group_df[col], group_df.get(f"{role1}_{feat}"), group_df.get(f"{role2}_{feat}")))
+            _add(stats, key, (key.split("-", 1)[0], role2), lang, np_counts(group_df, col, role1, role2, feat))
+            #     value_pairs(group_df[col], group_df.get(f"{role1}_{feat}"), group_df.get(f"{role2}_{feat}")))
     return lang
 
 
 # ---------------------------------------------------------------- scans
 
+def cache_lang(lang: str) -> str:
+    """A language name as the caches and scan results spell it ("Modern Greek", "Ancient Greek" -> "Greek", "Ancient_Greek")."""
+    return gblang2udlang.get(lang, lang).replace(" ", "_")
+
+
 def cache_file(mode: str, family: str | None, lang: str) -> str:
     """Path of the cache parquet a scan of (family, lang) reads."""
-    name = gblang2udlang.get(lang, lang).replace(" ", "_") + ".parquet"
-    return os.path.join(vp_family_dirs()[family][0] if mode == "vp" else NP_INSTANCES_DIR, name)
+    return os.path.join(vp_family_dirs()[family][0] if mode == "vp" else NP_INSTANCES_DIR, cache_lang(lang) + ".parquet")
 
 
 def unit_key(mode: str, family: str | None, lang: str) -> str:
     return f"{family}/{lang}" if mode == "vp" else lang
 
 
+# bump when a change alters which rows are counted: saved scans then count as out of date
+SCAN_COUNTS_VERSION = 3
 # settings an earlier version recorded in the saved scans; they no longer count when a saved scan is compared
 RETIRED_THRESHOLD_KEYS = ("min_agree_share", "min_agree_share_families")
 
 
 def scan_thresholds(scan_cfg: dict) -> dict:
-    keys = ("wilson_floor", "min_both", "min_yes", "yes_rate_floor", "split_head_upos")
-    return {**{k: scan_cfg[k] for k in keys}, "exclude_features": sorted(scan_cfg["exclude_features"])}
+    keys = ("min_yes", "yes_rate_floor", "split_head_upos")
+    return {**{k: scan_cfg[k] for k in keys}, "exclude_features": sorted(scan_cfg["exclude_features"]),
+            "counts_version": SCAN_COUNTS_VERSION}
 
 
 def same_thresholds(saved: dict | None, current: dict) -> bool:
@@ -241,7 +251,7 @@ def scan_vp(langs: list[str] | None = None, families: list[str] | None = None,
     """(stats, {family: (scanned, found)}, {unit: cache mtime}) over the VP caches."""
     stats, counts, units = new_stats(), {}, {}
     only_family, only_feature = (parse_vp_target(only_target) or (None, None)) if only_target else (None, None)
-    for family, (cache_dir, deprel) in vp_family_dirs().items():
+    for family, (cache_dir, deprel, rm_columns) in vp_family_dirs().items():
         if (families is not None and family not in families) or (only_family and family != only_family):
             continue
         paths = sorted(glob.glob(os.path.join(cache_dir, "*.parquet")))
@@ -251,7 +261,7 @@ def scan_vp(langs: list[str] | None = None, families: list[str] | None = None,
         for path in paths:
             lang = os.path.basename(path)[: -len(".parquet")]
             units[unit_key("vp", family, lang)] = os.path.getmtime(path)
-            done += scan_vp_language(path, family, deprel, stats, only_feature, exclude_features) is not None
+            done += scan_vp_language(path, family, deprel, stats, only_feature, exclude_features, rm_columns) is not None
         counts[family] = (done, len(paths))
     return stats, counts, units
 
@@ -306,8 +316,7 @@ def build_summary(stats: dict, mode: str) -> pd.DataFrame:
 def langs_passing(entry: dict, scan_cfg: dict) -> dict[str, Counter]:
     return {
         lang: c for lang, c in sorted(entry["lang_counts"].items())
-        if passes_agreement_bar(c["yes"], c["no"], c["total"], scan_cfg["wilson_floor"],
-                                scan_cfg["min_both"], scan_cfg["min_yes"], scan_cfg["yes_rate_floor"])
+        if passes_agreement_bar(c["yes"], c["no"], scan_cfg["min_yes"], scan_cfg["yes_rate_floor"])
     }
 
 
@@ -329,15 +338,40 @@ def build_lang_config(stats: dict, scan_cfg: dict) -> dict[str, dict[str, dict]]
                 f"{role_a}_only": cell(c["a_only"]),
                 f"{role_b}_only": cell(c["b_only"]),
                 "both": cell(c["yes"] + c["no"]),
+                "yes": c["yes"], "no": c["no"],
                 "total": total,
             }
-            values = entry["lang_values"].get(lang)
-            if values:
-                lang_entries[lang]["head_values"], lang_entries[lang]["chance_adjusted"] = agreement_diagnostics(
-                    values["head"], values["child"], c["yes"], c["no"])
+            # values = entry["lang_values"].get(lang)
+            # if values:
+            #     lang_entries[lang]["head_values"], lang_entries[lang]["chance_adjusted"] = agreement_diagnostics(
+            #         values["head"], values["child"], c["yes"], c["no"])
         if lang_entries:
             config[key] = lang_entries
     return config
+
+
+def build_failed_config(stats: dict, scan_cfg: dict) -> dict[str, dict[str, dict]]:
+    """target -> {lang: {"yes", "no", "total", "reason"}} for every language with some jointly tagged rows
+    (yes + no > 0) that does not clear the bar; reason is the first condition it fails."""
+    failed = {}
+    for key, entry in stats.items():
+        lang_entries = {}
+        for lang, c in sorted(entry["lang_counts"].items()):
+            if not c["yes"] + c["no"]:
+                continue
+            reason = agreement_bar_failure(c["yes"], c["no"], scan_cfg["min_yes"], scan_cfg["yes_rate_floor"])
+            if reason is not None:
+                lang_entries[lang] = {"yes": c["yes"], "no": c["no"], "total": c["total"], "reason": reason}
+        if lang_entries:
+            failed[key] = lang_entries
+    return failed
+
+
+def build_failed_csv(failed: dict) -> pd.DataFrame:
+    return pd.DataFrame([
+        {"target": key, "lang": lang, **s}
+        for key, lang_entries in failed.items() for lang, s in sorted(lang_entries.items())
+    ], columns=["target", "lang", "yes", "no", "total", "reason"])
 
 
 def build_lang_csv(config: dict, stats: dict) -> pd.DataFrame:
@@ -351,8 +385,8 @@ def build_lang_csv(config: dict, stats: dict) -> pd.DataFrame:
                 "b_role": role_b, "b_only": s[f"{role_b}_only"]["abs"], "b_only_%": s[f"{role_b}_only"]["rel"],
                 "both": s["both"]["abs"], "both_%": s["both"]["rel"],
                 "neither": s["neither"]["abs"], "neither_%": s["neither"]["rel"],
-                "total": s["total"],
-                "head_values": s.get("head_values"), "chance_adjusted": s.get("chance_adjusted"),
+                "yes": s["yes"], "no": s["no"], "total": s["total"],
+                # "head_values": s.get("head_values"), "chance_adjusted": s.get("chance_adjusted"),
             })
     return pd.DataFrame(rows)
 
@@ -382,10 +416,10 @@ def cache_state(mode: str, family: str | None, lang: str) -> str:
 
 
 def save_results(mode: str, results: dict, units: dict, thresholds: dict, scanned_langs: set,
-                 scanned_families: set, log=None) -> None:
+                 scanned_families: set, log=None, failed: dict | None = None) -> None:
     """Write the scan file. A partial scan (some languages, some vp families) replaces
     only what it scanned, unless the thresholds changed: then nothing older is valid
-    and the file starts over."""
+    and the file starts over. `failed` (build_failed_config) is merged the same way into "failed"."""
     old = load_scan_results(mode)
     if old and not same_thresholds(old.get("thresholds"), thresholds):
         (log.info if log else print)(
@@ -396,18 +430,21 @@ def save_results(mode: str, results: dict, units: dict, thresholds: dict, scanne
     def in_scope(target):
         return mode != "vp" or target.split(":", 1)[0] in scanned_families
 
-    targets = {t: dict(langs) for t, langs in old.get("targets", {}).items()}
-    for target in list(targets):
-        if in_scope(target):
-            if scanned_langs:
-                for lang in scanned_langs:
-                    targets[target].pop(lang, None)
-            else:
-                targets.pop(target)
-    for target, langs in results.items():
-        targets.setdefault(target, {}).update(langs)
+    def merged(section, new):
+        entries = {t: dict(langs) for t, langs in old.get(section, {}).items()}
+        for target in list(entries):
+            if in_scope(target):
+                if scanned_langs:
+                    for lang in scanned_langs:
+                        entries[target].pop(lang, None)
+                else:
+                    entries.pop(target)
+        for target, langs in new.items():
+            entries.setdefault(target, {}).update(langs)
+        return {t: langs for t, langs in entries.items() if langs}
+
     out = {"thresholds": thresholds, "scanned": {**old.get("scanned", {}), **units},
-           "targets": {t: langs for t, langs in targets.items() if langs}}
+           "targets": merged("targets", results), "failed": merged("failed", failed or {})}
 
     os.makedirs(os.path.dirname(LANGS_PATH[mode]), exist_ok=True)
     tmp = LANGS_PATH[mode] + ".tmp"
@@ -449,6 +486,7 @@ def resolve_target_langs(mode: str, target: str, universe: list[str], scan_cfg: 
             stats, _, units = scan_np(to_scan, split_head_upos=scan_cfg["split_head_upos"],
                                     exclude_features=scan_cfg["exclude_features"])
         results = build_lang_config(stats, scan_cfg)
-        save_results(mode, results, units, scan_thresholds(scan_cfg), set(to_scan), {family})
+        save_results(mode, results, units, scan_thresholds(scan_cfg), set(to_scan), {family},
+                     failed=build_failed_config(stats, scan_cfg))
         valid += list(results.get(key, {}))
     return sorted(valid), {"n_cached": n_cached, "n_saved": n_cached - len(to_scan), "n_scanned_now": len(to_scan)}

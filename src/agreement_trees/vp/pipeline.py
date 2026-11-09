@@ -11,7 +11,7 @@ import json
 from agreement_trees.extract.process_treebank import (
     create_word_order_df, read_df, load_treebank,
 )
-from agreement_trees.fit.decision_tree import fit_dt, FIT_EXCLUDED_FEATS, fit_excluded_for_display
+from agreement_trees.fit.decision_tree import fit_dt, FIT_EXCLUDED_FEATS, fit_excluded_for_display, pairs_input
 from agreement_trees.fit.entropy import DEFAULT_LEAF_MIN_ACCURACY
 from agreement_trees.report.viz_tree import tree2html
 from agreement_trees.extract.per_treebank import (
@@ -24,7 +24,7 @@ from multiblimp.languages import lang2langcode, gblang2udlang
 from multiblimp.ud_inflector import load_ud_inflector, nominal_inflector
 from multiblimp.ud_table import ud_lookup_table, um_lookup_table
 from agreement_trees.pipeline_utils import parquet_current, sentinel_current, write_sentinel
-from agreement_trees.config import lexical_features
+from agreement_trees.config import lexical_features, vp_scan_key
 from agreement_trees.taxonomy import FEATURE_SUFFIXES, OTHER_VERB_FORMS
 from multiblimp.config import (
     HTML_DECISION_TREES_DIR, OUTPUT_DECISION_TREES_DIR, OUTPUT_MINIMAL_PAIRS_DIR,
@@ -119,6 +119,7 @@ def refresh_deprel_index(target_id, deprel, predictor_var, head_label="Verb",
                     agreement_label=agreement_label,
                     subject_label=subject_label,
                     nsubj_label=nsubj_label,
+                    scan_key=vp_scan_key(prefix, re.match(r"head_[^_]+_(.+)_agreement$", predictor_var).group(1)),
                     )
 
 
@@ -570,17 +571,18 @@ class Pipeline:
                     # which values of the swapped feature the argument's own form can carry (ambiguous_subjects)
                     context_inflector=nominal_inflector(inflector, CONTEXT_UPOS, (self.target.swap_feat, None)))
                 try:
-                    diagnostic_dfs = create_pairs(dt_df, leaf_threshold=leaf_threshold, **pairs_kwargs)
+                    # the held-out rows in kept leaves become pairs too
+                    pairs_df = pairs_input(model, dt_df, full_df, self.predictor_var)
+                    diagnostic_dfs = create_pairs(pairs_df, leaf_threshold=leaf_threshold, **pairs_kwargs)
                     if self.second_chance is not None:
                         retry, lax, info = second_chance_decision(
                             dt_df, self.predictor_var, label_distribution,
-                            strict_threshold=leaf_threshold,
-                            min_samples_leaf=self.min_samples_leaf, cfg=self.second_chance)
+                            strict_threshold=leaf_threshold, cfg=self.second_chance)
                         print(f"{lang} {deprel}: second chance: {info['reason']}")
                         if retry:
                             # adopted even with zero correct_swaps: the lax pass's numbers are the ones to record
                             second_dfs = create_pairs(
-                                dt_df, leaf_threshold=lax,
+                                pairs_df, leaf_threshold=lax,
                                 extra_meta={"second_pass": True, "second_chance_info": info},
                                 second_chance_threshold=leaf_threshold,
                                 **pairs_kwargs)

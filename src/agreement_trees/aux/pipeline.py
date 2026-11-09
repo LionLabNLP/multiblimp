@@ -7,7 +7,8 @@ class AuxPipeline(Pipeline):
     """Subject/object/indirect-object-auxiliary agreement: Pipeline on a treebank whose argument tokens
     were re-pointed at their clause's auxiliary (redirect_to_aux). `aux_target` is the extraction target.
 
-    include_multi_aux: single-aux and stacked-aux (2+) clauses together (default) or single-aux only.
+    include_multi_aux: single-aux and stacked-aux (2+) clauses together (default) or single-aux only; clauses
+    whose AUX is the main predicate (count "0") are kept either way.
     Extraction always caches every stream; the choice only selects downstream, so a "_single" suffix in
     the target_id keeps the tree/pair caches apart.
     """
@@ -23,7 +24,7 @@ class AuxPipeline(Pipeline):
         aux_count_col = f"head_{AUX_COUNT_FEAT}"
         if aux_count_col not in df.columns:
             return df.iloc[0:0]
-        keep = ["1", "2+"] if self.include_multi_aux else ["1"]
+        keep = ["0", "1", "2+"] if self.include_multi_aux else ["0", "1"]
         return df[df[aux_count_col].isin(keep)]
 
     def _extraction_setup(self, treebank):

@@ -173,7 +173,7 @@ def _v2_pair_feat_list(row, prefix, decisive_feat, deprel=None):
     pat = re.compile(rf"^{re.escape(prefix)}_([A-Z][a-zA-Z]*(?:\[[^\]]+\])?)$")
     # for obj/iobj targets the plain head_{feat} is the subject's folded value (see extract_instances): suppress it
     # and show the resolved bracketed keys
-    resolve_bracket_feats = bool(deprel) and deprel != "nsubj" and prefix.lower() == "head"
+    resolve_bracket_feats = bool(deprel) and deprel != "nsubj" and prefix == "head"
     # the bracketed key the decisive feature resolves to (e.g. Number[abs]); only it is bolded, not a sibling
     # bracket such as the subject's Number[erg]
     decisive_layered_key = None
@@ -454,8 +454,8 @@ def _v2_build_pairs(correct_swaps_df, decisive_feat, max_per_bucket=10):
 
 
 def _v2_leaf_threshold_for(leaf_threshold, node_id):
-    """leaf_threshold is either one cutoff for every leaf, or (a
-    agreement_trees.pairs.second_chance depth-aware retry) a {leaf_id: cutoff} map --
+    """leaf_threshold is either one cutoff for every leaf, or (an older
+    cache) a {leaf_id: cutoff} map --
     either way, resolve to this specific node's own value."""
     if isinstance(leaf_threshold, dict):
         return leaf_threshold.get(int(node_id))
@@ -463,7 +463,7 @@ def _v2_leaf_threshold_for(leaf_threshold, node_id):
 
 
 def _v2_build_nodes(node_data, screen, leaf_threshold, strict_leaf_threshold=None,
-                     pair_counts=None, pair_role_counts=None):
+                     pair_counts=None, pair_role_counts=None, keep_all=False):
     nodes = {}
     for i, nd in node_data.items():
         x, y = screen[i]
@@ -489,11 +489,12 @@ def _v2_build_nodes(node_data, screen, leaf_threshold, strict_leaf_threshold=Non
             entry["predicted"] = " / ".join(quals)
             entry["majorityLabel"] = quals[0] if quals else None
             node_threshold = _v2_leaf_threshold_for(leaf_threshold, i)
-            entry["keep"] = bool(node_threshold is not None and nd["acc"] > node_threshold)
+            # keep_all: no tree to filter by, so create_pairs keeps every row (leaf_keep)
+            entry["keep"] = bool(keep_all or (node_threshold is not None and nd["acc"] > node_threshold))
             # This leaf's own cutoff, always -- whether kept or not, and
-            # whether leaf_threshold is one global cutoff or a per-leaf map
-            # (depth-aware second_chance gives leaves different values).
-            entry["keepThresholdAcc"] = node_threshold
+            # whether leaf_threshold is one global cutoff or a per-leaf map.
+            # keep_all: cutoff 0, every row passes (the page shows the kept badge and Pairs tab only with a cutoff)
+            entry["keepThresholdAcc"] = 0.0 if keep_all else node_threshold
             # Only reached via a second_chance retry: strict_leaf_threshold is
             # the pipeline's own (pre-retry) bar, always passed regardless of
             # whether a retry happened -- so this is False both when there was
@@ -548,7 +549,7 @@ def _v2_decisive_feat(predictor_display):
     return str(predictor_display).rsplit("_", 1)[-1]
 
 
-def _v2_build_meta(meta, leaf_threshold, strict_leaf_threshold=None):
+def _v2_build_meta(meta, leaf_threshold, strict_leaf_threshold=None, keep_all=False):
     m = {
         "language": " · ".join(filter(None, [
             meta.get("Language") or meta.get("language"), meta.get("Treebank"), meta.get("titleSuffix")])),
@@ -569,11 +570,14 @@ def _v2_build_meta(meta, leaf_threshold, strict_leaf_threshold=None):
         m["baseEntropy"] = meta.get("base entropy", "")
         m["reducedEntropy"] = meta.get("reduced entropy", "")
     if isinstance(leaf_threshold, dict):
-        # A depth-aware second_chance retry: no single number to show here --
+        # A per-leaf map from an older cache: no single number to show here --
         # each leaf's own 🔑/🔑2️⃣ tag already carries its own cutoff, so the
         # legend just shows the plain strict bar every leaf was first held to.
         m["keepThreshold"] = f"leaf accuracy > {strict_leaf_threshold:g}" if strict_leaf_threshold is not None else ""
         m["keepThresholdAcc"] = strict_leaf_threshold
+    elif keep_all:
+        m["keepThreshold"] = "every row (no tree to filter by)"
+        m["keepThresholdAcc"] = 0.0
     elif leaf_threshold is not None:
         m["keepThreshold"] = f"leaf accuracy > {leaf_threshold:g}"
         m["keepThresholdAcc"] = leaf_threshold
@@ -599,19 +603,19 @@ def _v2_build_classes(classes, hex_colors, root_dist_counts):
 
 def create_html_v2(meta, node_samples, node_data, hex_colors, classes, root_dist_counts,
                     leaf_threshold=None, strict_leaf_threshold=None, head_label="head",
-                    correct_swaps_df=None):
+                    correct_swaps_df=None, keep_all=False):
     screen, canvas_w, canvas_h = _v2_layout(node_data)
     decisive_feat = _v2_decisive_feat(meta.get("Predictor"))
     pairs, pair_counts, swapped_role, pair_role_counts = _v2_build_pairs(correct_swaps_df, decisive_feat)
     nodes = _v2_build_nodes(node_data, screen, leaf_threshold, strict_leaf_threshold=strict_leaf_threshold,
-                             pair_counts=pair_counts, pair_role_counts=pair_role_counts)
+                             pair_counts=pair_counts, pair_role_counts=pair_role_counts, keep_all=keep_all)
     edges = _v2_build_edges(node_data)
     paths = _v2_build_paths(node_data)
     role_a, role_b = _v2_detect_role_prefixes(node_samples, head_label)
     node_samples_v2 = {
         str(i): _v2_node_samples(i, node_samples, role_a, role_b) for i in node_data
     }
-    tree_meta = _v2_build_meta(meta, leaf_threshold, strict_leaf_threshold=strict_leaf_threshold)
+    tree_meta = _v2_build_meta(meta, leaf_threshold, strict_leaf_threshold=strict_leaf_threshold, keep_all=keep_all)
     # {"role": "a"|"b", "feat": ...} for each column kept out of the fit; the
     # head prefix is role b (verb/aux), anything else the dependent (role a).
     tree_meta["fitExcluded"] = [
@@ -654,11 +658,11 @@ def create_html_v2(meta, node_samples, node_data, hex_colors, classes, root_dist
 
 def write_html_v2(node_samples, node_data, out_file, classes, hex_colors, root_dist_counts,
                    meta, leaf_threshold=None, strict_leaf_threshold=None, head_label="head",
-                   correct_swaps_df=None):
+                   correct_swaps_df=None, keep_all=False):
     html = create_html_v2(
         meta, node_samples, node_data, hex_colors, classes, root_dist_counts,
         leaf_threshold=leaf_threshold, strict_leaf_threshold=strict_leaf_threshold,
-        head_label=head_label, correct_swaps_df=correct_swaps_df,
+        head_label=head_label, correct_swaps_df=correct_swaps_df, keep_all=keep_all,
     )
     os.makedirs(os.path.dirname(out_file), exist_ok=True)
     with open(out_file, "w", encoding="utf-8") as f:

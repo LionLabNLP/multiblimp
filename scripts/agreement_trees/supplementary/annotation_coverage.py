@@ -36,7 +36,8 @@ def coverage_for(lang: str) -> dict:
     with open(os.path.join(RESOURCE_DIR, "data_prep_config.json")) as f:
         cfg = json.load(f)["ud_tables"]
     collect_ud_rows(treebank, dup_form_threshold=cfg["dup_form_threshold"],
-                    dup_feat_threshold=cfg["dup_feat_threshold"], coverage=stats)
+                    dup_feat_threshold=cfg["dup_feat_threshold"], coverage=stats,
+                    subset_merge_ratio=cfg["subset_merge_ratio"])
     del treebank
     langcode = lang2langcode(lang2unimorph_lang.get(lang, lang))
     return {

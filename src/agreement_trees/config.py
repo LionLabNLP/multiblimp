@@ -96,6 +96,8 @@ def load_scan_results(mode: str) -> dict:
       "scanned"     cache unit -> modification time of the cache file scanned
                     (vp: "family/lang", np: "lang")
       "targets"     target -> {lang: counts} for the languages that qualify
+      "failed"      target -> {lang: yes, no, total, reason} for languages with some jointly
+                    tagged rows that do not (absent in scans written before it existed)
     A cache unit that is scanned but absent from a target's languages was
     found lacking."""
     try:

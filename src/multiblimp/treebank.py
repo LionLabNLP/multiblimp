@@ -422,7 +422,7 @@ class Treebank:
 
 
 # ---- line numbers in the UD .conllu files, for locating an extracted instance in its source file ----
-@functools.lru_cache(maxsize=2)
+@functools.lru_cache(maxsize=64)
 def _index(rel_path: str) -> dict:
     """{sent_id: (first line of the sentence block, first token line, raw token ids or None)}.
     Raw ids are kept only for sentences whose token lines are not plainly 1..n (multiword

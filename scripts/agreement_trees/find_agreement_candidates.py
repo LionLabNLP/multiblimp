@@ -11,13 +11,14 @@ and the modes to scan are in the "scan" block and top-level "modes" of
 resources/agreement_config.json.
 
 Writes resources/agreement_langs_{vp,np}.json: the thresholds used, each scanned cache
-file with its modification time, and target -> language -> counts for the
-languages that qualify. A cache that is listed as scanned but absent under a
+file with its modification time, target -> language -> counts for the
+languages that qualify, and under "failed" the counts and first failed condition
+of languages with some jointly tagged rows that do not. A cache that is listed as scanned but absent under a
 target was found lacking, so fit_candidate.py can skip a target without
 rescanning, and rescans only languages whose cache is newer than the scan (or
 all of them if the thresholds changed). A partial scan (--langs, or fewer vp
 families) replaces only what it scanned. Also writes
-output/agreement_candidates/{vp,np}_summary.csv and {vp,np}_by_lang.csv (tables for
+output/agreement_candidates/{vp,np}_summary.csv, {vp,np}_by_lang.csv and {vp,np}_failed_by_lang.csv (tables for
 picking candidates; nothing reads them) and the report to
 output/logs/find_agreement_candidates.log. --vp / --np scan one mode only; the two
 never depend on each other.
@@ -40,7 +41,7 @@ from agreement_trees.config import (
 from multiblimp.config import OUTPUT_AGREEMENT_CANDIDATES_DIR
 from multiblimp.script_log import script_logger
 from agreement_trees.fit.scan import (
-    build_lang_config, build_lang_csv, build_summary, report_lines, save_results, scan_np, scan_thresholds, scan_vp,
+    build_failed_config, build_failed_csv, build_lang_config, build_lang_csv, build_summary, cache_lang, report_lines, save_results, scan_np, scan_thresholds, scan_vp,
 )
 
 
@@ -55,7 +56,7 @@ def main():
     log = script_logger("find_agreement_candidates")
     config = apply_mode_flags(load_agreement_config(args.config), args.vp, args.np)
     scan_cfg = config["scan"]
-    langs = (args.langs if args.langs is not None else config["langs"]) or None
+    langs = [cache_lang(lang) for lang in (args.langs if args.langs is not None else config["langs"])] or None
     os.makedirs(OUTPUT_AGREEMENT_CANDIDATES_DIR, exist_ok=True)
     thresholds = scan_thresholds(scan_cfg)
     log.info(f"Scan settings: {json.dumps(thresholds)}")
@@ -77,10 +78,14 @@ def main():
 
         summary = build_summary(stats, mode)
         results = build_lang_config(stats, scan_cfg)
+        failed = build_failed_config(stats, scan_cfg)
         summary.to_csv(os.path.join(OUTPUT_AGREEMENT_CANDIDATES_DIR, f"{mode}_summary.csv"), index=False)
         build_lang_csv(results, stats).to_csv(
             os.path.join(OUTPUT_AGREEMENT_CANDIDATES_DIR, f"{mode}_by_lang.csv"), index=False)
-        save_results(mode, results, units, thresholds, set(langs or ()), set(config["vp"]["families"]), log)
+        build_failed_csv(failed).to_csv(
+            os.path.join(OUTPUT_AGREEMENT_CANDIDATES_DIR, f"{mode}_failed_by_lang.csv"), index=False)
+        save_results(mode, results, units, thresholds, set(langs or ()), set(config["vp"]["families"]), log,
+                     failed=failed)
         log.info(f"{mode}: {len(results)} targets with at least one usable language -> {LANGS_PATH[mode]}")
         for line in report_lines(summary, scan_cfg["min_langs"]):
             log.info(line)

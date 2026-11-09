@@ -32,8 +32,6 @@
     "report": false
   },
   "scan": {
-    "wilson_floor": 0.01,
-    "min_both": 10,
     "min_yes": 10,
     "yes_rate_floor": 0.15,
     "min_langs": 1,
@@ -86,9 +84,7 @@
     },
     "second_chance": {
       "enabled": true,
-      "lax_threshold": 0.9,
-      "min_keep_frac": 0.5,
-      "max_unk_frac": 0.5
+      "lax_threshold": 0.9
     }
   }
 }
