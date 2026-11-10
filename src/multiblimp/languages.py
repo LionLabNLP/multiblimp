@@ -1,4 +1,5 @@
 import os
+import re
 import unicodedata
 
 from glob import glob
@@ -97,7 +98,9 @@ gblang2udlang = {
     "Modern Hebrew": "Hebrew",
 }
 
-add_langs = {"Aromanian": "UD_Romanian-ArT"}
+add_langs = {"Aromanian": "UD_Romanian-ArT", "Egyptian_Hieroglyphs": "UD_Egyptian-PC"}
+
+HIERO_SIGN = re.compile(r"[\U00013000-\U000143FF]")
 
 # Some UD treebanks merge several originally-distinct sub-corpora into one
 # release, where we only want a subset -- unlike excluded_treebanks, which
@@ -323,6 +326,12 @@ def latin_to_cyrillic(text):
     return new_text
 
 
+def _available_add_langs(resource_dir, ud_dir):
+    """The add_langs entries whose UD folder is present."""
+    return {lang: folder for lang, folder in add_langs.items()
+            if os.path.isdir(os.path.join(resource_dir, ud_dir, folder))}
+
+
 def get_ud_langs(resource_dir, ud_dir=None, do_skip_langs=True):
     if ud_dir is None:
         ud_dir = UD_PATH
@@ -337,7 +346,7 @@ def get_ud_langs(resource_dir, ud_dir=None, do_skip_langs=True):
         if not is_treebank_excluded(ud_dir2lang(d), os.path.basename(d).rsplit("-", 1)[-1])
     ]
     treebank_langs = map(ud_dir2lang, treebank_dirs)
-    treebank_langs = sorted(set(treebank_langs).union(set(add_langs.keys())))
+    treebank_langs = sorted(set(treebank_langs).union(_available_add_langs(resource_dir, ud_dir)))
 
     if do_skip_langs:
         treebank_langs = [lang for lang in treebank_langs if lang not in skip_langs]
@@ -368,7 +377,7 @@ def get_lang_treebanks(resource_dir, ud_dir=None):
         if not is_treebank_excluded(lang, folder.rsplit("-", 1)[-1]):
             by_lang.setdefault(lang, []).append(folder)
 
-    for lang, treebank_id in add_langs.items():
+    for lang, treebank_id in _available_add_langs(resource_dir, ud_dir).items():
         by_lang.setdefault(lang, []).append(treebank_id)
 
     return by_lang

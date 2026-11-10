@@ -192,7 +192,7 @@ TEMPLATE = r"""<!DOCTYPE html>
 </script>
 <title>MultiBLiMP – Agreement</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=Noto+Sans+Egyptian+Hieroglyphs&display=swap" rel="stylesheet">
 <style>
 :root { color-scheme: light; --bg:#f5f5f4; --card:#fff; --panel-bg:#fafaf9; --text:#1c1917; --text-muted:#78716c; --accent:#2563eb;
   --accent-soft:#eff6ff; --border:#e7e5e4; --hover:#f5f5f5; --bar-sel:#2563eb; --bar-avail:#cbd5e1; }
@@ -201,7 +201,7 @@ TEMPLATE = r"""<!DOCTYPE html>
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { color-scheme: dark; --bg:#16140f; --card:#221f19; --panel-bg:#1c1a15;
   --text:#f0ede6; --text-muted:#a39a8a; --accent:#6ea8ff; --accent-soft:#1e2b40; --border:#38332a; --hover:#2a261e; --bar-sel:#6ea8ff; --bar-avail:#4d4636; } }
 * { box-sizing: border-box; }
-body { margin:0; font-family:'DM Sans',system-ui,sans-serif; background:var(--bg); color:var(--text); padding:2rem; }
+body { margin:0; font-family:'DM Sans','Noto Sans Egyptian Hieroglyphs',system-ui,sans-serif; background:var(--bg); color:var(--text); padding:2rem; }
 .container { max-width:1400px; margin:0 auto; }
 .card { background:var(--card); padding:1.75rem 2.25rem; border-radius:12px; border:1px solid var(--border); box-shadow:0 4px 24px rgba(0,0,0,.08); margin-bottom:1.5rem; }
 header.card { position:relative; }

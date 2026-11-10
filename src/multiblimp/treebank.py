@@ -15,7 +15,7 @@ from .config import RESOURCE_DIR, UD_PATH
 from .excluded_treebanks import is_treebank_excluded, is_treebank_row_excluded, split_treebank_folder
 from .script_log import append_log
 from .validation import dropped_sentence_lines, sentence_start_lines
-from .languages import add_langs, sent_id_prefix_keep
+from .languages import HIERO_SIGN, add_langs, sent_id_prefix_keep
 
 _SENT_ID_PREFIX_RE = re.compile(r"^[a-z]+")
 
@@ -41,6 +41,28 @@ def has_typo(item):
         return True
 
     return False
+
+
+def to_hieroglyphs(treebank):
+    """Forms replaced by the signs in MISC Hiero (layout and editorial marks dropped). Sentences with a word
+    whose signs are lost, unencoded (UC_No) or not written are left out; punctuation keeps its form."""
+    kept = []
+    for tree in treebank:
+        forms = []
+        for tok in tree:
+            if tok["upos"] == "PUNCT":
+                forms.append(tok["form"])
+                continue
+            hiero = (tok["misc"] or {}).get("Hiero") or ""
+            signs = "".join(HIERO_SIGN.findall(hiero))
+            if not signs or "UC_No" in hiero:
+                break
+            forms.append(signs)
+        else:
+            for tok, form in zip(tree, forms):
+                tok["form"] = form
+            kept.append(tree)
+    return kept
 
 
 def tree_is_malformed(tree):
@@ -405,6 +427,9 @@ class Treebank:
                 for item in tree:
                     item["form"] = transliterate(item["form"], IAST, DEVANAGARI)
                     item["lemma"] = transliterate(item["lemma"], IAST, DEVANAGARI)
+
+        if lang == "Egyptian_Hieroglyphs":
+            treebank = to_hieroglyphs(treebank)
 
         if lang == "Ancient_Hebrew":
 

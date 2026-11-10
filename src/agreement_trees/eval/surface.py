@@ -26,6 +26,7 @@ from agreement_trees.eval.benchmark import SURFACE_COLUMNS, SURFACE_FILE, pair_f
 from agreement_trees.eval.conllu_spans import Unit, language_of, norm, recase, render
 from agreement_trees.eval.mwt_cache import load_stats
 from agreement_trees.pairs.sentence_text import add_sentence_strings
+from multiblimp.languages import HIERO_SIGN
 
 # a plain word that now fuses with its neighbour (a') is merged only where the contraction is the norm: seen at least
 # MERGE_MIN_CONTRACTED times, with the plain sequence at most MERGE_MAX_PLAIN_SHARE of that (de le -> du, but not the
@@ -171,7 +172,7 @@ def validate_frame(frame: pd.DataFrame, pos_guard: bool = True, stats_for=load_s
     lines = frame["conllu_sent_line"].tolist()
     by_lang = collections.defaultdict(list)
     for i, (idx, form, swap_idx) in enumerate(zip(frame.index, forms.tolist(), frame["swap_idx"].tolist())):
-        if not isinstance(form, str) or pd.isna(swap_idx) or pd.isna(lines[i]):
+        if not isinstance(form, str) or pd.isna(swap_idx) or pd.isna(lines[i]) or HIERO_SIGN.search(form):
             continue
         by_lang[language_of(files[i])].append({
             "i": i, "key": (files[i], int(lines[i])),
