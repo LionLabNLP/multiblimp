@@ -1,5 +1,3 @@
-UD_PATH = "ud/ud-treebanks-v2.18/"
-
 import os
 
 # Seed for the decision-tree fit and the leaf sampling.
@@ -9,6 +7,11 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__fi
 
 # Input data (UD/UniMorph checkouts and pickles, scan configs); never redirected by MULTIBLIMP_RUN_DIR.
 RESOURCE_DIR = os.path.join(REPO_ROOT, "resources")
+
+# UD release in use; resources/ud/UD_VERSION is the single source (also read by the download/changelog scripts).
+with open(os.path.join(RESOURCE_DIR, "ud", "UD_VERSION")) as _f:
+    UD_VERSION = _f.read().strip()
+UD_PATH = f"ud/ud-treebanks-v{UD_VERSION}/"
 
 # Checkout of UniversalDependencies/tools (validate.py + udtools); override with UD_TOOLS_DIR.
 UD_TOOLS_DIR = os.environ.get("UD_TOOLS_DIR") or os.path.join(RESOURCE_DIR, "ud_validator")
@@ -27,6 +30,7 @@ OUTPUT_DIAGNOSTICS_DIR = os.path.join(OUTPUT_DIR, "diagnostics")
 OUTPUT_OVERVIEW_DIR = os.path.join(OUTPUT_DIR, "overview")
 OUTPUT_BENCHMARK_DIR = os.path.join(OUTPUT_DIR, "benchmark")
 OUTPUT_MODEL_RESULTS_DIR = os.path.join(OUTPUT_DIR, "model_results")
+OUTPUT_MODEL_SCORES_DIR = os.path.join(OUTPUT_MODEL_RESULTS_DIR, "scores")
 
 TREEBANK_FEATURES_DIR = os.path.join(RUN_DIR, "treebank_features")
 NP_INSTANCES_DIR = os.path.join(TREEBANK_FEATURES_DIR, "npa", "np_instances")

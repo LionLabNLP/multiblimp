@@ -2,7 +2,6 @@
 import hashlib
 import json
 import os
-import shutil
 from collections import Counter, defaultdict
 from datetime import date
 from pathlib import Path
@@ -14,11 +13,10 @@ import pyarrow.parquet as pq
 
 from multiblimp.benchmark_exclusions import benchmark_exclusions
 from multiblimp.downsample import (
-    CATEGORICAL, LEMMA_CAP, MIN_PAIRS, N_ITEMS, Condition, balance_columns, balance_features, condition_roles, language_seed,
-    select_pairs,
+    ATTRACTOR_CLASSES, CATEGORICAL, LEMMA_CAP, MIN_PAIRS, N_ITEMS, Condition, balance_columns, balance_features,
+    condition_roles, language_seed, select_pairs, wordform_unattested,
 )
 
-PAIR_COLUMNS = ["treebank", "sent_id", "sen_str", "wrong_sen_str", "swap_kind", "swap_idx", "swap_ufeat", "pair_key"]
 ATTRACTOR_COLUMNS = ["attractors_congruent", "attractors_weakly_congruent", "attractors_incongruent", "attractors_span_len",
                      "has_attractors", "only_has_fully_congruent", "only_has_congruent", "only_has_weakly_congruent",
                      "only_has_incongruent"]
@@ -58,35 +56,11 @@ def apply_surface(df: pd.DataFrame, surface_path) -> pd.DataFrame:
     return df
 
 
-def load_pairs(pairs_dir, langs=None, conds=None) -> pd.DataFrame:
-    """The correct_swaps of every <cond>/<cond>_<deprel>/<lang>/ under pairs_dir, reduced to the scoring
-    columns plus pair_id, lang, cond, deprel and sen_hash (the original sentence's, to spot UD edits)."""
-    frames = []
-    for path, lang, cond, deprel in pair_files(pairs_dir, langs, conds):
-        if pq.ParquetFile(path).metadata.num_rows == 0:  # empty buckets are written without columns
-            continue
-        df = pd.read_parquet(path, columns=PAIR_COLUMNS)
-        if (path.parent / SURFACE_FILE).exists():
-            df = apply_surface(df, path.parent / SURFACE_FILE)
-        for col in ("treebank", "sent_id"):
-            df[col] = df[col].astype(str)
-        df.insert(0, "lang", lang)
-        df.insert(1, "cond", cond)
-        df.insert(2, "deprel", deprel)
-        df.insert(0, "pair_id", [pair_id(lang, cond, deprel, key) for key in df["pair_key"]])
-        df["sen_hash"] = [_hash(sen, 12) for sen in df["sen_str"]]
-        frames.append(df.drop(columns=["pair_key"]))
-    if not frames:
-        raise FileNotFoundError(f"no correct_swaps.parquet with sentence strings under {pairs_dir}")
-    pairs = pd.concat(frames, ignore_index=True)
-    return pairs.drop_duplicates("pair_id").reset_index(drop=True)
-
-
 SLIM_IDENTITY = ["pair_id", "lang", "phenomenon", "deprel", "treebank", "sent_id", "sen_str", "wrong_sen_str", "sen",
                  "pair_key", "sen_hash", "swap_kind", "swap_idx", "swap_ufeat", "feature_vals", "leaf_id", "leaf_top1_acc",
                  "surface_status", "alt_phenomena", *ATTRACTOR_COLUMNS]
-SLIM_DERIVED = ["idx_a", "idx_b", "word_order", "distance", "length", "pos_a", "pos_b", "attractors", "lemma_a", "lemma_b",
-                "second_chance"]
+SLIM_DERIVED = ["idx_a", "idx_b", "word_order", "distance", "length", "pos_a", "pos_b",
+                *[f"attractor_{name}" for name in ATTRACTOR_CLASSES], "lemma_a", "lemma_b", "second_chance", "wordform_unattested", "spacing_artifact"]
 SCORE_COLUMNS = ["pair_id", "lang", "phenomenon", "deprel", "treebank", "sen", "wrong_sen"]
 # the pipeline calls the token list sen and the written sentences sen_str/wrong_sen_str; the benchmark calls the sentences sen/wrong_sen
 BENCHMARK_NAMES = {"sen": "sen_tokens", "sen_str": "sen", "wrong_sen_str": "wrong_sen"}
@@ -132,6 +106,9 @@ def write_language(out_dir, lang: str, parts: list) -> None:
     if not slim["pair_id"].is_unique:
         raise ValueError(f"{lang}: pair_id is not unique across the conditions")
     wide = pd.concat([df.assign(lang=lang, phenomenon=cond, deprel=deprel) for df, cond, deprel, _ in parts], ignore_index=True)
+    wide = wide.copy()   # consolidate the ~1,400 columns before adding two more
+    wide["wordform_unattested"] = wordform_unattested(wide)
+    wide["spacing_artifact"] = wide["spacing_artifact"].fillna(False).astype(bool) if "spacing_artifact" in wide else False
     first = ["pair_id", "lang", "phenomenon", "deprel"]
     wide = wide[first + [c for c in wide.columns if c not in first]]
     slim, wide = slim.rename(columns=BENCHMARK_NAMES), wide.rename(columns=BENCHMARK_NAMES)
@@ -175,7 +152,7 @@ def cap_per_cond(pairs: pd.DataFrame, max_per_cond: int, seed: int = 0) -> pd.Da
     return kept.drop(columns="_order").sort_values("pair_id").reset_index(drop=True)
 
 
-MARKERS = (*CATEGORICAL, "second_chance", "surface_status")
+MARKERS = (*CATEGORICAL, "second_chance", "surface_status", "wordform_unattested", "spacing_artifact")
 DISTANCE_LABELS = ("1", "2", "3-4", "5-8", "9+")
 LENGTH_LABELS = ("up to 40", "41-80", "81-140", "141-240", "241+")
 
@@ -227,7 +204,11 @@ def _ambiguous(features: pd.DataFrame) -> int:
 
 
 def _distribution(features: pd.DataFrame) -> dict:
+    """{marker: {value: pairs}}; "attractors" is multi-label (pairs per class, which can sum to more than the pairs)."""
     out = {}
+    classes = {name: int(features[f"attractor_{name}"].sum()) for name in ATTRACTOR_CLASSES if f"attractor_{name}" in features}
+    if classes:
+        out["attractors"] = classes
     for marker in MARKERS:
         if marker not in features:
             continue
@@ -238,33 +219,6 @@ def _distribution(features: pd.DataFrame) -> dict:
             values = values.map(lambda v: LENGTH_LABELS[int(v)])
         out[marker] = {k: int(v) for k, v in values.value_counts().items()}
     return out
-
-
-def convert_benchmark(old_dir, out_dir, langs=None) -> dict:
-    """Rewrite a benchmark in the old <cond>/<cond>_<deprel>/<Language>/ layout as the per-language files of
-    build_benchmark; manifest.json and stats.json are copied. Returns {language: number of pairs}."""
-    by_lang = defaultdict(list)
-    for path, lang, cond, deprel in pair_files(old_dir, langs):
-        by_lang[lang].append((path, cond, deprel))
-    counts = {}
-    for lang, files in sorted(by_lang.items()):
-        parts = []
-        for path, cond, deprel in files:
-            df = pd.read_parquet(path)
-            same = df["sen_str"] == df["wrong_sen_str"]
-            if same.any():
-                print(f"{lang} {cond}: dropped {int(same.sum())} pair(s) whose two sentences are identical", flush=True)
-                df = df[~same]
-            meta_path = path.parent / "meta.json"
-            meta = json.loads(meta_path.read_text()) if meta_path.exists() else {}
-            parts.append((df, cond, deprel, meta))
-        write_language(out_dir, lang, parts)
-        counts[lang] = sum(len(df) for df, *_ in parts)
-        print(f"{lang}: {counts[lang]} pairs", flush=True)
-    for name in ("manifest.json", "stats.json"):
-        if os.path.exists(os.path.join(old_dir, name)) and str(old_dir) != str(out_dir):
-            shutil.copy(os.path.join(old_dir, name), os.path.join(out_dir, name))
-    return counts
 
 
 def build_benchmark(pairs_dir, out_dir, langs=None, conds=None, n_items=N_ITEMS, lemma_cap=LEMMA_CAP, seed=0,
@@ -284,13 +238,14 @@ def build_benchmark(pairs_dir, out_dir, langs=None, conds=None, n_items=N_ITEMS,
     cells, languages, before, after, n_pairs = [], {}, {}, {}, 0
     too_small, n_repeats, cleaning = {}, 0, Counter()
     for lang, files in sorted(by_lang.items()):
-        conditions, kept_files, cleaned, phenomena = [], [], {}, {}
+        conditions, kept_files, cleaned, phenomena, no_flag = [], [], {}, {}, 0
         for path, cond, deprel in files:
             name = f"{cond}/{deprel}" if deprel else cond
             if cond in benchmark_exclusions.get(lang, ()):
                 cleaning["config_excluded"] += pq.ParquetFile(path).metadata.num_rows
                 continue
             names = set(pq.ParquetFile(path).schema_arrow.names)
+            no_flag += "spacing_artifact" not in names
             df = _clean(path, [c for c in balance_columns(condition_roles(cond, deprel)) + ["wrong_sen_str"] if c in names], cleaning)
             if len(df):
                 cleaned[name], phenomena[name] = df, cond
@@ -304,6 +259,14 @@ def build_benchmark(pairs_dir, out_dir, langs=None, conds=None, n_items=N_ITEMS,
         if not conditions:
             continue
         available = sum(len(c) for c in conditions)
+        if no_flag:
+            print(f"WARNING {lang}: {no_flag} of {len(files)} condition files have no spacing_artifact column "
+                  f"(pairs built before it existed): treated as False", flush=True)
+        attractor_cols = [f"attractor_{name}" for name in ATTRACTOR_CLASSES]
+        unclassed = sum(int((~c.features[attractor_cols].any(axis=1)).sum()) for c in conditions)
+        if unclassed:
+            print(f"WARNING {lang}: {unclassed} of {available} pairs have no attractor counts "
+                  f"(an extraction cache from before the attractor slots: re-extract it)", flush=True)
         if available <= n_items:
             chosen = {c.name: np.arange(len(c)) for c in conditions}
             limits = {"lemma_cap_count": None, "sentence_limit": None}
@@ -313,7 +276,6 @@ def build_benchmark(pairs_dir, out_dir, langs=None, conds=None, n_items=N_ITEMS,
         if total < min_pairs:
             too_small[lang] = total
             cleaning["left_out_languages"] += available
-            cells = [c for c in cells if c["lang"] != lang]
             print(f"{lang}: {total} pairs, left out", flush=True)
             continue
         n_pairs += total
@@ -353,8 +315,18 @@ def build_benchmark(pairs_dir, out_dir, langs=None, conds=None, n_items=N_ITEMS,
             "repeats_removed": removed,
             "treebanks": int(chosen_all["treebank"].nunique()),
             "head_lemmas": int(chosen_all["lemma_a"].nunique()), "child_lemmas": int(chosen_all["lemma_b"].nunique()),
+            "wordform_unattested": int(chosen_all["wordform_unattested"].sum()),
+            "wordform_unattested_available": sum(int(c.features["wordform_unattested"].sum()) for c in conditions),
+            "spacing_artifact": int(chosen_all["spacing_artifact"].sum()),
+            "spacing_artifact_available": sum(int(c.features["spacing_artifact"].sum()) for c in conditions),
         }
-        print(f"{lang}: {len(chosen_all)} of {available} pairs", flush=True)
+        unattested, unattested_available = languages[lang]["wordform_unattested"], languages[lang]["wordform_unattested_available"]
+        artifacts, artifacts_available = languages[lang]["spacing_artifact"], languages[lang]["spacing_artifact_available"]
+        print(f"{lang}: {len(chosen_all)} of {available} pairs; unattested word forms {unattested} of {len(chosen_all)} "
+              f"({100 * unattested / max(len(chosen_all), 1):.1f}%), {unattested_available} of {available} "
+              f"({100 * unattested_available / max(available, 1):.1f}%) before downsampling; spacing artifacts {artifacts} "
+              f"({100 * artifacts / max(len(chosen_all), 1):.1f}%), {artifacts_available} "
+              f"({100 * artifacts_available / max(available, 1):.1f}%) before", flush=True)
 
     os.makedirs(out_dir, exist_ok=True)
     manifest = {
@@ -364,7 +336,7 @@ def build_benchmark(pairs_dir, out_dir, langs=None, conds=None, n_items=N_ITEMS,
         "lemma_cap": lemma_cap,
         "seed": seed,
         "method": "per language: conditions served round-robin; within a condition a greedy draw with weight "
-                  "prod(1 / (1 + times the value is already sampled)) over " + ", ".join((*CATEGORICAL, "lemmas")) +
+                  "prod(1 / (1 + times the value is already sampled)) over " + ", ".join((*CATEGORICAL, "attractor classes", "lemmas")) +
                   "; a sentence pair found in several conditions stays in the rarest one (alt_phenomena lists the others); a lemma takes at most lemma_cap of the sample, a sentence one pair (both relaxed if the quota is not met); pairs with an ambiguous swap value (feature_vals with '|') are drawn only once a condition has no other pair left and count fractionally for each of their values",
         "n_pairs": n_pairs,
         "ambiguous_available": sum(c["ambiguous"] for c in cells),

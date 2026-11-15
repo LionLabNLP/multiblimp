@@ -28,7 +28,6 @@ from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from datetime import datetime, timezone
 
-import pandas as pd
 import pyarrow.parquet as pq
 
 from agreement_trees.config import LANGS_PATH
@@ -157,6 +156,9 @@ def _record(entry: dict, cond: str, subgroup: str, dir_rel: str) -> dict:
         # earlier population than the outcome buckets, which only cover attempted swaps)
         head_unk=diag.get("headUnk") or 0, nsubj_unk=diag.get("nsubjUnk") or 0,
         both_unk=diag.get("bothUnk") or 0,
+        # pairs whose written form is a guess never seen in the treebanks (surface_status uncontracted_unattested)
+        unattested=diag.get("nUnattested") or 0,
+        spacing_artifact=diag.get("nSpacingArtifact") or 0,
         buckets=buckets,
     )
 
@@ -380,7 +382,7 @@ def build_stats(out_path: str = STATS_PATH) -> dict:
     # per language (summed across every condition/subgroup)
     lang_agg = defaultdict(lambda: {
         "samples": 0, "pairs": 0, "conds": set(), "acc_num": 0.0, "acc_den": 0,
-        "instances": 0, "annotated": 0,
+        "instances": 0, "annotated": 0, "unattested": 0, "spacing_artifact": 0,
         "n_lemma": 0, "n_form": 0, "top_pairs": -1, "url": None,
     })
     # language x condition matrix -- pairs/samples/lexical-diversity sum
@@ -436,7 +438,8 @@ def build_stats(out_path: str = STATS_PATH) -> dict:
         l = lang_agg[lang]
         l["instances"] += r["instances"]; l["annotated"] += r["annotated"]
         l["samples"] += r["samples"]; l["pairs"] += r["pairs"]; l["conds"].add((cond, r["subgroup"]))   # each NP role pair x feature counts
-        l["n_lemma"] += r["n_lemma"]; l["n_form"] += r["n_form"]
+        l["n_lemma"] += r["n_lemma"]; l["n_form"] += r["n_form"]; l["unattested"] += r["unattested"]
+        l["spacing_artifact"] += r["spacing_artifact"]
 
         matrix_pairs[(lang, cond)] += r["pairs"]
         matrix_samples[(lang, cond)] += r["samples"]
@@ -636,6 +639,13 @@ def build_stats(out_path: str = STATS_PATH) -> dict:
                 "acc": weighted_avg(lang_agg[lang]["acc_num"], lang_agg[lang]["acc_den"]),
                 "n_lemma": lang_agg[lang]["n_lemma"],
                 "n_form": lang_agg[lang]["n_form"],
+                # share of the language's pairs (before downsampling) whose written form is a guess
+                "spacing_artifact": lang_agg[lang]["spacing_artifact"],
+                "spacing_artifact_share": (round(100 * lang_agg[lang]["spacing_artifact"] / lang_agg[lang]["pairs"], 1)
+                                           if lang_agg[lang]["pairs"] else None),
+                "unattested": lang_agg[lang]["unattested"],
+                "unattested_share": (round(100 * lang_agg[lang]["unattested"] / lang_agg[lang]["pairs"], 1)
+                                     if lang_agg[lang]["pairs"] else None),
                 # Deep link into the single highest-pairs condition/subgroup
                 # this language appears in -- see the matrix_url comment
                 # above for why "top contributing record" is the closest

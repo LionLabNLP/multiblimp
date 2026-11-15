@@ -48,18 +48,22 @@ udlang2iso639 = {
     "Buryat": "Buriat",
     "Cantonese": "Yue Chinese",
     "Chukchi": "Chukot",
+    "Cuicatec": "Tepeuxila Cuicatec",  # cux
     "Classical Chinese": "Literary Chinese",
     "Egyptian": "Egyptian (Ancient)",
     "Gheg": "Gheg Albanian",
+    "Gorani": "Gurani",  # hac
     "Greek": "Modern Greek (1453-)",
     "Guajajara": "Guajajára",
     "Gwichin": "Gwich'in",
     "Karo": "Karo (Ethiopia)",
     "Kiche": "K'iche'",
+    "Kullvi": "Kullu Pahari",  # kfx
     "Komi Permyak": "Komi-Permyak",
     "Komi Zyrian": "Komi-Zyrian",
     "Kurmanji": "Northern Kurdish",
     "Makurap": "Makuráp",
+    "Mandyali": "Mandeali",  # mjl
     "Mbya Guarani": "Mbyá Guaraní",
     "Middle French": "Middle French (ca. 1400-1600)",
     "Munduruku": "Mundurukú",
@@ -76,6 +80,7 @@ udlang2iso639 = {
     "South Levantine Arabic": "Levantine Arabic",
     "Teko": "Tektiteko",
     "Tupinamba": "Tupinambá",
+    "Uspanteko": "Uspanteco",
     "Western Sierra Puebla Nahuatl": "Zacatlán-Ahuacatlán-Tepetzintla Nahuatl",  # zaca1241, nhi
     "Xavante": "Xavánte",
     "Yupik": "Central Siberian Yupik",
@@ -98,9 +103,20 @@ gblang2udlang = {
     "Modern Hebrew": "Hebrew",
 }
 
-add_langs = {"Aromanian": "UD_Romanian-ArT", "Egyptian_Hieroglyphs": "UD_Egyptian-PC"}
-
 HIERO_SIGN = re.compile(r"[\U00013000-\U000143FF]")
+
+# Languages whose forms are the signs in the treebank's MISC Hiero (Treebank.to_hieroglyphs, and the same
+# reading of the raw files in conllu_spans.iter_sentences) instead of the transliteration.
+HIEROGLYPH_LANGS = {"Egyptian"}
+
+# languages whose multiword tokens are loaded as one token per written word (multiblimp.span_flatten): the treebank
+# segments words into morphemes that no lexicon lists and that cannot be written apart (UD_Amharic-ATT)
+FLATTEN_SPAN_LANGS = {"Amharic"}
+
+
+def hiero_signs(hiero: str) -> str:
+    """The signs of a MISC Hiero value, without its layout and editorial marks."""
+    return "".join(HIERO_SIGN.findall(hiero))
 
 # Some UD treebanks merge several originally-distinct sub-corpora into one
 # release, where we only want a subset -- unlike excluded_treebanks, which
@@ -326,12 +342,6 @@ def latin_to_cyrillic(text):
     return new_text
 
 
-def _available_add_langs(resource_dir, ud_dir):
-    """The add_langs entries whose UD folder is present."""
-    return {lang: folder for lang, folder in add_langs.items()
-            if os.path.isdir(os.path.join(resource_dir, ud_dir, folder))}
-
-
 def get_ud_langs(resource_dir, ud_dir=None, do_skip_langs=True):
     if ud_dir is None:
         ud_dir = UD_PATH
@@ -346,7 +356,7 @@ def get_ud_langs(resource_dir, ud_dir=None, do_skip_langs=True):
         if not is_treebank_excluded(ud_dir2lang(d), os.path.basename(d).rsplit("-", 1)[-1])
     ]
     treebank_langs = map(ud_dir2lang, treebank_dirs)
-    treebank_langs = sorted(set(treebank_langs).union(_available_add_langs(resource_dir, ud_dir)))
+    treebank_langs = sorted(set(treebank_langs))
 
     if do_skip_langs:
         treebank_langs = [lang for lang in treebank_langs if lang not in skip_langs]
@@ -359,8 +369,8 @@ def get_lang_treebanks(resource_dir, ud_dir=None):
     samples from for each language, keyed by the same underscore-joined
     language name get_ud_langs uses (e.g. "Norwegian_Bokmål",
     "Ancient_Greek"). Treebanks in excluded_treebanks are dropped (a
-    language left with none is dropped entirely) and add_langs entries are
-    appended, the same two adjustments get_ud_langs and Treebank() apply.
+    language left with none is dropped entirely), the same adjustment
+    get_ud_langs and Treebank() apply.
     """
     if ud_dir is None:
         ud_dir = UD_PATH
@@ -376,9 +386,6 @@ def get_lang_treebanks(resource_dir, ud_dir=None):
         lang = ud_dir2lang(path)
         if not is_treebank_excluded(lang, folder.rsplit("-", 1)[-1]):
             by_lang.setdefault(lang, []).append(folder)
-
-    for lang, treebank_id in _available_add_langs(resource_dir, ud_dir).items():
-        by_lang.setdefault(lang, []).append(treebank_id)
 
     return by_lang
 

@@ -3,7 +3,7 @@ import json
 import os
 import re
 import sys
-from collections import Counter, defaultdict
+from collections import defaultdict
 
 import joblib
 import pandas as pd
@@ -36,9 +36,10 @@ from agreement_trees.npa.np_cache import cache_np_language, np_cache_status
 from agreement_trees.vp.pipeline import get_impurity
 from agreement_trees.pairs.create_pairs import (
     PAIRS_VERSION, ambiguous_readings, bucket_examples_html, bucket_frame, coverage_stats, leaf_keep, pairs_current,
-    process_item, read_cached_pairs,
+    process_item, read_cached_pairs, tag_second_chance,
 )
-from agreement_trees.pairs.second_chance import second_chance_decision
+from agreement_trees.fit.entropy import DEFAULT_LEAF_MIN_ACCURACY
+from agreement_trees.pairs.second_chance import SecondChanceConfig, second_chance_decision
 from agreement_trees.pairs.diagnostics import (
     generate_diagnostics_table, write_diagnostics_csv, diagnostics_row_to_json,
 )
@@ -181,15 +182,11 @@ def _drop_irrelevant_roles(df: pd.DataFrame, keep_roles) -> pd.DataFrame:
     return df.drop(columns=drop_cols)
 
 
-def create_npa_pairs(dt_df: pd.DataFrame, target_col: str, inflector,
+def create_npa_pairs(swap_df: pd.DataFrame, target_col: str, inflector,
                       swap_role: str | None = None, context_inflector=None,
-                      leaf_threshold: float | dict = 0.95,
-                      second_chance_threshold: float | None = None,
                       verbose: bool = True) -> tuple[dict[str, pd.DataFrame], int]:
-    """Minimal re-inflected pairs from a fit_npa_tree dt_df, for rows predicted "yes" in a kept leaf
-    (leaf_top1_acc > leaf_threshold and leaf_decision; same convention as agreement_trees.pairs.create_pairs).
-    leaf_threshold may be a {leaf_id: cutoff} map (second chance), with second_chance_threshold the strict
-    bar, passed on the retry call only (rows then get "second_chance"/"second_chance_lax_threshold").
+    """Minimal re-inflected pairs from the rows of a fit_npa_tree dt_df that the caller kept (predicted "yes" in a
+    kept leaf, see create_npa_pairs_for_target_col).
 
     Reinflects `swap_role`'s token via inflector.inflect on that role's feature columns, keeping the other
     role fixed. Default swap_role is the second role of target_col ("DET" for "HEAD-DET_Number"): the fixed
@@ -213,15 +210,6 @@ def create_npa_pairs(dt_df: pd.DataFrame, target_col: str, inflector,
         swap_role = role2
     fixed_role = role2 if swap_role == role1 else role1
 
-    row_threshold, keep = leaf_keep(dt_df, leaf_threshold)
-    swap_df = dt_df[keep & (dt_df[target_col] == "yes")]
-    if second_chance_threshold is not None:
-        swap_df = swap_df.copy()
-        swap_df["second_chance"] = swap_df["leaf_top1_acc"] <= second_chance_threshold
-        swap_df["second_chance_lax_threshold"] = (
-            row_threshold.loc[swap_df.index] if isinstance(row_threshold, pd.Series) else row_threshold
-        )
-
     ufeat, _ = inflector.inflection_map
     # plain and bracketed ("Number[psor]") feature columns, as in agreement_trees.pairs.create_pairs
     def feature_columns(role):
@@ -237,7 +225,6 @@ def create_npa_pairs(dt_df: pd.DataFrame, target_col: str, inflector,
         "ambiguous_subjects": [], "conflicting_features": [], "undefined_features": [],
         "no_inflections": [], "no_candidates": [], "ambiguous_readings": [],
     }
-    feature_distribution = Counter()
     items_seen = 0
 
     # the loop reads only the swap/fixed roles' feature and form columns (the frame is thousands of columns
@@ -284,7 +271,7 @@ def create_npa_pairs(dt_df: pd.DataFrame, target_col: str, inflector,
         for swap_form in swap_forms:
             items_seen += 1
             item_type, item = process_item(
-                dict(row_dict), form, swap_form, og_feats, ufeat, feature_vals, feature_distribution,
+                dict(row_dict), form, swap_form, og_feats, ufeat, feature_vals,
                 inflector, context_features, take_features_from=swap_role,
                 swap_bundle=swap_feats.get(swap_form, {}),
             )
@@ -303,7 +290,6 @@ def create_npa_pairs(dt_df: pd.DataFrame, target_col: str, inflector,
         coverage = len(diagnostics["correct_swaps"]) / max(items_seen, 1) * 100
         print(f"swap_role={swap_role} fixed_role={fixed_role} items_seen={items_seen} "
               f"correct_swaps={len(diagnostics['correct_swaps'])} coverage={coverage:.1f}%")
-        print("feature_vals distribution:", dict(feature_distribution))
 
     return {k: bucket_frame(swap_df, v) for k, v in diagnostics.items()}, items_seen
 
@@ -367,10 +353,10 @@ _NPA_BUCKET_NAMES = [
 
 def create_npa_pairs_for_target_col(
     dt_df: pd.DataFrame, target_col: str, inflectors: dict,
-    leaf_threshold: float | dict = 0.95, save_to: str | None = None,
+    leaf_threshold: float = DEFAULT_LEAF_MIN_ACCURACY, save_to: str | None = None,
     full_df: pd.DataFrame | None = None, label_distribution: dict | None = None,
     num_lemma=None, num_form=None, max_examples: int = 5, verbose: bool = True,
-    extra_meta: dict | None = None, second_chance_threshold: float | None = None,
+    second_chance: SecondChanceConfig | None = None,
 ) -> tuple[dict[str, pd.DataFrame], dict]:
     """The NPA minimal-pairs entry point: create_npa_pairs with the swap-direction rule
     (swap_roles_for_target_col), output shaped for agreement_trees.pairs.diagnostics and the diagnostics page (bucket
@@ -381,7 +367,8 @@ def create_npa_pairs_for_target_col(
     concatenated and items_seen / the keep pool summed (distinguishable via swap_DET / swap_ADJ). The unk split
     and labels use swap_roles[0] as the reinflected role, an arbitrary but consistent pick when there are two.
 
-    leaf_threshold / second_chance_threshold / extra_meta: as in agreement_trees.pairs.create_pairs.create_pairs.
+    leaf_threshold / second_chance: as in agreement_trees.pairs.create_pairs.create_pairs (the retry's rows are
+    appended to the strict pass's).
     Returns (diagnostic_dfs, meta); meta also carries "swap_role"/"fixed_role" for the page labels.
     """
     if full_df is None:
@@ -389,30 +376,46 @@ def create_npa_pairs_for_target_col(
     role1, role2, feat = _split_target_col(target_col)
     swap_roles = swap_roles_for_target_col(target_col)
 
-    collected = defaultdict(list)
-    total_items_seen = 0
-    total_n_keep = 0
-    total_n_keep_second = 0
-    row_threshold, keep = leaf_keep(dt_df, leaf_threshold)
-    n_raw = int((dt_df[target_col] == "yes").sum())
+    is_yes = dt_df[target_col] == "yes"
+    keep = leaf_keep(dt_df, leaf_threshold)
+    n_raw = int(is_yes.sum())
 
-    for swap_role in swap_roles:
-        fixed_role = role2 if swap_role == role1 else role1
-        buckets, items_seen = create_npa_pairs(
-            dt_df, target_col, inflector=inflectors[swap_role],
-            swap_role=swap_role, context_inflector=inflectors.get(fixed_role),
-            leaf_threshold=leaf_threshold,
-            second_chance_threshold=second_chance_threshold, verbose=verbose,
-        )
-        total_items_seen += items_seen
-        total_n_keep += int((keep & (dt_df[target_col] == "yes")).sum())
-        if second_chance_threshold is not None:
-            total_n_keep_second += int(
-                (keep & (dt_df[target_col] == "yes")
-                 & (dt_df["leaf_top1_acc"] <= second_chance_threshold)).sum())
-        for name, bdf in buckets.items():
-            if len(bdf):
-                collected[name].append(bdf)
+    def collect(rows):
+        """{bucket: [frame per swap role]} and items seen over the swap roles, for the rows `rows`."""
+        buckets_by_role, seen = defaultdict(list), 0
+        for swap_role in swap_roles:
+            fixed_role = role2 if swap_role == role1 else role1
+            buckets, items_seen = create_npa_pairs(
+                rows, target_col, inflector=inflectors[swap_role],
+                swap_role=swap_role, context_inflector=inflectors.get(fixed_role), verbose=verbose,
+            )
+            seen += items_seen
+            for name, bdf in buckets.items():
+                if len(bdf):
+                    buckets_by_role[name].append(bdf)
+        return buckets_by_role, seen
+
+    rows_keep = dt_df[keep & is_yes]
+    collected, total_items_seen = collect(rows_keep)
+    n_rows_keep, n_rows_keep_second = len(rows_keep), 0
+    retry_meta = {}
+    if second_chance is not None:
+        retry, lax, info = second_chance_decision(dt_df, target_col, label_distribution, leaf_threshold, second_chance)
+        print(f"{save_to}: second chance: {info['reason']}")
+        if retry:
+            rescued = dt_df[leaf_keep(dt_df, lax) & is_yes & ~keep]
+            rescued_collected, rescued_seen = collect(rescued)
+            collected = {name: [tag_second_chance(bdf, False, lax) for bdf in collected.get(name, [])]
+                               + [tag_second_chance(bdf, True, lax) for bdf in rescued_collected.get(name, [])]
+                         for name in set(collected) | set(rescued_collected)}
+            total_items_seen += rescued_seen
+            n_rows_keep += len(rescued)
+            n_rows_keep_second = len(rescued)
+            leaf_threshold = lax
+            retry_meta = {"second_pass": True, "second_chance_info": info}
+            # adopted even with zero correct_swaps: the lax pass's numbers are the ones to record
+            if not collected.get("correct_swaps"):
+                print(f"{save_to}: retry attempted, yielded no pairs")
 
     diagnostic_dfs = {
         name: (pd.concat(collected[name], ignore_index=True, sort=False)
@@ -431,12 +434,11 @@ def create_npa_pairs_for_target_col(
         "pairs_version": PAIRS_VERSION,
         "leaf_min_acc": leaf_threshold,
         "num_ud_candidates_raw": n_raw,
-        "num_ud_candidates_keep": total_n_keep,
-        "num_ud_candidates_keep_second_chance": total_n_keep_second,
-        # kept rows counted once (num_ud_candidates_keep counts them once per swap role)
-        "num_rows_keep": int((keep & (dt_df[target_col] == "yes")).sum()),
-        "num_rows_keep_second_chance": 0 if second_chance_threshold is None else int(
-            (keep & (dt_df[target_col] == "yes") & (dt_df["leaf_top1_acc"] <= second_chance_threshold)).sum()),
+        # candidates are counted once per swap role, kept rows once
+        "num_ud_candidates_keep": n_rows_keep * len(swap_roles),
+        "num_ud_candidates_keep_second_chance": n_rows_keep_second * len(swap_roles),
+        "num_rows_keep": n_rows_keep,
+        "num_rows_keep_second_chance": n_rows_keep_second,
         "items_seen": total_items_seen,
         "num_lemma": num_lemma,
         "num_form": num_form,
@@ -447,11 +449,11 @@ def create_npa_pairs_for_target_col(
     }
     if label_distribution is not None:
         meta["label_distribution"] = label_distribution
-    if extra_meta:
-        meta.update(extra_meta)
+    meta.update(retry_meta)
 
     if len(diagnostic_dfs.get("correct_swaps", ())):
-        kept, diagnostic_dfs["invalid_surface"] = with_surface_strings(add_sentence_strings(diagnostic_dfs["correct_swaps"]))
+        strings = add_sentence_strings(diagnostic_dfs["correct_swaps"])
+        kept, diagnostic_dfs["invalid_surface"] = with_surface_strings(strings)
         diagnostic_dfs["correct_swaps"] = (
             add_attractors_if_stored(kept, f"{role1}-{role2}_attractor_slots", (role1, role2)) if len(kept) else kept)
 
@@ -483,7 +485,7 @@ def refresh_deprel_index(target_col: str,
                           html_decision_trees_root: str = HTML_DECISION_TREES_DIR,
                           pairs_dir: str | None = None,
                           diagnostics_csv: str | None = None,
-                          leaf_threshold: float = 0.95) -> None:
+                          leaf_threshold: float = DEFAULT_LEAF_MIN_ACCURACY) -> None:
     """Rebuild one target_col's diagnostics CSV and deprel index.html from the on-disk decision-tree and
     minimal-pair artifacts only (the tail of run_agreement_pipeline), so generate_html_indexes.py can refresh a
     built condition without the per-language loop reading np_instances. Paths default as in
@@ -667,26 +669,11 @@ def _fit_language(lang: str, ctx: dict) -> None:
         )
         # the held-out rows in kept leaves become pairs too
         pairs_df = pairs_input(model, dt_df, full_df, target_col)
-        diagnostic_dfs, _ = create_npa_pairs_for_target_col(
-            pairs_df, target_col, inflectors, leaf_threshold=leaf_threshold,
+        diagnostic_dfs, pairs_meta = create_npa_pairs_for_target_col(
+            pairs_df, target_col, inflectors, leaf_threshold=leaf_threshold, second_chance=second_chance,
             **pairs_kwargs,
         )
-        if second_chance is not None:
-            retry, lax, info = second_chance_decision(
-                dt_df, target_col, label_distribution,
-                strict_threshold=leaf_threshold, cfg=second_chance)
-            print(f"{lang} {target_col}: second chance: {info['reason']}")
-            if retry:
-                # adopted even with zero correct_swaps: the lax pass's numbers are the ones to record
-                diagnostic_dfs, _ = create_npa_pairs_for_target_col(
-                    pairs_df, target_col, inflectors, leaf_threshold=lax,
-                    extra_meta={"second_pass": True, "second_chance_info": info},
-                    second_chance_threshold=leaf_threshold,
-                    **pairs_kwargs,
-                )
-                lang_leaf_threshold = lax
-                if not len(diagnostic_dfs["correct_swaps"]):
-                    print(f"{lang} {target_col}: retry attempted, yielded no pairs")
+        lang_leaf_threshold = pairs_meta["leaf_min_acc"]
         correct_swaps_df = diagnostic_dfs.get("correct_swaps")
     else:
         # pairs built by an earlier run: the page reads the cached correct_swaps bucket and shows the (lax) cutoffs
@@ -784,7 +771,7 @@ def run_agreement_pipeline(target_col: str, langs: list[str], instances_dir: str
                             extract: dict | None = None,
                             drop_unk: bool = True, max_depth: int = 12,
                             min_samples_leaf: int = 10, test_size: float = 0.1,
-                            leaf_threshold: float = 0.95,
+                            leaf_threshold: float = DEFAULT_LEAF_MIN_ACCURACY,
                             impurity: dict | None = None,
                             palette_map: dict | None = None,
                             unimorph_args: dict | None = None,

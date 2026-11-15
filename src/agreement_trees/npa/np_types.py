@@ -208,7 +208,7 @@ def build_np_data(lang: str, resource_dir: str, max_treebank_len: int | None = N
     """
     treebank = load_treebank(lang, resource_dir, max_treebank_len=max_treebank_len,
                              use_selected_treebanks=False)
-    all_feats, _, all_deprel, all_pos = get_all_feats(treebank)
+    all_feats, all_deprel, all_pos = get_all_feats(treebank)
     um_data, ud_data = np_lookup_tables(lang, resource_dir) if fetch_all else (None, None)
 
     counts = Counter()
@@ -375,7 +375,7 @@ def build_np_data_streaming(lang: str, resource_dir: str, out_path: str,
     """
     treebank = load_treebank(lang, resource_dir, max_treebank_len=max_treebank_len,
                              use_selected_treebanks=False)
-    all_feats, _, all_deprel, all_pos = get_all_feats(treebank)
+    all_feats, all_deprel, all_pos = get_all_feats(treebank)
     um_data, ud_data = np_lookup_tables(lang, resource_dir) if fetch_all else (None, None)
 
     parts_dir = f"{out_path}.parts"

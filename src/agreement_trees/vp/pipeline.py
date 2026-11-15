@@ -35,7 +35,6 @@ from agreement_trees.pipeline_utils import (
     worker_mem_bytes, write_label_distribution,
 )
 from agreement_trees.pairs.create_pairs import create_pairs, MissingColumnError, pairs_current, read_cached_pairs
-from agreement_trees.pairs.second_chance import second_chance_decision
 from agreement_trees.pairs.diagnostics import generate_diagnostics_table, write_diagnostics_csv, diagnostics_row_to_json
 
 # Prose labels for generate_html_deprel_index's subject/nsubj wording, keyed by child deprel.
@@ -210,7 +209,7 @@ class Pipeline:
                 raise RuntimeError(
                     f"Another instance of {script_name} appears to already be "
                     f"running (PID(s): {other_pids}). "
-                    f"If they're stale, kill them first: kill {' '.join(map(str, other_pids))}"
+                    f"If they're stale, kill them first: kill {' '.join(map(str, other_pids))}. "
                     f"Else, pass force=True to Pipeline."
                 )
 
@@ -573,22 +572,9 @@ class Pipeline:
                 try:
                     # the held-out rows in kept leaves become pairs too
                     pairs_df = pairs_input(model, dt_df, full_df, self.predictor_var)
-                    diagnostic_dfs = create_pairs(pairs_df, leaf_threshold=leaf_threshold, **pairs_kwargs)
-                    if self.second_chance is not None:
-                        retry, lax, info = second_chance_decision(
-                            dt_df, self.predictor_var, label_distribution,
-                            strict_threshold=leaf_threshold, cfg=self.second_chance)
-                        print(f"{lang} {deprel}: second chance: {info['reason']}")
-                        if retry:
-                            # adopted even with zero correct_swaps: the lax pass's numbers are the ones to record
-                            second_dfs = create_pairs(
-                                pairs_df, leaf_threshold=lax,
-                                extra_meta={"second_pass": True, "second_chance_info": info},
-                                second_chance_threshold=leaf_threshold,
-                                **pairs_kwargs)
-                            leaf_threshold, diagnostic_dfs = lax, second_dfs
-                            if not len(second_dfs["correct_swaps"]):
-                                print(f"{lang} {deprel}: retry attempted, yielded no pairs")
+                    diagnostic_dfs, pairs_meta = create_pairs(
+                        pairs_df, leaf_threshold=leaf_threshold, second_chance=self.second_chance, **pairs_kwargs)
+                    leaf_threshold = pairs_meta["leaf_min_acc"]
                     correct_swaps_df = diagnostic_dfs.get("correct_swaps")
                 except MissingColumnError as err:
                     print(f"Skipping {lang} for {deprel}, missing column {err}")

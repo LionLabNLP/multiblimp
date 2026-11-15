@@ -2,12 +2,13 @@
 across its conditions and over the markers listed in multiblimp.downsample.
 
 Stage 2 of the benchmark: run after the pairs are built (and, for pair directories from before pair creation wrote the
-written forms, after validate_surface.py). Keeps the <cond>/<cond>_<deprel>/<lang>/ layout and every column, so
-the benchmark reads like the pipeline output; manifest.json records the settings and the counts before and after,
-stats.json feeds render_page.py.
+written forms, after validate_surface.py). Writes two files per language: <Language>.parquet (the sentences, the
+phenomenon and the balance markers) and features/<Language>.parquet (every column), both keyed by pair_id, plus
+meta/<Language>.json (each condition's pipeline meta.json without its HTML examples); manifest.json records the
+settings and the counts before and after, stats.json feeds render_page.py.
 
 Usage (any directory):
-  python3 build_benchmark.py --n_items 1000
+  python3 build_benchmark.py --n_items 2000
 """
 import argparse
 import os

@@ -1752,8 +1752,9 @@ __V2_TREE_DATA_JS__
     if (!node.dist) return null;
     const majority = node.dist.reduce((a, b) => (b.cnt > a.cnt ? b : a));
     const base = SEMANTIC_BASE_HEX[majority.cls.toLowerCase()] || majority.color;
-    // accuracy pages: acc in [0.5, 1] -> uncertainty in [1, 0]; entropy pages: H directly.
-    const uncertainty = T.META.measure === 'accuracy' ? Math.max(0, 2 * (1 - node.acc)) : node.H;
+    // accuracy pages: acc in [0.5, 1] -> uncertainty in [1, 0]
+    const uncertainty = Math.max(0, 2 * (1 - node.acc));
+    // LEGACY, commented out (entropy pages): const uncertainty = T.META.measure === 'accuracy' ? Math.max(0, 2 * (1 - node.acc)) : node.H;
     const t = Math.min(1, uncertainty * 0.72);
     return interpolateHex(base, '#ffffff', t);
   }
@@ -1856,8 +1857,8 @@ __V2_TREE_DATA_JS__
       const isAgreeLeaf = node.majorityLabel && node.majorityLabel.toLowerCase() === 'yes';
       // node.keepThresholdAcc is this leaf's own cutoff.
       const keepHtml = !node.leaf || !isAgreeLeaf || node.keepThresholdAcc == null ? '' : node.keep
-        ? `<span class="node-keep yes${node.secondChance ? ' second-chance' : ''}" data-keep-toggle="1">🔑${node.secondChance ? '2️⃣' : ''} ${node.kept.toLocaleString()} kept${node.secondChance ? ` (acc>${node.keepThresholdAcc.toFixed(2)})` : ''} › ${node.correctSwaps.toLocaleString()} pairs ▸</span>`
-        : `<span class="node-keep no">not kept (acc ${node.acc.toFixed(3)} ≤ ${node.keepThresholdAcc.toFixed(2)})</span>`;
+        ? `<span class="node-keep yes${node.secondChance ? ' second-chance' : ''}" data-keep-toggle="1">🔑${node.secondChance ? '2️⃣' : ''} ${node.kept.toLocaleString()} kept${node.secondChance ? ` (acc≥${node.keepThresholdAcc.toFixed(2)})` : ''} › ${node.correctSwaps.toLocaleString()} pairs ▸</span>`
+        : `<span class="node-keep no">not kept (acc ${node.acc.toFixed(3)} &lt; ${node.keepThresholdAcc.toFixed(2)})</span>`;
       const fill = nodeFillColor(node);
       // [+]: other features were >99% correlated with the chosen split feature here (get_correlated_features in viz_tree.py); internal nodes only.
       const corrHtml = (node.corr && node.corr.length)
@@ -1882,7 +1883,7 @@ __V2_TREE_DATA_JS__
             <span class="node-rule">${nodeRuleDisplay(node)}${corrHtml}</span>
           </div>
           <div class="node-body">
-            [${id}]&nbsp; n=${node.n}&nbsp; ${T.META.measure === 'accuracy' ? `acc=${node.acc.toFixed(3)}` : `H=${node.H.toFixed(2)}`}
+            [${id}]&nbsp; n=${node.n}&nbsp; acc=${node.acc.toFixed(3)}
             ${buildDistBar(node)}
             ${keepHtml}
           </div>
@@ -2031,7 +2032,7 @@ __V2_TREE_DATA_JS__
   // Floating info panel: meta rows from T.META, class distribution rows from T.CLASSES.
   const META_ROWS = [
     ['Language', 'languageName'], ['Treebank', 'treebank'], ['Excluded from pairs', 'excludedReason'], ['Keep threshold', 'keepThreshold'], ['train accuracy', 'accuracy'], ['test accuracy', 'testAccuracyRow'],
-    ['base entropy', 'baseEntropy'], ['reduced entropy', 'reducedEntropy'],
+    // LEGACY, commented out (entropy pages): ['base entropy', 'baseEntropy'], ['reduced entropy', 'reducedEntropy'],
     ['root accuracy', 'rootAccuracy'], ['train accuracy (smoothed)', 'trainAccuracy'],
     ['Nodes', 'nodes'], ['Depth', 'depth'],
     ['Training samples', 'trainingSamples'], ['Predictor', 'predictor'],
@@ -2048,7 +2049,7 @@ __V2_TREE_DATA_JS__
     infoPanelAccuracy.textContent = T.META.testAccuracy
       ? `train ${T.META.accuracy} · test ${T.META.testAccuracy}`
       : `${T.META.accuracy} accuracy`;
-    const NO_TREE_HIDDEN = ['accuracy', 'testAccuracyRow', 'rootAccuracy', 'trainAccuracy', 'baseEntropy', 'reducedEntropy', 'nodes', 'depth'];
+    const NO_TREE_HIDDEN = ['accuracy', 'testAccuracyRow', 'rootAccuracy', 'trainAccuracy', 'nodes', 'depth'];
     infoPanelMeta.innerHTML = META_ROWS.filter(([, key]) => T.META[key] !== undefined && !(T.META.measure === 'accuracy' && key === 'accuracy') && !(T.META.rootNotice && NO_TREE_HIDDEN.includes(key))).map(([label, key]) => `
       <div class="meta-row"><span class="meta-key">${label}</span><span class="meta-val">${esc(T.META[key])}</span></div>`).join('');
 

@@ -13,6 +13,8 @@ from glob import glob
 import pandas as pd
 import pyarrow.parquet as pq
 
+from multiblimp.downsample import UNCERTAIN_SURFACE
+
 BUCKET_LABELS = {
     "no_candidates": "no match",
     "no_inflections": "no inflection",
@@ -66,6 +68,19 @@ def _bucket_second_chance_count(lang_dir: str, item_type: str) -> int:
     if "second_chance" not in df.columns:
         return 0
     return int(df["second_chance"].sum())
+
+
+def _unattested_count(lang_dir: str) -> int:
+    """How many of the language's pairs have a guessed written form (surface_status in UNCERTAIN_SURFACE); 0 for
+    pairs written before surface_status existed."""
+    df = _read_bucket(lang_dir, "correct_swaps", columns=["surface_status"])
+    return int(df["surface_status"].isin(UNCERTAIN_SURFACE).sum()) if "surface_status" in df.columns else 0
+
+
+def _flag_count(lang_dir: str, column: str) -> int:
+    """How many of the language's pairs have the boolean tag `column` set; 0 for pairs written before it existed."""
+    df = _read_bucket(lang_dir, "correct_swaps", columns=[column])
+    return int(df[column].fillna(False).astype(bool).sum()) if column in df.columns else 0
 
 
 def _read_meta(lang_dir: str) -> dict:
@@ -147,11 +162,9 @@ def language_diagnostics_row(lang: str, lang_dir: str) -> dict:
 
     dist, probs = _distribution_and_probs(buckets)
 
-    # a dict means leaves have their own cutoffs (second chance): no single number for the language
-    leaf_threshold = meta.get("leaf_min_acc")
     row = {
         "Language": lang,
-        "leaf_threshold": None if isinstance(leaf_threshold, dict) else leaf_threshold,
+        "leaf_threshold": meta.get("leaf_min_acc"),
         "# minimal pairs": n_pairs,
         "# forms of interest": num_forms_of_interest,
         "% covered by UM": pct(num_covered_um, num_forms_of_interest),
@@ -161,6 +174,8 @@ def language_diagnostics_row(lang: str, lang_dir: str) -> dict:
         "# UD candidates (kept, 2nd chance)": n_keep_second_chance,
         "# UM lemmas": meta.get("num_lemma"),
         "# UM Forms": meta.get("num_form"),
+        "# wordform unattested": _unattested_count(lang_dir),
+        "# spacing artifact": _flag_count(lang_dir, "spacing_artifact"),
         "# head unk": meta.get("head_unk") or 0,
         "# nsubj unk": meta.get("nsubj_unk") or 0,
         "# both unk": meta.get("both_unk") or 0,
@@ -186,7 +201,7 @@ def generate_diagnostics_table(pairs_dir: str) -> pd.DataFrame:
         "% covered by UM", "% covered by UM+UD",
         "# UD candidates (raw)", "# UD candidates (kept)",
         "# UD candidates (kept, 2nd chance)",
-        "# UM lemmas", "# UM Forms",
+        "# UM lemmas", "# UM Forms", "# wordform unattested", "# spacing artifact",
         "# head unk", "# nsubj unk", "# both unk",
     ]
     for label in BUCKET_LABELS.values():
@@ -257,7 +272,6 @@ def diagnostics_row_to_json(row, lang_dir: str | None = None) -> dict:
             probs[value] = round(float(val), 3)
 
     leaf_threshold = row.get("leaf_threshold")
-    is_per_leaf = isinstance(leaf_threshold, dict)
     # correct_swaps is one row per kept row, so its second-chance count is the pairs-level split;
     # the other buckets can hold several items per source row, hence nKeep's comes from meta.json
     n_pairs_second = _bucket_second_chance_count(lang_dir, "correct_swaps") if lang_dir else 0
@@ -267,8 +281,7 @@ def diagnostics_row_to_json(row, lang_dir: str | None = None) -> dict:
     n_keep_second_rows = meta_rows.get("num_rows_keep_second_chance", _num(row, "# UD candidates (kept, 2nd chance)"))
     result = {
         "leafThreshold": (
-            None if is_per_leaf or leaf_threshold is None or pd.isna(leaf_threshold)
-            else float(leaf_threshold)
+            None if leaf_threshold is None or pd.isna(leaf_threshold) else float(leaf_threshold)
         ),
         "nPairs": int(_num(row, "# minimal pairs")),
         "nPairsSecondChance": n_pairs_second,
@@ -285,6 +298,8 @@ def diagnostics_row_to_json(row, lang_dir: str | None = None) -> dict:
         "buckets": buckets,
         "distribution": row.get("distribution") or "",
         "probs": probs,
+        "nUnattested": int(_num(row, "# wordform unattested")),
+        "nSpacingArtifact": int(_num(row, "# spacing artifact")),
         "headUnk": int(_num(row, "# head unk")),
         "nsubjUnk": int(_num(row, "# nsubj unk")),
         "bothUnk": int(_num(row, "# both unk")),

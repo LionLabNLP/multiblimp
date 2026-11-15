@@ -21,10 +21,10 @@ def create_html(
     threshold_badge = (
         f'<span class="threshold-badge" title="The leaf-accuracy floor N KEEP and the '
         f'bucket breakdown were computed with -- a row is only “kept” if its '
-        f'leaf’s smoothed accuracy is above this.">Keep threshold: leaf accuracy &gt; {leaf_threshold:g}</span>'
+        f'leaf’s smoothed accuracy is at least this.">Keep threshold: leaf accuracy &ge; {leaf_threshold:g}</span>'
         if leaf_threshold is not None else ""
     )
-    threshold_text = f"leaf accuracy &gt; {leaf_threshold:g}" if leaf_threshold is not None else "the run's leaf-confidence filter"
+    threshold_text = f"leaf accuracy &ge; {leaf_threshold:g}" if leaf_threshold is not None else "the run's leaf-confidence filter"
     diagnostics_button_html = (
         '<button class="btn toggle-btn" id="diagnosticsBtn" type="button" aria-pressed="false" '
         'title="Show the per-language bucket breakdown row (no match / no inflection / same '
@@ -685,8 +685,7 @@ def create_html(
             What each percentage above is actually a fraction of. "Row" scope means once per
             candidate row; "item" scope means once per attempted swap_form. A single row can
             produce more than one item, so row- and item-scoped percentages use different
-            denominators. <code>extra_pairs</code> isn't shown as a percentage in the table, but
-            shares the same item-scoped pool as the four buckets above.
+            denominators.
           </p>
           <div class="ratio-scroll">
             <table class="ratio-table">
@@ -704,8 +703,7 @@ def create_html(
                 <tr><td>% undefined feature</td><td># undefined feature (<code>undefined_features</code>)</td><td>swap_items</td><td><code>items_seen &minus; no_match &minus; no_inflection</code></td><td>item</td><td>Fires once per attempted swap_form.</td></tr>
                 <tr><td>% conflicting features</td><td># conflicting features (<code>conflicting_features</code>)</td><td>swap_items</td><td><code>items_seen &minus; no_match &minus; no_inflection</code></td><td>item</td><td>Fires once per attempted swap_form. Always 0 for NPA.</td></tr>
                 <tr><td>% ambiguous {subject_label}</td><td># ambiguous {subject_label} (<code>ambiguous_subjects</code>)</td><td>swap_items</td><td><code>items_seen &minus; no_match &minus; no_inflection</code></td><td>item</td><td>Fires once per attempted swap_form.</td></tr>
-                <tr><td>% invalid surface</td><td># invalid surface (<code>invalid_surface</code>)</td><td>swap_items</td><td><code>items_seen &minus; no_match &minus; no_inflection</code></td><td>item</td><td>A valid pair whose written form could not be built: the swapped word sits in a contraction (<code>de le</code> = <code>du</code>) and its new components are not a known contraction (kept as separate words now; this bucket stays empty).</td></tr>
-                <tr><td>(not shown) extra_pairs</td><td><code>extra_pairs</code></td><td>swap_items</td><td><code>items_seen &minus; no_match &minus; no_inflection</code></td><td>item</td><td>Would collect otherwise-valid swaps (same eligibility as correct_swaps) that get capped once their FROM&rarr;TO combination hits the max_num_of_pairs limit. Always 0 today since create_pairs is never called with that limit set.</td></tr>
+                <tr><td>% invalid surface</td><td># invalid surface (<code>invalid_surface</code>)</td><td>swap_items</td><td><code>items_seen &minus; no_match &minus; no_inflection</code></td><td>item</td><td>A valid pair whose two written sentences come out identical (a contraction that spells the original and the swapped form alike, Sicilian <code>pi lu</code> / <code>pi i</code> = <code>p&icirc;</code>); it cannot be scored and is left out of correct_swaps.</td></tr>
               </tbody>
             </table>
           </div>

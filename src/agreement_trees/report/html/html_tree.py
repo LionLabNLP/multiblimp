@@ -453,15 +453,6 @@ def _v2_build_pairs(correct_swaps_df, decisive_feat, max_per_bucket=10):
     return pairs, total_by_leaf, swapped_role, pair_role_counts
 
 
-def _v2_leaf_threshold_for(leaf_threshold, node_id):
-    """leaf_threshold is either one cutoff for every leaf, or (an older
-    cache) a {leaf_id: cutoff} map --
-    either way, resolve to this specific node's own value."""
-    if isinstance(leaf_threshold, dict):
-        return leaf_threshold.get(int(node_id))
-    return leaf_threshold
-
-
 def _v2_build_nodes(node_data, screen, leaf_threshold, strict_leaf_threshold=None,
                      pair_counts=None, pair_role_counts=None, keep_all=False):
     nodes = {}
@@ -475,7 +466,7 @@ def _v2_build_nodes(node_data, screen, leaf_threshold, strict_leaf_threshold=Non
         entry = {
             "x": round(x, 1), "y": round(y, 1),
             "branch": branch,
-            "n": nd["n"], "H": round(nd["H"], 4), "acc": round(nd["acc"], 4),
+            "n": nd["n"], "acc": round(nd["acc"], 4),   # LEGACY, commented out: "H": round(nd["H"], 4)
             "leaf": is_leaf,
             "corr": nd.get("corr") or [],
             "dist": [
@@ -488,21 +479,17 @@ def _v2_build_nodes(node_data, screen, leaf_threshold, strict_leaf_threshold=Non
             entry["rule"] = "predict: " + (" / ".join(quals) if quals else "?")
             entry["predicted"] = " / ".join(quals)
             entry["majorityLabel"] = quals[0] if quals else None
-            node_threshold = _v2_leaf_threshold_for(leaf_threshold, i)
+            node_threshold = leaf_threshold
             # keep_all: no tree to filter by, so create_pairs keeps every row (leaf_keep)
-            entry["keep"] = bool(keep_all or (node_threshold is not None and nd["acc"] > node_threshold))
-            # This leaf's own cutoff, always -- whether kept or not, and
-            # whether leaf_threshold is one global cutoff or a per-leaf map.
+            entry["keep"] = bool(keep_all or (node_threshold is not None and nd["acc"] >= node_threshold))
+            # The cutoff the leaf was held to, whether kept or not.
             # keep_all: cutoff 0, every row passes (the page shows the kept badge and Pairs tab only with a cutoff)
             entry["keepThresholdAcc"] = 0.0 if keep_all else node_threshold
-            # Only reached via a second_chance retry: strict_leaf_threshold is
-            # the pipeline's own (pre-retry) bar, always passed regardless of
-            # whether a retry happened -- so this is False both when there was
-            # no retry and when one was reverted, since node_threshold then
-            # equals strict_leaf_threshold and no kept leaf's acc can be <= it.
+            # strict_leaf_threshold is the pipeline's own (pre-retry) bar, always passed: without a retry
+            # node_threshold equals it and no kept leaf's acc can be < it, so this is False.
             entry["secondChance"] = bool(
                 entry["keep"] and strict_leaf_threshold is not None
-                and nd["acc"] <= strict_leaf_threshold
+                and nd["acc"] < strict_leaf_threshold
             )
             # "kept" is the majority class's own count, not the leaf's full n.
             majority_cnt = next(
@@ -549,7 +536,7 @@ def _v2_decisive_feat(predictor_display):
     return str(predictor_display).rsplit("_", 1)[-1]
 
 
-def _v2_build_meta(meta, leaf_threshold, strict_leaf_threshold=None, keep_all=False):
+def _v2_build_meta(meta, leaf_threshold, keep_all=False):
     m = {
         "language": " · ".join(filter(None, [
             meta.get("Language") or meta.get("language"), meta.get("Treebank"), meta.get("titleSuffix")])),
@@ -557,7 +544,7 @@ def _v2_build_meta(meta, leaf_threshold, strict_leaf_threshold=None, keep_all=Fa
         "accuracy": meta.get("accuracy", ""),
         "testAccuracy": meta.get("testAccuracy"),
         "testN": meta.get("testN"),
-        "measure": meta.get("measure", "entropy"),
+        "measure": meta.get("measure", "accuracy"),   # LEGACY, commented out: default "entropy"
         "nodes": meta.get("Nodes", ""),
         "depth": meta.get("Depth", ""),
         "trainingSamples": meta.get("Training samples", ""),
@@ -566,20 +553,15 @@ def _v2_build_meta(meta, leaf_threshold, strict_leaf_threshold=None, keep_all=Fa
     if m["measure"] == "accuracy":
         m["rootAccuracy"] = meta.get("root accuracy", "")
         m["trainAccuracy"] = meta.get("train accuracy (smoothed)", "")
-    else:
-        m["baseEntropy"] = meta.get("base entropy", "")
-        m["reducedEntropy"] = meta.get("reduced entropy", "")
-    if isinstance(leaf_threshold, dict):
-        # A per-leaf map from an older cache: no single number to show here --
-        # each leaf's own 🔑/🔑2️⃣ tag already carries its own cutoff, so the
-        # legend just shows the plain strict bar every leaf was first held to.
-        m["keepThreshold"] = f"leaf accuracy > {strict_leaf_threshold:g}" if strict_leaf_threshold is not None else ""
-        m["keepThresholdAcc"] = strict_leaf_threshold
-    elif keep_all:
+    # LEGACY, commented out (entropy pages, see viz_tree.py):
+    # else:
+    #     m["baseEntropy"] = meta.get("base entropy", "")
+    #     m["reducedEntropy"] = meta.get("reduced entropy", "")
+    if keep_all:
         m["keepThreshold"] = "every row (no tree to filter by)"
         m["keepThresholdAcc"] = 0.0
     elif leaf_threshold is not None:
-        m["keepThreshold"] = f"leaf accuracy > {leaf_threshold:g}"
+        m["keepThreshold"] = f"leaf accuracy ≥ {leaf_threshold:g}"
         m["keepThresholdAcc"] = leaf_threshold
     if meta.get("Treebank"):
         m["treebank"] = meta["Treebank"]
@@ -615,7 +597,7 @@ def create_html_v2(meta, node_samples, node_data, hex_colors, classes, root_dist
     node_samples_v2 = {
         str(i): _v2_node_samples(i, node_samples, role_a, role_b) for i in node_data
     }
-    tree_meta = _v2_build_meta(meta, leaf_threshold, strict_leaf_threshold=strict_leaf_threshold, keep_all=keep_all)
+    tree_meta = _v2_build_meta(meta, leaf_threshold, keep_all=keep_all)
     # {"role": "a"|"b", "feat": ...} for each column kept out of the fit; the
     # head prefix is role b (verb/aux), anything else the dependent (role a).
     tree_meta["fitExcluded"] = [

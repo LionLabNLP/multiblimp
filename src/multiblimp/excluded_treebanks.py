@@ -12,26 +12,27 @@ EXCLUSION_REASONS = (
     "child language",
     "niche genre",
     "nonstandard",
-    #"regional variety",
-    "non-Latin script",
+    "invalid script",
+    "sign language",
     "duplicate",
     "too small",
     "low quality",
     "incompatible annotation",
     "words removed",
-  #  "pending review",  # no reason on record yet
 )
 
-# Treebanks excluded per language (UD language folder name -> {treebank id:
-# reason}, reasons drawn from EXCLUSION_REASONS). Every other treebank of a
-# language is used; a language whose treebanks are all excluded drops out
-# entirely.
-# Comments keep the provenance of each entry: "<version excluded since> [-f]:
-# <original note>". A "?" on the version means unsure, "-f" means the
-# treebank is also caught by flag_treebanks.
 excluded_treebanks = {
     "Arabic": {
         "NYUAD": "words removed",  # -f
+    },
+    "Avestan": {
+        "Old": "poetry",  # 2.19
+    },
+    "Bonan": {
+        "GDUD": "invalid script",  # 2.19
+    },
+    "Chechen": {
+        "MottDT": "invalid script",  # 2.19
     },
     "Chinese": {
         "CFL": "learner data",  # v2? -f
@@ -43,6 +44,16 @@ excluded_treebanks = {
     "Czech": {
        # "PDTC": "pending review",  # filter out PDT sentences via sent_id
         "Poetry": "poetry",  # v1: poetry/genre
+        "CzeSL": "learner data",  # 2.19
+    },
+    "Dargwa": {
+        "Mehweb": "invalid script",  # 2.19
+    },
+    "Daur": {
+        "GDUD": "invalid script",  # 2.19
+    },
+    "Dongxiang": {
+        "GDUD": "invalid script",  # 2.19
     },
     "English": {
         "Atis": "spoken",  # v2?: ?
@@ -56,6 +67,12 @@ excluded_treebanks = {
         "CTeTex": "niche genre",  # v1: technical genre
         "Pronouns": "niche genre",  # v1: niche
     },
+    "Even": {
+        "GDUD": "invalid script",  # 2.19
+    },
+    "Evenki": {
+        "GDUD": "invalid script",  # 2.19
+    },
     "Faroese": {
         "FarPaHC": "historical",  # v1
     },
@@ -65,6 +82,9 @@ excluded_treebanks = {
         "PoitevinDIVITAL": "nonstandard",  # v2: poitevin-saintongeais
         "ParisStories": "spoken",  # v1
         "Rhapsodie": "spoken",  # v1
+    },
+    "French_Sign_Language": {
+        "STKAutogramm": "sign language",  # 2.19
     },
     "Frisian_Dutch": {
         "Fame": "code switching",  # -f
@@ -80,10 +100,11 @@ excluded_treebanks = {
     },
     "Greek": {
         "Cretan": "nonstandard",
+        "Cypriot": "nonstandard",  # 2.19
         "GLCII": "learner data",  # v2? -f
+        "Griko": "nonstandard",  # 2.19
         "Lesbian": "nonstandard",
         "Messinian": "nonstandard",
-
     },
     "Guarani": {
         "OldTuDeT": "historical",  # v2? -f: old language variant, but is only guarani treebank
@@ -117,6 +138,9 @@ excluded_treebanks = {
         "GSDLUW": "duplicate",  # -: no version/reason given
         "PUDLUW": "duplicate",  # -: no version/reason given
     },
+    "Kalmyk": {
+        "GDUD": "invalid script",  # 2.19
+    },
     "Korean": {
         "KSL": "learner data",  # v2? -f
         "LittlePrince": "low quality",  # v2? 
@@ -130,19 +154,35 @@ excluded_treebanks = {
     "Mbya_Guarani": {
         "Dooley": "words removed",  # -f
     },
+    "Mongolian": {
+        "GDUD": "invalid script",  # 2.19
+    },
     "Naija": {
         "NSC": "spoken"
     },
-
+    "Nanai": {
+        "GDUD": "invalid script",  # 2.19
+    },
+    "Negidal": {
+        "GDUD": "invalid script",  # 2.19
+    },
+    "Oroch": {
+        "GDUD": "invalid script",  # 2.19
+    },
+    "Peripheral_Mongolian": {
+        "Ordos": "invalid script",  # 2.19
+    },
     "Polish": {
         "MPDT": "historical",  # v2
     },
     "Portuguese": {
         "DANTEStocks": "social media",  # v2? -f: tweets
     },
+    "Prakrit": {
+        "DIPI": "too small",  # 2.19: 84 sentences, parallel versions of same edicts
+    },
     "Romanian": {
-        "MolDoRo": "non-Latin script",  # v2?: in cyrillic
-       # "ArT": "regional variety",  # v2: included as Aromanian via add_langs (previously excluded as "dialect")
+        "MolDoRo": "invalid script",  # v2?: in cyrillic
         "Nonstandard": "nonstandard",  # v1
         "TueCL": "social media",  # v2? -f: tweets
     },
@@ -158,12 +198,22 @@ excluded_treebanks = {
     "Spanish": {
         "COSER": "spoken",  # v1
     },
+    "Spanish_Sign_Language": {
+        "LSE": "sign language",
+    },
     "Swedish": {
         "Old": "historical",  # v2
         "SweLL": "learner data",  # v2? -f
+        "Modern": "historical",  # 2.19: 1526-1880
+    },
+    "Swedish_Sign_Language": {
+        "SSLC": "sign language",
     },
     "Telugu_English": {
         "TECT": "code switching",  # -f
+    },
+    "Tu": {
+        "GDUD": "invalid script",  # 2.19
     },
     "Turkish": {
         "Atis": "spoken",
@@ -174,11 +224,21 @@ excluded_treebanks = {
     "Turkish_German": {
         "SAGT": "code switching",  # -f
     },
+    "Udihe": {
+        "GDUD": "invalid script",  # 2.19
+    },
     "Ukrainian": {
         "ParlaMint": "spoken",  # v2
+        "Zhelekhivka": "historical",  # 2.19: historical regional standard, late 19th/early 20th c.
+    },
+    "Ulch": {
+        "GDUD": "invalid script",  # 2.19
     },
     "Vietnamese": {
         "TueCL": "spoken",  # v1
+    },
+    "Zaar": {
+        "Autogramm": "invalid script",  # 2.19: IPA
     },
 }
 

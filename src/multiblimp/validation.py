@@ -248,11 +248,11 @@ def dropped_sentence_lines(folder: str) -> dict[str, set[int]]:
 
 def sentence_start_lines(path: str) -> list[int]:
     """First token line of each sentence block of a .conllu file, in file order (comment-only blocks skipped)."""
-    starts, in_block, has_token = [], False, False
+    starts, has_token = [], False
     with open(path, encoding="utf-8") as f:
         for number, line in enumerate(f, 1):
             if not line.strip():
-                in_block = has_token = False
+                has_token = False
             elif not line.startswith("#") and not has_token:
                 starts.append(number)
                 has_token = True

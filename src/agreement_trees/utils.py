@@ -4,6 +4,8 @@ from urllib.parse import quote
 
 import pandas as pd
 
+from multiblimp.config import UD_VERSION
+
 
 # A predictor_var names an agreement relation either as VP's "head_{deprel}_{Feature}_agreement" or as the
 # pairwise "{Role1}-{Role2}_{Feature}" of NPA ("yes" = the agreement holds). VP names never contain "-",
@@ -78,7 +80,7 @@ def build_grew_url(treebank, sent_id, form_values) -> str | None:
         for letter, form in zip(letters, form_values)
     )
     request_value = f'pattern {{ meta.sent_id = "{sent_id}" ;{slot} }}'
-    corpus_value = f"{treebank}@2.18"
+    corpus_value = f"{treebank}@{UD_VERSION}"
     return (
         f"https://universal.grew.fr/?corpus={quote(corpus_value, safe='')}"
         f"&request={quote(request_value, safe='')}"

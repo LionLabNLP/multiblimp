@@ -2,8 +2,13 @@
 the statistics of a language's multiword tokens."""
 import collections
 import re
+from pathlib import Path
+
+from multiblimp.languages import HIEROGLYPH_LANGS, hiero_signs
 
 RANGE = re.compile(r"^(\d+)-(\d+)$")
+# a value starting with "=" ("Hiero==...") is malformed; the conllu parser reads it as no value
+HIERO_FIELD = re.compile(r"(?:^|\|)Hiero=([^|=][^|]*)")
 
 Unit = collections.namedtuple("Unit", "mwt form lo hi comps space upos comp_upos")
 
@@ -24,12 +29,20 @@ def recase(original: str, form: str) -> str:
     return form
 
 
-def iter_sentences(path):
+def iter_sentences(path, hieroglyphs=None):
     """(first line of the sentence block, '# text', units) per sentence, the line number conllu_sent_line holds; a unit
     is a plain token or a multiword token
     (mwt=True, surface form in `form`, component forms in `comps`, their UPOS in `comp_upos`; a plain token's UPOS
-    in `upos`). Empty nodes are skipped."""
-    units, start, text, last = [], None, None, None
+    in `upos`). Empty nodes are skipped.
+
+    With `hieroglyphs` (default: the treebank folder belongs to a HIEROGLYPH_LANGS language) the forms are the signs
+    of MISC Hiero, as Treebank.to_hieroglyphs reads them: punctuation keeps its form, sentences with a word whose signs
+    are lost or unencoded (UC_No) are left out, and a multiword token without signs of its own is written as its
+    components' signs."""
+    path = Path(path)
+    if hieroglyphs is None:
+        hieroglyphs = language_of(f"{path.parent.name}/") in HIEROGLYPH_LANGS
+    units, start, text, last, lost = [], None, None, None, False
     with open(path, encoding="utf-8") as f:
         for i, line in enumerate(f, 1):
             if start is None and line.strip():
@@ -39,26 +52,39 @@ def iter_sentences(path):
                     text = line[len("# text ="):].strip()
                 continue
             if not line.strip():
-                if units:
-                    yield start, text, units
-                units, start, text, last = [], None, None, None
+                if units and not lost:
+                    yield start, text, _written_spans(units) if hieroglyphs else units
+                units, start, text, last, lost = [], None, None, None, False
                 continue
             cols = line.rstrip("\n").split("\t")
             if "." in cols[0]:
                 continue
             space = len(cols) < 10 or "SpaceAfter=No" not in cols[9]
             upos = cols[3] if len(cols) > 3 else "_"
+            form = cols[1]
             m = RANGE.match(cols[0])
+            if hieroglyphs:
+                hiero = HIERO_FIELD.search(cols[9]) if len(cols) > 9 else None
+                hiero = hiero[1] if hiero else ""
+                form = hiero_signs(hiero)
+                if not m and upos == "PUNCT":
+                    form = cols[1]
+                elif not m and (not form or "UC_No" in hiero):
+                    lost = True
             if m:
-                last = Unit(True, cols[1], int(m[1]), int(m[2]), [], space, None, [])
+                last = Unit(True, form, int(m[1]), int(m[2]), [], space, None, [])
                 units.append(last)
             elif last is not None and last.mwt and last.lo <= int(cols[0]) <= last.hi:
-                last.comps.append(cols[1])
+                last.comps.append(form)
                 last.comp_upos.append(upos)
             else:
-                units.append(Unit(False, cols[1], int(cols[0]), int(cols[0]), [], space, upos, []))
-    if units:
-        yield start, text, units
+                units.append(Unit(False, form, int(cols[0]), int(cols[0]), [], space, upos, []))
+    if units and not lost:
+        yield start, text, _written_spans(units) if hieroglyphs else units
+
+
+def _written_spans(units):
+    return [u._replace(form="".join(u.comps)) if u.mwt and not u.form else u for u in units]
 
 
 def render(units) -> str:
@@ -67,21 +93,6 @@ def render(units) -> str:
 
 def language_of(conllu_file: str) -> str:
     return conllu_file.split("/")[0][3:].split("-")[0]
-
-
-def contraction_map(files):
-    """(contracted, positions): {normalized components: {normalized surface: count}} over every multiword token of
-    the given conllu files, and {UPOS: {(position in the span, span length)}} for where each UPOS occurs in them."""
-    contracted = collections.defaultdict(collections.Counter)
-    positions = collections.defaultdict(set)
-    for path in files:
-        for _, _, units in iter_sentences(path):
-            for u in units:
-                if u.mwt and len(u.comps) > 1:
-                    contracted[tuple(norm(c) for c in u.comps)][norm(u.form)] += 1
-                    for j, upos in enumerate(u.comp_upos):
-                        positions[upos].add((j, len(u.comps)))
-    return contracted, positions
 
 
 def span_stats(files):

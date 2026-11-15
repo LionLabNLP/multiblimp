@@ -40,7 +40,6 @@ def new_stats():
     return defaultdict(lambda: {
         "roles": None,
         "lang_counts": defaultdict(lambda: Counter({k: 0 for k in COUNT_KEYS})),
-        # "lang_values": defaultdict(lambda: {"head": Counter(), "child": Counter()}),
     })
 
 
@@ -59,27 +58,6 @@ def _add(stats: dict, key: str, roles: tuple[str, str], lang: str, counts: tuple
     lc = entry["lang_counts"][lang]
     for name, value in zip(COUNT_KEYS, counts):
         lc[name] += value
-    # if values:
-    #     entry["lang_values"][lang]["head"].update(values[0])
-    #     entry["lang_values"][lang]["child"].update(values[1])
-
-
-# def value_pairs(agreement: pd.Series, head: pd.Series | None, child: pd.Series | None) -> tuple | None:
-#     """Counters of the head's and the child's feature values over the rows labelled yes or no."""
-#     if head is None or child is None:
-#         return None
-#     rows = agreement.isin(["yes", "no"])
-#     return Counter(head[rows].dropna().astype(str)), Counter(child[rows].dropna().astype(str))
-#
-#
-# def agreement_diagnostics(head: Counter, child: Counter, yes: int, no: int) -> tuple:
-#     """(distinct head values, agreement beyond chance): (observed - expected) / (1 - expected), expected being the
-#     agreement of a head and a child value drawn independently; None when it cannot be told."""
-#     n_head, n_child = sum(head.values()), sum(child.values())
-#     if not n_head or not n_child or not yes + no:
-#         return len(head), None
-#     expected = sum(head[v] / n_head * child.get(v, 0) / n_child for v in head)
-#     return len(head), None if expected >= 1 else round((yes / (yes + no) - expected) / (1 - expected), 3)
 
 
 # ---------------------------------------------------------------- vp
@@ -135,7 +113,6 @@ def scan_vp_language(parquet_path: str, family: str, deprel: str, stats: dict,
         child_col = f"{deprel}_{feat}"
         counts = vp_counts(df[f"head_{deprel}_{feat}_agreement"],
                            df[child_col] if child_col in df.columns else None)
-        # values = value_pairs(df[f"head_{deprel}_{feat}_agreement"], df.get(f"head_{feat}"), df.get(child_col))
         _add(stats, vp_scan_key(family, feat), ("head", deprel), lang, counts)
     return lang
 
@@ -209,7 +186,6 @@ def scan_np_language(parquet_path: str, stats: dict, split_head_upos: bool = Fal
             groups = [(col, df)]
         for key, group_df in groups:
             _add(stats, key, (key.split("-", 1)[0], role2), lang, np_counts(group_df, col, role1, role2, feat))
-            #     value_pairs(group_df[col], group_df.get(f"{role1}_{feat}"), group_df.get(f"{role2}_{feat}")))
     return lang
 
 
@@ -231,8 +207,6 @@ def unit_key(mode: str, family: str | None, lang: str) -> str:
 
 # bump when a change alters which rows are counted: saved scans then count as out of date
 SCAN_COUNTS_VERSION = 3
-# settings an earlier version recorded in the saved scans; they no longer count when a saved scan is compared
-RETIRED_THRESHOLD_KEYS = ("min_agree_share", "min_agree_share_families")
 
 
 def scan_thresholds(scan_cfg: dict) -> dict:
@@ -242,8 +216,8 @@ def scan_thresholds(scan_cfg: dict) -> dict:
 
 
 def same_thresholds(saved: dict | None, current: dict) -> bool:
-    """Whether a saved scan's settings equal the current ones, ignoring the retired keys."""
-    return {k: v for k, v in (saved or {}).items() if k not in RETIRED_THRESHOLD_KEYS} == current
+    """Whether a saved scan's settings equal the current ones."""
+    return saved == current
 
 
 def scan_vp(langs: list[str] | None = None, families: list[str] | None = None,
@@ -341,10 +315,6 @@ def build_lang_config(stats: dict, scan_cfg: dict) -> dict[str, dict[str, dict]]
                 "yes": c["yes"], "no": c["no"],
                 "total": total,
             }
-            # values = entry["lang_values"].get(lang)
-            # if values:
-            #     lang_entries[lang]["head_values"], lang_entries[lang]["chance_adjusted"] = agreement_diagnostics(
-            #         values["head"], values["child"], c["yes"], c["no"])
         if lang_entries:
             config[key] = lang_entries
     return config

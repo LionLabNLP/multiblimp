@@ -1,4 +1,7 @@
-cd ./ud-treebanks-v2.18
+# Usage: download_afrisud.sh [path/to/ud-treebanks-vX.Y]  (default: the release named in UD_VERSION)
+cd "$(dirname "$0")"
+UD_DIR="${1:-ud-treebanks-v$(tr -d '[:space:]' < UD_VERSION)}"
+cd "${UD_DIR%/}"
 urls=(
   "https://gmd-universal.grew.fr/tgz/UD_Hausa-AfriSUD@conv.tgz"
   "https://gmd-universal.grew.fr/tgz/UD_isiXhosa-AfriSUD@conv.tgz"

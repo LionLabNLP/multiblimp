@@ -28,4 +28,7 @@ output*/
 treebank_features*/
 /report*/
 recache_run.log
-docs/
+docs/*
+!docs/lookup_tables_walkthrough.md
+.Rhistory
+deprel_entropy.csv

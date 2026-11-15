@@ -304,7 +304,7 @@ def _agreement_row_stats(df, target_col, leaf_threshold, pairs_dir, lang_name, d
     n_raw: rows with target_col's positive label (candidates for a feature
         swap), labelled "yes" in both SVA and NPA, over the language's whole data (its label
         distribution file in data_dir, before the train/test split); df's own count without one.
-    n_keep: of those, how many pass the leaf_top1_acc > leaf_threshold and leaf_decision filter
+    n_keep: of those, how many pass the leaf_top1_acc >= leaf_threshold and leaf_decision filter
         create_pairs uses to pick which rows to re-inflect (held-out rows included): the pairs'
         meta.json num_rows_keep, else recounted on df (pairs written before it existed). Trivial languages (no fitted
         tree, hence no leaf_top1_acc/leaf_decision columns) are single-class by
@@ -335,14 +335,7 @@ def _agreement_row_stats(df, target_col, leaf_threshold, pairs_dir, lang_name, d
     if "num_rows_keep" in meta:
         n_keep = int(meta["num_rows_keep"])
     elif "leaf_top1_acc" in df.columns and "leaf_decision" in df.columns:
-        # An older cache's meta.json can store {leaf_id: that
-        # leaf's own cutoff} instead of one number; JSON round-trips the keys
-        # as strings, so normalize back to int before mapping onto leaf_id.
-        row_threshold = (
-            df["leaf_id"].map({int(k): v for k, v in leaf_threshold.items()})
-            if isinstance(leaf_threshold, dict) else leaf_threshold
-        )
-        keep = (df["leaf_top1_acc"] > row_threshold) & df["leaf_decision"]
+        keep = (df["leaf_top1_acc"] >= leaf_threshold) & df["leaf_decision"]
         n_keep = int((keep & is_yes).sum())
     else:
         n_keep = n_raw

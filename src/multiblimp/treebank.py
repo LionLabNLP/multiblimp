@@ -15,7 +15,8 @@ from .config import RESOURCE_DIR, UD_PATH
 from .excluded_treebanks import is_treebank_excluded, is_treebank_row_excluded, split_treebank_folder
 from .script_log import append_log
 from .validation import dropped_sentence_lines, sentence_start_lines
-from .languages import HIERO_SIGN, add_langs, sent_id_prefix_keep
+from .languages import FLATTEN_SPAN_LANGS, HIEROGLYPH_LANGS, hiero_signs, sent_id_prefix_keep
+from .span_flatten import flatten_spans
 
 _SENT_ID_PREFIX_RE = re.compile(r"^[a-z]+")
 
@@ -54,7 +55,7 @@ def to_hieroglyphs(treebank):
                 forms.append(tok["form"])
                 continue
             hiero = (tok["misc"] or {}).get("Hiero") or ""
-            signs = "".join(HIERO_SIGN.findall(hiero))
+            signs = hiero_signs(hiero)
             if not signs or "UC_No" in hiero:
                 break
             forms.append(signs)
@@ -326,7 +327,6 @@ class Treebank:
         verbose: bool = False,
         load_from_pickle: bool = False,
         resource_dir: str | None = None,
-        test_files_only: bool = False,
         use_selected_treebanks: bool = True,
         remove_typo: bool = True,
         pickle_path: str = "ud/ud_pickles",
@@ -353,12 +353,7 @@ class Treebank:
                 return treebank
             append_log("missing_pickles", f"{lang}\t{pickle_path}")
 
-        match_on = f"UD_{lang}-*" if lang not in add_langs else add_langs[lang]
-        if test_files_only:
-            treebank_glob = os.path.join(UD_PATH, f"{match_on}/*test*.conllu")
-        else:
-            treebank_glob = os.path.join(UD_PATH, f"{match_on}/*.conllu")
-        treebank_glob = os.path.join(resource_dir, treebank_glob)
+        treebank_glob = os.path.join(resource_dir, UD_PATH, f"UD_{lang}-*/*.conllu")
         treebank_paths = glob(treebank_glob)
 
         if only_excluded:
@@ -403,10 +398,13 @@ class Treebank:
         if remove_typo:
             treebank = [tree for tree in treebank if not tree_is_malformed(tree)]
 
-        for tree in treebank:
-            remove_items = [tok for tok in tree if isinstance(tok["id"], tuple)]
-            for item in remove_items:
-                tree.remove(item)
+        if lang in FLATTEN_SPAN_LANGS:
+            treebank = [flatten_spans(tree) for tree in treebank]
+        else:
+            for tree in treebank:
+                remove_items = [tok for tok in tree if isinstance(tok["id"], tuple)]
+                for item in remove_items:
+                    tree.remove(item)
 
         # Some noisier treebanks (e.g. Runyankore) have real tokens with a
         # missing HEAD ("_", parsed as None) rather than a proper int --
@@ -428,7 +426,7 @@ class Treebank:
                     item["form"] = transliterate(item["form"], IAST, DEVANAGARI)
                     item["lemma"] = transliterate(item["lemma"], IAST, DEVANAGARI)
 
-        if lang == "Egyptian_Hieroglyphs":
+        if lang in HIEROGLYPH_LANGS:
             treebank = to_hieroglyphs(treebank)
 
         if lang == "Ancient_Hebrew":

@@ -16,6 +16,7 @@ from typing import Dict, Optional
 
 import numpy as np
 import pandas as pd
+import pyarrow.parquet as pq
 from pandas.api.types import union_categoricals
 from unidecode import unidecode
 
@@ -284,7 +285,7 @@ def _ud_value(feat: str, code) -> Optional[str]:
 def _ud_table_values(langcode: str, col: str) -> set:
     """The values of one feature in the language's UD-derived table."""
     path = table_path(langcode)
-    if not os.path.isfile(path) or col not in pd.read_parquet(path).columns:
+    if not os.path.isfile(path) or col not in pq.read_schema(path).names:
         return set()
     cells = pd.read_parquet(path, columns=[col])[col].dropna().unique()
     return {v for cell in cells for v in str(cell).split(",")}

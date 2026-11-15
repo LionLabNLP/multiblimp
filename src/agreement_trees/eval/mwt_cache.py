@@ -6,6 +6,9 @@ raw CoNLL-U. A language's cache holds, for its non-excluded treebanks:
   positions    {UPOS: {(position in the span, span length)}}
   patterns     {component forms: {component UPOS tuple: count}}
   sentences    {(treebank file, line of "# sent_id"): (text, unit rows)} for sentences with a multiword token
+  components   {component form: (uses as an ordinary token, uses as a component of a multi-component span)}, which
+               tells bound components (Amharic subject markers, Turkish suffixes) from free ones (German dem):
+               MwtStats.is_bound
 and a second file with the counts of plain word sequences, filled on demand (MwtStats.counts) and kept.
 A cache is rebuilt when the treebank files, their selection (exclusion list) or CACHE_VERSION change.
 """
@@ -15,11 +18,17 @@ import pickle
 import sys
 from pathlib import Path
 
-from agreement_trees.eval.conllu_spans import iter_sentences, norm
+from agreement_trees.eval.conllu_spans import iter_sentences, language_of, norm
 from multiblimp.config import RESOURCE_DIR, UD_PATH
 from multiblimp.excluded_treebanks import is_treebank_excluded
+from multiblimp.languages import HIEROGLYPH_LANGS
 
-CACHE_VERSION = 2
+CACHE_VERSION = 3
+# a component is bound when, over its uses, at most this share is as an ordinary (non-span) token; components seen
+# fewer than BOUND_MIN_SEEN times are not judged. Free words that are mostly contracted (German dem 30%, Portuguese a
+# 48%) stay above the share, bound ones (Amharic ኧ 0%, Turkish dı 1%, Arabic و 7%) below it.
+BOUND_MAX_PLAIN_SHARE = 0.2
+BOUND_MIN_SEEN = 5
 MWT_DIR = os.path.join(RESOURCE_DIR, "ud_mwt")
 UD_DIR = os.path.join(RESOURCE_DIR, UD_PATH)
 
@@ -32,8 +41,11 @@ def treebank_files(lang: str, ud_dir: str = UD_DIR, only_included: bool = True) 
 
 
 def _stamp(files: list[Path], ud_dir: str) -> dict:
-    return {"version": CACHE_VERSION, "ud": os.path.basename(os.path.normpath(ud_dir)),
-            "files": [(f"{f.parent.name}/{f.name}", f.stat().st_size) for f in files]}
+    stamp = {"version": CACHE_VERSION, "ud": os.path.basename(os.path.normpath(ud_dir)),
+             "files": [(f"{f.parent.name}/{f.name}", f.stat().st_size) for f in files]}
+    if any(language_of(f"{f.parent.name}/") in HIEROGLYPH_LANGS for f in files):
+        stamp["hieroglyphs"] = True
+    return stamp
 
 
 def _write(path: str, payload) -> None:
@@ -61,8 +73,16 @@ class MwtStats:
         self.positions = data["positions"]
         self.patterns = data["patterns"]
         self.sentences = data["sentences"]
+        self.components = data["components"]
         self._counts_path, self._stamp = counts_path, stamp
         self._counts = (_read(counts_path, stamp) or {}) if counts_path else {}
+
+    def is_bound(self, component: str) -> bool:
+        """Whether the (normalised) component almost never stands as an ordinary token, so that writing it as a
+        separate word is not how the language spells it. Evidence, not proof: see BOUND_MAX_PLAIN_SHARE."""
+        plain, span = self.components.get(component, (0, 0))
+        seen = plain + span
+        return seen >= BOUND_MIN_SEEN and plain / seen < BOUND_MAX_PLAIN_SHARE
 
     @property
     def has_mwt(self) -> bool:
@@ -95,9 +115,14 @@ def _build(files: list[Path]) -> dict:
     patterns = collections.defaultdict(collections.Counter)
     positions = collections.defaultdict(set)
     sentences = {}
+    plain = collections.Counter()
+    span_uses = collections.Counter()
     for path in files:
         rel = f"{path.parent.name}/{path.name}"
         for start, text, units in iter_sentences(path):
+            for u in units:
+                if not u.mwt:
+                    plain[norm(u.form)] += 1
             if not any(u.mwt for u in units):
                 continue
             sentences[(rel, start)] = (text, tuple(
@@ -106,13 +131,15 @@ def _build(files: list[Path]) -> dict:
             for u in units:
                 if u.mwt and len(u.comps) > 1:
                     key = tuple(norm(c) for c in u.comps)
+                    span_uses.update(key)
                     contracted[key][norm(u.form)] += 1
                     patterns[key][tuple(u.comp_upos)] += 1
                     for j, upos in enumerate(u.comp_upos):
                         positions[upos].add((j, len(u.comps)))
     return {"contracted": {k: dict(v) for k, v in contracted.items()},
             "patterns": {k: dict(v) for k, v in patterns.items()},
-            "positions": dict(positions), "sentences": sentences}
+            "positions": dict(positions), "sentences": sentences,
+            "components": {c: (plain[c], n) for c, n in span_uses.items()}}
 
 
 _LOADED: dict = {}

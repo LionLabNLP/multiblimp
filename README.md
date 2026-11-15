@@ -24,12 +24,13 @@ predict whether a subject, object, indirect object or noun-phrase dependent agre
    bucket. A language whose current pairs, page and per-treebank trees exist is skipped; `--redo_pairs` rebuilds the pairs and the pooled
    page from the existing fits, and pairs written by an older version (`meta.json`'s `pairs_version`) are rebuilt without it.
 4. **Overview** (`scripts/overview/run_all.sh`): per-condition indexes (`generate_html_indexes.py`), `build_stats.py` and the dataset overview page `html/data.html`.
-5. **Benchmark** (`scripts/benchmark/`): `build_benchmark.py` samples up to 1000 pairs per language across all its conditions, balanced on the markers
+5. **Benchmark** (`scripts/benchmark/`): `build_benchmark.py` samples up to 2000 pairs per language across all its conditions, balanced on the markers
    listed in `src/multiblimp/downsample.py` (input `output/minimal_pairs`, the pair directories written by the fits),
-   into `output/benchmark/` with every column plus `pair_id` and `sen_hash`, and writes `manifest.json` and `stats.json`;
+   into `output/benchmark/` as `<Language>.parquet` (sentences, phenomenon, balance markers), `features/<Language>.parquet` (every column) and
+   `meta/<Language>.json`, all keyed by `pair_id`, and writes `manifest.json` and `stats.json`;
    `render_page.py` turns those into `html/index.html` (the main page; the dataset overview moved to `html/data.html`)
    (`validate_surface.py` only backfills the written forms into pair directories built before pair creation wrote them);
-   `eval_model.py` scores them with a HuggingFace model through lm-eval and writes the accuracy per language x condition to `output/model_results/`.
+   `eval_model.py` scores them with a HuggingFace model through lm-eval and writes `scores.parquet` and `accuracy.csv` (accuracy per language x phenomenon, with macro rows) to `output/model_results/scores/<model>__<dtype>/`, both overwritten on each run (run logs go to `output/model_results/logs/`).
 
 Settings are in `resources/agreement_config.json` (modes, languages, workers, scan thresholds, tree and second-chance settings) and
 `resources/data_prep_config.json`. `MULTIBLIMP_RUN_DIR` redirects every generated artifact (`output/`, `html/`, `treebank_features/`) into another
@@ -43,7 +44,7 @@ Layout:
 | `src/multiblimp/` | UD and UniMorph layer: treebank loading, `ud_lexicon`, `um2ud`, `ud_inflector`, `downsample` |
 | `src/agreement_trees/` | `extract/` (treebank -> instances, cache sweep), `pairs/` (minimal pairs), `fit/` (trees, scan), `report/` (HTML pages, overview stats and indexes), `eval/` (benchmark build, surface forms, scoring), `vp/` and `npa/` (verb and noun-phrase pipelines), `aux/` |
 | `scripts/` | thin commands over `src`: `data_caching/` (resource prep), `agreement_trees/` (extraction, scan, fit; `supplementary/` holds one-off reports), `overview/`, `benchmark/` |
-| `docs/` | `lookup_tables_walkthrough.md` (tables and reinflection), `review_log.md` (pipeline review), `legacy_deletion_plan.md` |
+| `docs/` | `lookup_tables_walkthrough.md` (tables and reinflection) |
 
 ## Citation
 ```

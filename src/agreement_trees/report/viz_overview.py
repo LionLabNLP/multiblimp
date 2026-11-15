@@ -20,7 +20,7 @@ def _extract_plot_data(html_content: str) -> dict | None:
     """The per-language scatter points from a deprel index page: its "plotData = [...]" assignment (the
     diagnostics page also has a richer LANGUAGES blob, which must not match). [.*?], not [.+?]: a deprel with
     no processed language renders "plotData = []" and must still show as "no data yet". Returns {"acc": [...]},
-    or None for a page that predates the accuracy switch (entropy units: regenerate it).
+    or None for a page without plotData (a page that predates the accuracy switch has none): the caller skips it.
     """
     match = re.search(r"plotData\s*=\s*(\[.*?\])\s*;", html_content, flags=re.S)
     if not match:

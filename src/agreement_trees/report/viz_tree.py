@@ -9,8 +9,7 @@ import pandas as pd
 from matplotlib.colors import to_hex
 
 from agreement_trees.fit.entropy import (
-    order_entropy, smoothed_accuracy, calculate_base_entropy, calculate_tree_entropy,
-    calculate_base_accuracy, calculate_tree_accuracy,
+    smoothed_accuracy, calculate_base_accuracy, calculate_tree_accuracy,
 )
 from agreement_trees.utils import build_grew_link, split_pairwise_predictor, is_agreement_predictor
 from agreement_trees.extract.process_treebank import resolve_layered_head_key
@@ -704,7 +703,6 @@ def _finalize_tree_html(
         ]
         n_right = max(dist_i_fitted)
         n_wrong = sum(dist_i_fitted) - n_right
-        binary_entropy = order_entropy(n_right, n_wrong)
         node_acc = smoothed_accuracy(n_right, n_right + n_wrong)
         node_color = interpolate_color(node_color, "#ffffff", relative_entropy * 0.72)
 
@@ -735,7 +733,7 @@ def _finalize_tree_html(
             "parent": int(parent_map[i]) if i in parent_map else None,
             "rule": rule_map.get(i, None),
             "n": int(n_samples[i]),
-            "H": float(binary_entropy),
+            # "H": float(binary_entropy),   # LEGACY, commented out (entropy pages)
             "acc": float(node_acc),
             # "rule" above is the incoming branch condition; "own_rule" is this node's own split
             "own_rule": rule if feature[i] != -2 else None,
@@ -839,9 +837,9 @@ def tree2html(
     correct_swaps_df: create_pairs' "correct_swaps" bucket, joined by leaf_id into the pairs section.
     keep_all: every leaf counts as kept (the root card's one node: no tree, so every row is kept).
     """
-    if leaf_threshold is not None and not isinstance(leaf_threshold, dict):
+    if leaf_threshold is not None:
         meta = dict(meta or {})
-        meta["Keep threshold"] = f"leaf accuracy &gt; {leaf_threshold:g}"
+        meta["Keep threshold"] = f"leaf accuracy &ge; {leaf_threshold:g}"
 
     if not full_tree_html:
         try:
@@ -919,7 +917,8 @@ def tree2html(
     if excluded:
         meta["excludedClasses"] = excluded
 
-    meta["measure"] = "accuracy" if is_agreement_predictor(predictor_var) else "entropy"
+    meta["measure"] = "accuracy"
+    # LEGACY, commented out: meta["measure"] = "accuracy" if is_agreement_predictor(predictor_var) else "entropy"
     accuracy = pipeline_model.score(dt_df, dt_df[predictor_var])
     meta["accuracy"] = f"{accuracy * 100:.1f}%"
     # Held-out accuracy of this same tree, from the test split it was fit with
@@ -930,16 +929,8 @@ def tree2html(
         meta["testAccuracy"] = f"{test_acc * 100:.1f}%"
         meta["testN"] = int(len(test_eval))
 
-    if meta["measure"] == "accuracy":
-        meta["root accuracy"] = f"{calculate_base_accuracy(dt_df, predictor_var) * 100:.1f}%"
-        meta["train accuracy (smoothed)"] = f"{calculate_tree_accuracy(pipeline_model, dt_df, predictor_var) * 100:.1f}%"
-    else:
-        base_ent = calculate_base_entropy(dt_df, predictor_var, binary=True)
-        reduced_ent = calculate_tree_entropy(
-            pipeline_model, dt_df, predictor_var, binary=True
-        )
-        meta["base entropy"] = f"{base_ent:.3f}"
-        meta["reduced entropy"] = f"{reduced_ent:.3f}"
+    meta["root accuracy"] = f"{calculate_base_accuracy(dt_df, predictor_var) * 100:.1f}%"
+    meta["train accuracy (smoothed)"] = f"{calculate_tree_accuracy(pipeline_model, dt_df, predictor_var) * 100:.1f}%"
 
     tree_depth = clf.get_depth()
     n_leaves = clf.get_n_leaves()

@@ -16,15 +16,14 @@ _repo_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__f
 sys.path.append(os.path.join(_repo_root, "src"))
 
 from agreement_trees.eval.surface import run_validation
-from multiblimp.config import OUTPUT_DIAGNOSTICS_DIR, OUTPUT_MINIMAL_PAIRS_DIR, RESOURCE_DIR, UD_PATH
+from multiblimp.config import OUTPUT_DIAGNOSTICS_DIR, OUTPUT_MINIMAL_PAIRS_DIR
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--pairs_dir", default=OUTPUT_MINIMAL_PAIRS_DIR)
-    parser.add_argument("--ud_dir", default=os.path.join(RESOURCE_DIR, UD_PATH))
     parser.add_argument("--langs", nargs="+", default=None)
     parser.add_argument("--conds", nargs="+", default=None)
     parser.add_argument("--report", default=os.path.join(OUTPUT_DIAGNOSTICS_DIR, "mwt", "surface_report.csv"))
     args = parser.parse_args()
 
-    run_validation(args.pairs_dir, args.ud_dir, args.langs, args.conds, args.report)
+    run_validation(args.pairs_dir, args.langs, args.conds, args.report)

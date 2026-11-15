@@ -136,7 +136,6 @@ def cast_attractor_cols(df: pd.DataFrame) -> pd.DataFrame:
 @dataclass
 class TreeMaps:
     child2root: dict
-    head2child_ids: dict
     head2child_deprels: dict
     head2child_lemmas: dict
     head2left_deprels: dict
@@ -228,13 +227,11 @@ def merge_subj_layered_feats(treebank) -> None:
 def get_all_feats(treebank, min_freq=0.005):
     all_feats = Counter()
     all_deprel = set()
-    all_lemma_freqs = Counter()
     all_pos = set()
     num_tokens = 0
 
     for tree in treebank:
         for token in tree:
-            all_lemma_freqs[token["lemma"]] += 1
             for feat in token["feats"] or {}:
                 all_feats[feat] += 1
 
@@ -246,7 +243,7 @@ def get_all_feats(treebank, min_freq=0.005):
         {x: c / num_tokens for x, c in all_feats.items() if (c / num_tokens) > min_freq}
     )
 
-    return set(all_feats), all_lemma_freqs, all_deprel, all_pos
+    return set(all_feats), all_deprel, all_pos
 
 
 def expand_anno(node, morph_feats, um_split):
@@ -319,7 +316,10 @@ def _readings_overlap(a, b) -> bool:
 
 def fill_node_feats(node, um_data, ud_data) -> None:
     """Missing annotation is filled from the UniMorph-derived table first, then from the UD-derived one
-    (which only gets the features the first pass left open). Mutates node["feats"]."""
+    (which only gets the features the first pass left open). Mutates node["feats"]. A node marked no_fill (a
+    flattened word the treebank annotation cannot describe, multiblimp.span_flatten) keeps what it has."""
+    if node.get("no_fill"):
+        return
     if isinstance(um_data, UDTable):
         um_slice = um_data.get(node["upos"])
         if um_slice is not None and not all(node["feats"].get(k, False) for k in um_slice.ud_features):
@@ -360,7 +360,7 @@ def extract_node_features(
     features[f"{prefix}_deprel"] = node["deprel"]
     features[f"{prefix}_pos"] = node["upos"]
     features[f"{prefix}_idx"] = node["id"]
-    features[f"{prefix}_idx_line"] = conllu_token_line(tree, node["id"])
+    features[f"{prefix}_idx_line"] = conllu_token_line(tree, node.get("orig_id", node["id"]))   # orig_id: a flattened span
     if INCLUDE_XPOS if include_xpos is None else include_xpos:
         features[f"{prefix}_xpos"] = node.get("xpos")
 
@@ -572,7 +572,6 @@ def _build_tree_maps(tree) -> TreeMaps:
     """Build per-tree index structures needed by extract_node_features."""
     child2head = {}
     child2root = defaultdict(set)
-    head2child_ids = defaultdict(list)
     head2child_deprels = defaultdict(list)
     head2child_pos = defaultdict(set)
     head2child_lemmas = defaultdict(list)
@@ -582,7 +581,6 @@ def _build_tree_maps(tree) -> TreeMaps:
 
     for child in tree:
         child2head[child["id"]] = child["head"]
-        head2child_ids[child["head"]].append(child["id"])
         head2child_deprels[child["head"]].append(child["deprel"])
         head2child_pos[child["head"]].add(child["upos"])
         head2child_lemmas[child["head"]].append(child["lemma"])
@@ -604,7 +602,6 @@ def _build_tree_maps(tree) -> TreeMaps:
 
     return TreeMaps(
         child2root=child2root,
-        head2child_ids=head2child_ids,
         head2child_deprels=head2child_deprels,
         head2child_lemmas=head2child_lemmas,
         head2left_deprels=head2left_deprels,
@@ -741,7 +738,7 @@ def extract_instances(
 
     tree_maps = _build_tree_maps(tree)
 
-    all_feats, _, all_deprel, all_pos = tree_metadata
+    all_feats, all_deprel, all_pos = tree_metadata
 
     # Extract sentence-level features (core_args, in_question, etc.)
     sen_features = extract_sen_features(tree)
@@ -908,12 +905,8 @@ def extract_instances(
                         agreement_label = "no"  # both set but disagreement
                     else:
                         agreement_label = "+-"  # child feat not set
-                elif head_val == None:
-                    agreement_label = "+-"  # head feat notset
                 else:
-                    raise ValueError(
-                        "Value combination inadmissable"
-                    )  # should not occur
+                    agreement_label = "+-"  # head feat notset
 
                 instance[f"head_{deprel}_{target_feature}_agreement"] = agreement_label
                 attractor_refs[target_feature] = child_val if child_val is not None else head_val
@@ -1000,8 +993,7 @@ def extract_features(
 
     """
     merge_subj_layered_feats(treebank)
-    all_feats, all_lemma_freqs, all_deprel, all_pos = get_all_feats(treebank)
-    tree_metadata = (all_feats, all_lemma_freqs, all_deprel, all_pos)
+    tree_metadata = get_all_feats(treebank)
 
     dfs = []
     batch = []

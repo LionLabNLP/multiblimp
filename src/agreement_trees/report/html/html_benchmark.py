@@ -12,7 +12,7 @@ import numpy as np
 import pandas as pd
 import pyarrow.parquet as pq
 
-from multiblimp.downsample import condition_roles
+from multiblimp.downsample import ATTRACTOR_CLASSES, condition_roles
 from agreement_trees.taxonomy import (
     FEATURE_SUFFIXES, GROUP_PREFIXES, NPA_FEATURE_NAMES, OTHER_VERB_FORMS, other_verb_form, NPA_ROLE_ORDER, NPA_ROLE_PROSE, classify_flat_condition, npa_subgroup_label,
 )
@@ -22,8 +22,9 @@ TREES_HREF = "decision_trees/index.html"
 
 
 ARG_ORDER = ["Subject", "Object", "Indirect Object", "Noun Phrase", "Other"]
-LEGACY_COMBINED = "Other verb forms (combined)"   # tables from before the per-VerbForm families (sxNa, sxCase, ...)
-HEAD_ORDER = ["Verb", "Participle", "Auxiliary", *(label for _, label in OTHER_VERB_FORMS.values()), LEGACY_COMBINED]
+# LEGACY, commented out: tables from before the per-VerbForm families (sxNa, sxCase, ...); no current build writes them
+# LEGACY_COMBINED = "Other verb forms (combined)"
+HEAD_ORDER = ["Verb", "Participle", "Auxiliary", *(label for _, label in OTHER_VERB_FORMS.values())]   # , LEGACY_COMBINED]
 FEATURE_ORDER = ["Number", "Gender", "Person", "Case"]
 NPA_FEATURE_RANK = {"N": 0, "G": 1, "P": 2, "C": 3}
 
@@ -32,11 +33,17 @@ def _rank(order: list, value: str) -> int:
     return order.index(value) if value in order else len(order)
 
 
+def attractor_label(row) -> str:
+    """The attractor classes of a pair for the pair browser: "none", or its true classes joined by "+" (empty without any)."""
+    classes = [name for name in ("congruent", "weakly_congruent", "incongruent") if row.get(f"attractor_{name}")]
+    return "+".join(classes) if classes else ("none" if row.get("attractor_none") else "")
+
+
 def condition_info(cond: str) -> dict:
     """Header parts of a benchmark condition (a verb family or a noun-phrase role pair): group and label for the
     tables, tree_dir for the links, and the three header tiers category / head / feature with a sort key."""
-    form = other_verb_form(cond) or (
-        (LEGACY_COMBINED, FEATURE_SUFFIXES.get(cond[2:], cond[2:])) if cond.startswith("sx") and cond[2:3].isupper() else None)
+    form = other_verb_form(cond)
+    # LEGACY, commented out: or ((LEGACY_COMBINED, FEATURE_SUFFIXES.get(cond[2:], cond[2:])) if cond.startswith("sx") and cond[2:3].isupper() else None)
     if form:
         head, feature = form
         fixed = feature in FEATURE_SUFFIXES.values()   # like svCase, a Case family is an ad-hoc candidate and sits under "Other"
@@ -132,10 +139,10 @@ def write_pair_files(bench_dir: str, out_dir: str) -> dict:
     pair browser of the page: {"language", "conditions": {cond: {label, dir, roles, n}}, "pairs": [...]}. Pair keys
     are short: c condition, id pair_id, s/w the sentence and its swapped version, fv original -> swap value,
     uf swapped feature, sk swapped role, tb treebank, sid sent_id, sc second chance, ss written-form status,
-    at attractor class, d distance in tokens, la/lb the two lemmas, ci the controller's word position(s) in s. Returns {language: number of pairs}."""
+    at attractor classes (the true ones joined by "+", or none), d distance in tokens, la/lb the two lemmas, ci the controller's word position(s) in s. Returns {language: number of pairs}."""
     os.makedirs(out_dir, exist_ok=True)
     columns = ["pair_id", "phenomenon", "deprel", "treebank", "sent_id", "sen_tokens", "sen", "wrong_sen", "feature_vals",
-               "swap_ufeat", "swap_kind", "second_chance", "surface_status", "attractors", "idx_a", "idx_b", "lemma_a", "lemma_b"]
+               "swap_ufeat", "swap_kind", "second_chance", "surface_status", *[f"attractor_{k}" for k in ATTRACTOR_CLASSES], "idx_a", "idx_b", "lemma_a", "lemma_b"]
     counts = {}
     for path in sorted(Path(bench_dir).glob("*.parquet")):
         lang = path.stem
@@ -156,7 +163,7 @@ def write_pair_files(bench_dir: str, out_dir: str) -> dict:
                     "c": cond, "id": row["pair_id"], "s": row["sen"], "w": row["wrong_sen"], "fv": row["feature_vals"],
                     "uf": row.get("swap_ufeat"), "sk": row.get("swap_kind"), "tb": row["treebank"], "sid": str(row["sent_id"]),
                     "sc": int(bool(row.get("second_chance"))), "ss": row.get("surface_status"),
-                    "at": row.get("attractors"), "d": None if pd.isna(gap) else int(gap),
+                    "at": attractor_label(row), "d": None if pd.isna(gap) else int(gap),
                     "la": row.get("lemma_a"), "lb": row.get("lemma_b"), "ci": ci,
                 })
         clean = lambda v: None if (v is None or (isinstance(v, float) and np.isnan(v))) else v
@@ -370,11 +377,14 @@ table.cols td:first-child { white-space:nowrap; font-family:ui-monospace,monospa
     <tr><td>feature_vals</td><td>Original and swapped value, such as <code>Sing -&gt; Plur</code>; <code>|</code> lists values the swapped form also spells.</td></tr>
     <tr><td>swap_kind, swap_idx, swap_&lt;kind&gt;</td><td>Which token was reinflected, its position in the sentence, and the new form.</td></tr>
     <tr><td>leaf_id, second_chance</td><td>The decision-tree leaf the pair stems from, and whether its fit was accepted at the laxer second-chance accuracy.</td></tr>
-    <tr><td>surface_status</td><td>How the written form was built (plain, contracted, merged, uncontracted, …). uncontracted_unattested marks a guessed form (components joined by spaces, never seen in the treebanks); such pairs are drawn only when a language has nothing else.</td></tr>
+    <tr><td>surface_status</td><td>How the written form was built (plain, contracted, merged, uncontracted, …). uncontracted_unattested marks a guessed form (components joined by spaces, never seen in the treebanks).</td></tr>
+    <tr><td>spacing_artifact</td><td>True when the swapped sentence writes the components of a multiword token as separate words although one of them is a bound morpheme that the language never writes alone (Amharic, Turkish, Arabic clitics). The two sentences then differ in spacing as well as in the feature, so such pairs are drawn only when a language has nothing else, and results can be reported with and without them. German <i>in des</i> is no artifact: its parts are free words. The Languages table gives the share per language.</td></tr>
+    <tr><td>wordform_unattested</td><td>True for the pairs whose written form is such a guess (<code>surface_status</code> = uncontracted_unattested). A tag for information only, as many of these are simply ungrammatical wrong sentences (German <i>in des</i>); the Languages table gives the share of each language's benchmark (the share before downsampling is on the data page).</td></tr>
+    <tr><td>attractor_none, attractor_congruent, attractor_weakly_congruent, attractor_incongruent</td><td>Binary classes for the tokens between the two that carry the feature, against the controller's value: none, or at least one fully congruent, weakly congruent (the readings only overlap) or incongruent one. A pair can be in several; a pair whose counts are missing (an old extraction cache) is in none.</td></tr>
     <tr><td>alt_phenomena</td><td>Other phenomena in which the same sentence pair was found; the pair is kept only under the rarest of them.</td></tr>
     <tr><td>treebank, sent_id</td><td>Where the sentence comes from.</td></tr>
   </tbody></table></div>
-  <p class="small"><code>&lt;Language&gt;.parquet</code> holds these columns plus the attractor flags, the lemmas, POS tags, order and distance of both tokens (<code>idx_a</code>/<code>idx_b</code>, <code>word_order</code>, <code>distance</code>). <code>features/&lt;Language&gt;.parquet</code> holds the same pairs with every tree and feature column of the source tables.</p>
+  <p class="small"><code>&lt;Language&gt;.parquet</code> holds these columns plus the attractor counts, the lemmas, POS tags, order and distance of both tokens (<code>idx_a</code>/<code>idx_b</code>, <code>word_order</code>, <code>distance</code>). <code>features/&lt;Language&gt;.parquet</code> holds the same pairs with every tree and feature column of the source tables.</p>
   <pre class="code">import pandas as pd
 pairs = pd.read_parquet("output/benchmark/German.parquet")
 pairs[["sen", "wrong_sen", "feature_vals", "phenomenon"]].head()</pre>
@@ -408,14 +418,16 @@ const atCap = langNames.filter(l => !langs[l].kept_all).length;
 const relaxed = langNames.filter(l => langs[l].lemma_cap_count && langs[l].lemma_cap_count > Math.ceil(DATA.lemma_cap * DATA.n_items)).length;
 const ambiguousSel = sum(cells.map(c => c.ambiguous_selected || 0)), ambiguousAvail = sum(cells.map(c => c.ambiguous || 0));
 const secondSel = sum(cells.map(c => (c.selected_markers.second_chance || {})['True'] || 0));
+const unattestedSel = sum(langNames.map(l => langs[l].wordform_unattested || 0));
+const spacingSel = sum(langNames.map(l => langs[l].spacing_artifact || 0));
 
 $('intro').textContent = `The final benchmark: up to ${DATA.n_items} minimal pairs per language, drawn across all of the language's verb and noun-phrase agreement conditions. Built ${DATA.built}, seed ${DATA.seed}.`;
 const tiles = [[langNames.length, 'languages'], [condIds.length, 'conditions with pairs'], [fmt(totalSel), 'pairs in the benchmark'],
   [fmt(totalAvail), 'unique pairs available before downsampling'], [atCap, `languages sampled down to ${DATA.n_items}`],
-  [langNames.length - atCap, 'languages kept in full'], [pct(secondSel, totalSel), 'pairs from second-chance fits'], [pct(ambiguousSel, totalSel), 'pairs with an ambiguous swap value']];
+  [langNames.length - atCap, 'languages kept in full'], [pct(secondSel, totalSel), 'pairs from second-chance fits'], [pct(ambiguousSel, totalSel), 'pairs with an ambiguous swap value'], [pct(unattestedSel, totalSel), 'pairs with an unattested written form'], [pct(spacingSel, totalSel), 'pairs with a spacing artifact']];
 $('tiles').innerHTML = tiles.map(([v, l]) => `<div class="tile"><div class="v">${v}</div><div class="l">${l}</div></div>`).join('');
 const cl = DATA.cleaning || {};
-const cleaningText = cl.written ? `Of ${fmt(cl.written)} pairs written, ${fmt(cl.written - totalAvail)} are not unique: ${[
+const cleaningText = cl.written ? `Of ${fmt(cl.written)} pairs written, ${fmt(cl.written - totalAvail)} are removed: ${[
   [cl.identical, 'identical written sentences'],
   [cl.repeated_in_condition, 'repeats within a condition'],
   [cl.cross_condition, 'shared across conditions (kept in the rarest; see <code>alt_phenomena</code>)'],
@@ -429,7 +441,7 @@ $('methodList').innerHTML = [
   `A language with ${DATA.n_items} pairs or fewer keeps all of them; larger ones are sampled down to ${DATA.n_items}.`,
   `Pairs whose swap value is ambiguous (for example <code>Masc → Fem|Neut</code>, where the swapped form also spells another value) are used last, only once a condition has no other pair left, and count for each of their values in equal parts, so one such pair is never counted twice (${pct(ambiguousAvail, totalAvail)} of the available pairs, ${pct(ambiguousSel, totalSel)} of the benchmark).`,
   `The conditions share the sample equally: the condition with the fewest pairs so far goes next, so a small condition simply runs out and the others take over its share.`,
-  'Within a condition each pair is drawn with a weight that falls with every time its value is already in the sample (original → swap value, role order, attractor class, part of speech of both tokens, distance, sentence length, decision-tree leaf, treebank, both lemmas), so the sample flattens on all markers at once.',
+  'Within a condition each pair is drawn with a weight that falls with every time its value is already in the sample (original → swap value, role order, attractor classes, part of speech of both tokens, distance, sentence length, decision-tree leaf, treebank, both lemmas), so the sample flattens on all markers at once.',
   `A lemma may appear in at most ${(100 * DATA.lemma_cap).toFixed(0)}% of a language's sample (${capCount} of ${DATA.n_items}) and a sentence at most once; if the quota cannot be filled the lemma limit rises ${(100 * DATA.lemma_cap).toFixed(0)}% at a time` + (relaxed ? ` (${relaxed} languages needed it)` : '') + ', and only then may sentences repeat.',
   ...(DATA.min_pairs && Object.keys(DATA.left_out).length ? [`Languages with fewer than ${DATA.min_pairs} pairs in total are left out (${Object.keys(DATA.left_out).length}: ${Object.entries(DATA.left_out).map(([l, n]) => l.replace(/_/g, ' ') + ' ' + n).join(', ')}).`] : []),
   'Every column of the source tables is kept, including <code>second_chance</code> (fits accepted at the laxer second-chance accuracy), and each pair gets a stable <code>pair_id</code> and a <code>sen_hash</code> of its sentence.',
@@ -478,13 +490,16 @@ function makeTable(headId, bodyId, columns, rows, rowHtml, detailHtml) {
 }
 
 const langRows = langNames.map(l => ({ name: l, ...langs[l], cap: langs[l].kept_all ? 0 : langs[l].lemma_cap_count,
-  second: sum(cells.filter(c => c.lang === l).map(c => (c.selected_markers.second_chance || {})['True'] || 0)) }));
+  second: sum(cells.filter(c => c.lang === l).map(c => (c.selected_markers.second_chance || {})['True'] || 0)),
+  unattested: langs[l].selected ? 100 * (langs[l].wordform_unattested || 0) / langs[l].selected : 0,
+  spacing: langs[l].selected ? 100 * (langs[l].spacing_artifact || 0) / langs[l].selected : 0 }));
 const setLangFilter = makeTable('langHead', 'langTable', [
   { key: 'name', label: 'Language' }, { key: 'available', label: 'Available', num: 1 }, { key: 'selected', label: 'In benchmark', num: 1, sort: 1 },
   { key: 'conditions', label: 'Conditions', num: 1 }, { key: 'treebanks', label: 'Treebanks', num: 1 }, { key: 'head_lemmas', label: 'Head lemmas', num: 1 },
-  { key: 'child_lemmas', label: 'Child lemmas', num: 1 }, { key: 'cap', label: 'Lemma limit', num: 1 }, { key: 'second', label: '2nd chance', num: 1 }],
+  { key: 'child_lemmas', label: 'Child lemmas', num: 1 }, { key: 'cap', label: 'Lemma limit', num: 1 }, { key: 'second', label: '2nd chance', num: 1 },
+  { key: 'unattested', label: 'Unattested form', num: 1 }, { key: 'spacing', label: 'Spacing artifact', num: 1 }],
   langRows,
-  (r) => `<tr class="lang-row"><td>${esc(r.name.replace(/_/g, ' '))}</td><td class="num">${fmt(r.available)}</td><td class="num">${fmt(r.selected)}</td><td class="num">${r.conditions}</td><td class="num">${r.treebanks}</td><td class="num">${r.head_lemmas}</td><td class="num">${r.child_lemmas}</td><td class="num">${r.kept_all ? 'all kept' : r.cap}</td><td class="num">${r.second || ''}</td></tr>`,
+  (r) => `<tr class="lang-row"><td>${esc(r.name.replace(/_/g, ' '))}</td><td class="num">${fmt(r.available)}</td><td class="num">${fmt(r.selected)}</td><td class="num">${r.conditions}</td><td class="num">${r.treebanks}</td><td class="num">${r.head_lemmas}</td><td class="num">${r.child_lemmas}</td><td class="num">${r.kept_all ? 'all kept' : r.cap}</td><td class="num">${r.second || ''}</td><td class="num">${r.unattested.toFixed(1)}%</td><td class="num">${r.spacing.toFixed(1)}%</td></tr>`,
   (r) => { const mine = cells.filter(c => c.lang === r.name && c.selected).sort((a, b) => b.selected - a.selected);
     return `<div class="chips">` + mine.map(c => `<span class="chip" title="${esc(c.label)}">${esc(c.cond)} <b>${c.selected}</b></span>`).join('') + `</div>` +
       `<table><thead><tr><th>Condition</th><th class="num">Available</th><th class="num">In benchmark</th><th>Pairs and decision tree</th></tr></thead><tbody>` +
@@ -577,7 +592,7 @@ function wordDiff(a, b, ci) {
 }
 function pairCard(p) {
   const info = pairs.data.conditions[p.c] || {}; const [g, bad] = wordDiff(p.s || '', p.w || '', p.ci);
-  const chips = [p.sc ? '<span class="chip">second chance</span>' : '', p.at && p.at !== 'none' && p.at !== 'unknown' ? `<span class="chip">attractors: ${esc(p.at.replace('_', ' '))}</span>` : '',
+  const chips = [p.sc ? '<span class="chip">second chance</span>' : '', p.at && p.at !== 'none' ? `<span class="chip">attractors: ${esc(p.at.replace(/_/g, ' ').replace(/\+/g, ' + '))}</span>` : '',
     p.ss && !['plain', 'mwt_elsewhere'].includes(p.ss) ? `<span class="chip">written form: ${esc(p.ss)}</span>` : ''].join(' ');
   return `<div class="pair"><div class="meta"><b>${esc(info.label || p.c)}</b><span>${esc(p.fv || '')}${p.uf ? ' (' + esc(p.uf) + ')' : ''}</span><span>${esc(p.tb)} · ${esc(p.sid)}</span>${chips}</div>` +
     `<div class="sent good"><b class="tag">✓</b>${g}</div><div class="sent bad"><b class="tag">✗</b>${bad}</div>` +
@@ -635,17 +650,20 @@ const MARKERS = [
   ['feature_vals', 'Original → swap value', 'the feature value of the pair and the one it was swapped to; the ten most frequent, the rest grouped'],
   ['word_order', 'Role order', 'which of the pair\'s two tokens comes first (verb families: the verb or the subject; noun phrases: the first or second role in the pair name)'],
   ['swap_kind', 'Reinflected token', 'which token of the pair was reinflected (only noun-phrase pairs of two dependents, such as determiner and adjective, can go either way)'],
-  ['attractors', 'Attractors', 'tokens between the two that carry the feature, against the controller\'s value'],
+  ['attractors', 'Attractors', 'tokens between the two that carry the feature, against the controller\'s value; binary classes, so a pair can be in several (shares are of all pairs)'],
   ['pos_a', 'UPOS of the first role', 'the head for verb families'],
   ['pos_b', 'UPOS of the second role', 'the controller (subject) for verb families'],
   ['distance', 'Distance in tokens', 'between the two tokens'],
   ['length', 'Sentence length', 'characters of the written sentence'],
   ['treebank', 'Treebank', 'the largest ones; the rest are grouped'],
-  ['second_chance', 'Second-chance fit', 'True: the tree\'s leaf accuracy is 0.90–0.95 instead of at least 0.95'],
+  ['second_chance', 'Second-chance fit', 'True: the tree\'s leaf accuracy is 0.90 to below 0.95 instead of at least 0.95'],
   ['surface_status', 'Written form', 'how the sentence was turned into its written form (contractions and the like)'],
+  ['spacing_artifact', 'Spacing artifact', 'True: the swapped sentence writes the parts of a word as separate words although one is a bound morpheme (Amharic, Turkish, Arabic clitics); drawn only when nothing else is left'],
+  ['wordform_unattested', 'Written form unattested', 'True: the written form is a guess never seen in the treebanks (the swapped word sits in a contraction whose uncontracted sequence is not attested)'],
 ];
 const ROLE_LABELS = { a_first: 'first role first', b_first: 'second role first' };
-const ORDER = { distance: ['1', '2', '3-4', '5-8', '9+'], length: ['up to 40', '41-80', '81-140', '141-240', '241+'], attractors: ['none', 'congruent', 'weakly_congruent', 'incongruent', 'mixed', 'unknown'] };
+const ORDER = { distance: ['1', '2', '3-4', '5-8', '9+'], length: ['up to 40', '41-80', '81-140', '141-240', '241+'], attractors: ['none', 'congruent', 'weakly_congruent', 'incongruent'] };
+const MULTI_LABEL = new Set(['attractors']);
 $('selLang').innerHTML = '<option value="">All languages</option>' + langNames.map(l => `<option value="${esc(l)}">${esc(l.replace(/_/g, ' '))}</option>`).join('');
 const condOptions = [...condRows].sort((a, b) => a.name.localeCompare(b.name));
 $('selCond').innerHTML = '<option value="">All conditions</option>' + condOptions.map(r => `<option value="${esc(r.id)}">${esc(r.name)}</option>`).join('');
@@ -663,7 +681,7 @@ function drawMarkers() {
     const ranked = ORDER[key] ? ORDER[key].filter(n => names.includes(n)) : names.sort((a, b) => (avail[b] || 0) - (avail[a] || 0));
     let shown = ranked, rest = null;
     if ((key === 'treebank' || key === 'feature_vals') && ranked.length > 10) { shown = ranked.slice(0, 10); rest = ranked.slice(10); }
-    const aT = sum(Object.values(avail)), sT = sum(Object.values(sel));
+    const aT = MULTI_LABEL.has(key) ? sum(scope.map(c => c.available)) : sum(Object.values(avail)), sT = MULTI_LABEL.has(key) ? sum(scope.map(c => c.selected)) : sum(Object.values(sel));
     const lines = shown.map(n => [n, avail[n] || 0, sel[n] || 0]);
     if (rest) lines.push([`${rest.length} others`, sum(rest.map(n => avail[n] || 0)), sum(rest.map(n => sel[n] || 0))]);
     const top = Math.max(...lines.map(([, a, s]) => Math.max(aT ? a / aT : 0, sT ? s / sT : 0)), 1e-9);

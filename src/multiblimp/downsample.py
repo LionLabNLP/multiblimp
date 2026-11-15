@@ -8,17 +8,26 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
-N_ITEMS = 1000
+N_ITEMS = 2000
 LEMMA_CAP = 0.01
 MIN_PAIRS = 10   # a language with fewer pairs in total is left out of the benchmark
 DISTANCE_BINS = (1, 2, 4, 8)   # upper bounds of the bins 1, 2, 3-4, 5-8; larger distances share the last bin
 LENGTH_BINS = (40, 80, 140, 240)   # upper bounds, in characters of the written sentence, of the bins up to 40, 41-80, 81-140, 141-240; longer ones share the last bin
 
-ATTRACTOR_FLAGS = ("has_attractors", "only_has_fully_congruent", "only_has_weakly_congruent", "only_has_incongruent")
-CATEGORICAL = ("feature_vals", "word_order", "swap_kind", "attractors", "pos_a", "pos_b", "distance", "length", "leaf_id", "treebank")
+ATTRACTOR_COUNTS = ("attractors_congruent", "attractors_weakly_congruent", "attractors_incongruent")   # slot counts per bucket
+ATTRACTOR_CLASSES = ("none", "congruent", "weakly_congruent", "incongruent")   # columns attractor_<class>, each binary
+CATEGORICAL = ("feature_vals", "word_order", "swap_kind", "pos_a", "pos_b", "distance", "length", "leaf_id", "treebank")
 SINGLE_VALUED = tuple(name for name in CATEGORICAL if name not in ("feature_vals", "swap_kind"))   # weighted; the others are handled separately
 PASS_THROUGH = ("pair_key", "surface_status")
-UNCERTAIN_SURFACE = ("uncontracted_unattested",)   # written form guessed (components joined by spaces); drawn last
+UNCERTAIN_SURFACE = ("uncontracted_unattested",)   # written form a guess never seen in the treebanks (the wordform_unattested tag)
+
+
+def wordform_unattested(df: pd.DataFrame) -> pd.Series:
+    """Per pair, whether its written form is a guess never seen in the treebanks (surface_status in UNCERTAIN_SURFACE).
+    A tag for information only; sampling draws the pairs with a spacing artifact last."""
+    if "surface_status" not in df:
+        return pd.Series(False, index=df.index)
+    return df["surface_status"].isin(UNCERTAIN_SURFACE)
 NO_LEMMA = {"", "_"}
 
 
@@ -31,7 +40,9 @@ class Condition:
     values: np.ndarray = None   # (pairs, alternatives) codes of the swap values a pair counts for, padded with 0
     shares: np.ndarray = None   # their weights per pair: 1 split over the alternatives (0 for padding)
     ambiguous: np.ndarray = None
-    uncertain: np.ndarray = None   # pairs whose written form is a guess (surface_status in UNCERTAIN_SURFACE)
+    uncertain: np.ndarray = None   # pairs with a spacing artifact (components of a span written as separate words), drawn last
+    attractor_shares: np.ndarray = None   # (pairs, ATTRACTOR_CLASSES) weights: 1 split over the classes a pair belongs to
+    attractor_unclassed: np.ndarray = None   # pairs in no class: their attractor counts are missing (a stale extraction cache)
 
     def __len__(self):
         return len(self.features)
@@ -54,7 +65,7 @@ def value_alternatives(feature_vals: str) -> list:
 def balance_columns(roles: tuple) -> list:
     """The source columns balance_features reads (those a table lacks are skipped)."""
     wanted = ["feature_vals", "leaf_id", "treebank", "sen_str", "sent_id", "tree_idx", "second_chance", "swap_kind",
-              *ATTRACTOR_FLAGS, *PASS_THROUGH]
+              *ATTRACTOR_COUNTS, "spacing_artifact", *PASS_THROUGH]
     for role in roles:
         wanted += [f"{role}_idx", f"{role}_lemma", f"{role}_pos"]
     return wanted
@@ -81,14 +92,15 @@ def balance_features(df: pd.DataFrame, roles: tuple, name: str) -> pd.DataFrame:
     out["pos_b"] = column(f"{role_b}_pos", role_b).astype(str)
     out["leaf_id"] = column("leaf_id", -1).fillna(-1).astype(int).astype(str)
     out["treebank"] = column("treebank", "?").astype(str)
-    flag = {flag_name: column(flag_name, False).fillna(False).astype(bool) for flag_name in ATTRACTOR_FLAGS}
-    if "has_attractors" in df:
-        out["attractors"] = np.select(
-            [~flag["has_attractors"], flag["only_has_fully_congruent"], flag["only_has_weakly_congruent"],
-             flag["only_has_incongruent"]],
-            ["none", "congruent", "weakly_congruent", "incongruent"], default="mixed")
-    else:
-        out["attractors"] = "unknown"
+    # attractor classes, binary and not exclusive: a pair belongs to every class it has an attractor of, and to none when
+    # nothing carrying the feature sits between the two tokens. Missing counts (an extraction cache from before the
+    # attractor slots) leave a pair in no class.
+    counts = {name: pd.to_numeric(column(f"attractors_{name}"), errors="coerce").astype(float)
+              for name in ("congruent", "weakly_congruent", "incongruent")}
+    known = pd.concat(counts.values(), axis=1).notna().all(axis=1)
+    out["attractor_none"] = known & (sum(c.fillna(0) for c in counts.values()) == 0)
+    for name, count in counts.items():
+        out[f"attractor_{name}"] = known & (count > 0)
     for key, role in (("lemma_a", role_a), ("lemma_b", role_b)):
         lemma = column(f"{role}_lemma", "").fillna("").astype(str).str.lower()
         out[key] = lemma.where(~lemma.isin(NO_LEMMA), "")
@@ -102,6 +114,8 @@ def balance_features(df: pd.DataFrame, roles: tuple, name: str) -> pd.DataFrame:
     for col in PASS_THROUGH:
         if col in df:
             out[col] = df[col]
+    out["wordform_unattested"] = wordform_unattested(out)
+    out["spacing_artifact"] = column("spacing_artifact", False).fillna(False).astype(bool)
     return out
 
 
@@ -136,8 +150,10 @@ def encode(conditions: list):
         cond.codes["lemma_a"] = _codes(f["lemma_a"], lemmas)
         cond.codes["lemma_b"] = _codes(f["lemma_b"], lemmas)
         cond.codes["sentence"] = _codes(f["sentence"], sentences)
-        status = f["surface_status"] if "surface_status" in f else pd.Series("", index=f.index)
-        cond.uncertain = status.isin(UNCERTAIN_SURFACE).to_numpy()
+        cond.uncertain = f["spacing_artifact"].to_numpy(dtype=bool)
+        classes = np.column_stack([f[f"attractor_{name}"].to_numpy(dtype=float) for name in ATTRACTOR_CLASSES])
+        cond.attractor_shares = classes / np.maximum(classes.sum(axis=1, keepdims=True), 1)
+        cond.attractor_unclassed = classes.sum(axis=1) == 0
     return len(lemmas), len(sentences)
 
 
@@ -151,8 +167,9 @@ def select_pairs(conditions: list, n_items: int, lemma_cap: float, rng: np.rando
     eligible pair; they count fractionally for each of their values. Of the pairs left, only those whose reinflected
     token (swap_kind) has been picked least so far are drawn from, so the two sides of a noun-phrase pair of two
     dependents stay even as far as the data allows.
-    Pairs whose written form is a guess (UNCERTAIN_SURFACE) are drawn only when no condition has another eligible
-    pair. A lemma may appear in at most `lemma_cap` of the sample and a sentence once; if the quota cannot be
+    The attractor classes are binary and a pair can have several; it counts fractionally for each of its classes, like
+    an ambiguous swap value (a pair in no class, because its counts are missing, gets the average attractor penalty of the others). Pairs with a spacing artifact (the swapped sentence spells the components of a span as separate words although one is
+    bound, see agreement_trees.eval.surface) are drawn only when no condition has another eligible pair. A lemma may appear in at most `lemma_cap` of the sample and a sentence once; if the quota cannot be
     filled, the uncertain pairs are allowed first, then the lemma cap rises by one step at a time, and only then
     sentences may repeat."""
     n_lemmas, n_sentences = encode(conditions)
@@ -168,6 +185,7 @@ def select_pairs(conditions: list, n_items: int, lemma_cap: float, rng: np.rando
     feature_count = [{name: np.zeros(c.codes[name].max() + 1, dtype=np.int64) for name in SINGLE_VALUED}
                      for c in conditions]
     value_count = [np.zeros(n) for n in n_values]
+    attractor_count = [np.zeros(len(ATTRACTOR_CLASSES)) for _ in conditions]
     selected = np.zeros(len(conditions), dtype=np.int64)
     exhausted = np.zeros(len(conditions), dtype=bool)
     total = 0
@@ -204,6 +222,11 @@ def select_pairs(conditions: list, n_items: int, lemma_cap: float, rng: np.rando
         rows = rows[kind_count[c][kinds] == kind_count[c][kinds].min()]   # the reinflected side picked least so far
         log_weight = np.zeros(len(rows))
         log_weight -= np.log1p((cond.shares[rows] * value_count[c][cond.values[rows]]).sum(axis=1))
+        attractor_penalty = np.log1p(cond.attractor_shares[rows] @ attractor_count[c])
+        unclassed = cond.attractor_unclassed[rows]
+        if unclassed.any() and not unclassed.all():
+            attractor_penalty[unclassed] = attractor_penalty[~unclassed].mean()   # neither favoured nor penalised
+        log_weight -= attractor_penalty
         for name in SINGLE_VALUED:
             log_weight -= np.log1p(feature_count[c][name][codes[name][rows]])
         for lemma_codes in (la, lb):
@@ -216,6 +239,7 @@ def select_pairs(conditions: list, n_items: int, lemma_cap: float, rng: np.rando
         for name in SINGLE_VALUED:
             feature_count[c][name][codes[name][row]] += 1
         np.add.at(value_count[c], cond.values[row], cond.shares[row])
+        attractor_count[c] += cond.attractor_shares[row]
         for lemma in {la[row], lb[row]} - {0}:
             lemma_count[lemma] += 1
         sentence_count[sent[row]] += 1
@@ -224,7 +248,7 @@ def select_pairs(conditions: list, n_items: int, lemma_cap: float, rng: np.rando
 
     chosen = {cond.name: np.flatnonzero(taken[i]) for i, cond in enumerate(conditions)}
     uncertain = sum(int(cond.uncertain[taken[i]].sum()) for i, cond in enumerate(conditions))
-    return chosen, {"lemma_cap_count": int(cap), "sentence_limit": int(sentence_limit), "uncertain_forms": uncertain}
+    return chosen, {"lemma_cap_count": int(cap), "sentence_limit": int(sentence_limit), "spacing_artifacts": uncertain}
 
 
 def language_seed(lang: str, seed: int) -> int:

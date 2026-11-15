@@ -4,7 +4,6 @@ import json
 import html as html_lib
 
 import pandas as pd
-from collections import Counter
 from typing import *
 from tqdm import tqdm
 
@@ -16,12 +15,13 @@ from agreement_trees.fit.decision_tree import MISSING, UNK_LABELS
 from agreement_trees.fit.entropy import DEFAULT_LEAF_MIN_ACCURACY
 from agreement_trees.pipeline_utils import match_casing
 from agreement_trees.pairs.attractors import add_attractors_if_stored
+from agreement_trees.pairs.second_chance import SecondChanceConfig, second_chance_decision
 from agreement_trees.eval.surface import with_surface_strings
 from agreement_trees.pairs.sentence_text import add_sentence_strings
 from multiblimp.script_log import append_log
 
 
-PAIRS_VERSION = 4  # bump when what create_pairs writes changes (buckets, strings, meta); older directories are rebuilt
+PAIRS_VERSION = 5  # bump when what create_pairs writes changes (buckets, strings, meta); older directories are rebuilt
 
 
 def pairs_current(lang_pairs_dir: str) -> bool:
@@ -35,7 +35,7 @@ def pairs_current(lang_pairs_dir: str) -> bool:
 
 def read_cached_pairs(lang_pairs_dir: str):
     """(correct_swaps frame or None, leaf cutoff the pairs were built with or None) of an existing pairs directory:
-    what a tree page needs when the pairs are reused. A retried language's cutoffs are per leaf, keyed by int."""
+    what a tree page needs when the pairs are reused (the lax floor for a retried language)."""
     path = os.path.join(lang_pairs_dir, "correct_swaps.parquet")
     pairs = pd.read_parquet(path) if os.path.exists(path) else None
     try:
@@ -43,8 +43,6 @@ def read_cached_pairs(lang_pairs_dir: str):
             cutoff = json.load(f).get("leaf_min_acc")
     except (OSError, ValueError):
         cutoff = None
-    if isinstance(cutoff, dict):
-        cutoff = {int(k): v for k, v in cutoff.items()}
     return pairs, cutoff
 
 
@@ -71,15 +69,11 @@ def coverage_stats(df, form_cols, inflector):
 
 
 def leaf_keep(df, leaf_threshold):
-    """(row_threshold, keep): leaf_threshold as one cutoff per row (a number, or a {leaf_id: cutoff}
-    map from a second-chance retry) and the rows in a kept leaf (leaf_top1_acc above it and
-    leaf_decision). Frames without a fitted tree (single-class predictor) are kept in full."""
-    row_threshold = df["leaf_id"].map(leaf_threshold) if isinstance(leaf_threshold, dict) else leaf_threshold
+    """The rows in a kept leaf (leaf_top1_acc at or above `leaf_threshold` and leaf_decision). Frames without a
+    fitted tree (single-class predictor) are kept in full."""
     if "leaf_top1_acc" in df.columns and "leaf_decision" in df.columns:
-        keep = (df["leaf_top1_acc"] > row_threshold) & df["leaf_decision"]
-    else:
-        keep = pd.Series(True, index=df.index)
-    return row_threshold, keep
+        return (df["leaf_top1_acc"] >= leaf_threshold) & df["leaf_decision"]
+    return pd.Series(True, index=df.index)
 
 
 # ── Example-row rendering ─────────────────────────────────────────────────────
@@ -567,18 +561,16 @@ def process_item(
         form_features,
         ufeat,
         feature_vals,
-        feature_distribution,
         inflector,
         context_features,
         take_features_from,
-        max_num_of_pairs=None,
         swap_bundle=None,
         slot_aliases=(),
         resolved_key=None,
     ) -> Tuple[str, Dict[str, str]]:
         """Classify one candidate swap form of a row. Returns (bucket, item): same_forms, same_features,
         undefined_features (no features for the swapped form), ambiguous_subjects (the fixed role's own
-        form could carry the swapped value: context_features), conflicting_features, correct_swaps or extra_pairs.
+        form could carry the swapped value: context_features), conflicting_features or correct_swaps.
         `item` carries the row's own role columns; the swap_*, after_* and feature_vals columns are added."""
         # swap_form stays the lexicon-cased string for lookups; only the displayed form is recased
         # (relative to "_form_orig", since "_form" is lowercased upstream)
@@ -590,93 +582,70 @@ def process_item(
 
         if swap_form == form:
             return "same_forms", item
-        else:
-            swap_feature_vals = inflector.get_form_features(
-                swap_form, form_features, ufeat, slot_aliases=slot_aliases
-            )
-            feature_key = (
-                "|".join(sorted(feature_vals))
-                + " -> "
-                + "|".join(sorted(swap_feature_vals))
-            )
+        swap_feature_vals = inflector.get_form_features(
+            swap_form, form_features, ufeat, slot_aliases=slot_aliases
+        )
+        feature_key = (
+            "|".join(sorted(feature_vals))
+            + " -> "
+            + "|".join(sorted(swap_feature_vals))
+        )
 
-            # the reinflected form's other features, from the reinflection source
-            for feat, vals in (swap_bundle or {}).items():
-                item[f"after_{take_features_from}_{feat}"] = "/".join(sorted(vals))
+        # the reinflected form's other features, from the reinflection source
+        for feat, vals in (swap_bundle or {}).items():
+            item[f"after_{take_features_from}_{feat}"] = "/".join(sorted(vals))
 
-            add_item = False
-            for feat1 in feature_vals:
-                for feat2 in swap_feature_vals:
-                    if (
-                        max_num_of_pairs is None
-                        or feature_distribution[f"{feat1} -> {feat2}"]
-                        < max_num_of_pairs
-                    ):
-                        add_item = True
-                    else:
-                        add_item = None
+        if feature_vals & swap_feature_vals:
+            item["feature_vals"] = feature_key
+            return "same_features", item
+        if not (feature_vals and swap_feature_vals):
+            return "undefined_features", item
+        # the fixed role's own form could also carry the swapped value
+        if context_features & swap_feature_vals:
+            return "ambiguous_subjects", item
+        # not a minimal pair if the candidate opposes the original on another feature
+        # (a missing value on either side is no conflict)
+        conflicts = _conflicting_features(item, take_features_from, ufeat, slot_aliases)
+        conflicts += [f"added_slot:{d}" for d in _added_slots(item, take_features_from, slot_aliases)]
+        conflicts += [f"added_dim:{d}" for d in _added_dims(item, take_features_from)]
+        if _misaligned_slot(item, take_features_from, ufeat, resolved_key):
+            conflicts.append(f"misaligned_slot:{resolved_key}->{ufeat}")
+        if conflicts:
+            item["conflicting_features"] = ";".join(conflicts)
+            return "conflicting_features", item
+        item["feature_vals"] = feature_key
+        return "correct_swaps", item
 
-            if len(feature_vals & swap_feature_vals) == 0:
-                if (len(swap_feature_vals) > 0) and add_item:
-                    # the fixed role's own form could also carry the swapped value
-                    if len(context_features & swap_feature_vals) > 0:
-                        return "ambiguous_subjects", item
-                    else:
-                        # not a minimal pair if the candidate opposes the original on another feature
-                        # (a missing value on either side is no conflict)
-                        conflicts = _conflicting_features(item, take_features_from, ufeat, slot_aliases)
-                        conflicts += [f"added_slot:{d}" for d in _added_slots(item, take_features_from, slot_aliases)]
-                        conflicts += [f"added_dim:{d}" for d in _added_dims(item, take_features_from)]
-                        if _misaligned_slot(item, take_features_from, ufeat, resolved_key):
-                            conflicts.append(f"misaligned_slot:{resolved_key}->{ufeat}")
-                        if conflicts:
-                            item["conflicting_features"] = ";".join(conflicts)
-                            return "conflicting_features", item
-                        item["feature_vals"] = feature_key
-                        num_combinations = len(feature_vals) * len(swap_feature_vals)
-                        for feat1 in feature_vals:
-                            for feat2 in swap_feature_vals:
-                                feature_distribution[f"{feat1} -> {feat2}"] += (
-                                    1 / num_combinations
-                                )
-                        if num_combinations > 1:
-                            feature_distribution[feature_key] += 1
-                        return "correct_swaps", item
-                elif add_item is None:
-                    return "extra_pairs", item
-                else:
-                    return "undefined_features", item
-            elif len(feature_vals & swap_feature_vals) > 0:
-                wrong_item = dict(item)
-                wrong_item[f"swap_{take_features_from}"] = match_casing(orig_form, swap_form)
-                wrong_item["feature_vals"] = feature_key
-
-                return "same_features", wrong_item
-            else:
-                wrong_item = dict(item)
-                wrong_item[f"swap_{take_features_from}"] = match_casing(orig_form, swap_form)
-                wrong_item["feature_vals"] = feature_key
-
-                return "undefined_features", wrong_item
 
 
 class MissingColumnError(KeyError):
     """The frame lacks a column the pair loop reads."""
 
 
+def tag_second_chance(frame: pd.DataFrame, rescued: bool, lax: float) -> pd.DataFrame:
+    """`frame` with the second-chance columns: whether its rows are kept only by the lax retry, and that floor."""
+    return frame.assign(second_chance=rescued, second_chance_lax_threshold=lax) if len(frame) else frame
+
+
+def append_frames(*frames: pd.DataFrame) -> pd.DataFrame:
+    """The non-empty frames one below the other (an empty frame if there are none)."""
+    kept = [frame for frame in frames if len(frame)]
+    return pd.concat(kept, ignore_index=True, sort=False) if kept else pd.DataFrame()
+
+
 def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_target,
-                  swap_target=["head",], context_inflector=None, max_num_of_pairs=None,
+                  swap_target=["head",], context_inflector=None,
                   leaf_threshold=DEFAULT_LEAF_MIN_ACCURACY, save_to=None,
                   max_examples=5, num_lemma=None, num_form=None, full_df=None,
                   unk_counts=None, label_distribution=None, head_label=None,
-                  extra_meta=None, second_chance_threshold=None):
+                  second_chance: SecondChanceConfig | None = None):
     """Re-inflect each kept "yes" row of the decision-tree frame into a minimal pair and sort the outcomes into
     diagnostics buckets.
 
     Args:
         df: decision-tree frame (dt_df).
         leaf_threshold: smoothed-accuracy floor for keeping a leaf's rows, computed here from
-            leaf_top1_acc/leaf_decision. One cutoff, or a {leaf_id: cutoff} map (second chance).
+            leaf_top1_acc/leaf_decision.
         save_to: directory for "<bucket>.parquet" files and "meta.json" (scalar stats, unk counts, label
             distribution, up to max_examples sample rows per bucket under "examples").
         num_lemma, num_form: lexicon size of this language.
@@ -685,29 +654,21 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
         unk_counts: {"head_unk", "nsubj_unk", "both_unk"} from fit_dt, stored in meta.json.
         label_distribution: {label: count} over the full predictor column, before unk rows are dropped.
         head_label: display label for the head role's columns in the example tables (header text only).
-        second_chance_threshold: the strict leaf_threshold; pass it on the lax retry call only. Output
-            frames then get "second_chance" (row only kept because of the retry) and
-            "second_chance_lax_threshold" columns.
+        second_chance: when given, the strict pass is followed by second_chance_decision (needs
+            label_distribution); on a retry the rows the laxer floor adds are re-inflected and appended to the
+            strict results. Every bucket frame then carries "second_chance" (row kept only by the retry) and
+            "second_chance_lax_threshold" columns, and meta records the lax floor as "leaf_min_acc".
     Returns:
-        dict[str, pd.DataFrame]: one frame per diagnostics bucket.
+        (dict[str, pd.DataFrame], meta): one frame per diagnostics bucket, and what meta.json holds.
     """
     if full_df is None:
         full_df = df
-    row_threshold, keep = leaf_keep(df, leaf_threshold)
+    keep = leaf_keep(df, leaf_threshold)
     is_yes = df[swap_feat] == "yes"
     n_raw = int(is_yes.sum())
     swap_df = df[keep & is_yes]
     n_keep = len(swap_df)
     n_keep_second_chance = 0
-    if second_chance_threshold is not None:
-        # rows above the strict bar are in swap_df only because the retry relaxed it
-        swap_df = swap_df.copy()
-        swap_df["second_chance"] = swap_df["leaf_top1_acc"] <= second_chance_threshold
-        swap_df["second_chance_lax_threshold"] = (
-            row_threshold.loc[swap_df.index] if isinstance(row_threshold, pd.Series) else row_threshold
-        )
-        # row-level count (the bucket item counts can exceed it: one row can yield several items)
-        n_keep_second_chance = int(swap_df["second_chance"].sum())
 
     child_deprel = target.child_deprels[0]
     ufeat, _ = inflector.inflection_map
@@ -727,9 +688,10 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
     head_unk_df = full_df[is_unk & head_missing & ~child_missing]
     nsubj_unk_df = full_df[is_unk & ~head_missing & child_missing]
 
-    items_seen = 0
-    feature_distribution = Counter()
-    diagnostics = {
+    def collect(swap_df):
+        """(bucket frames, items seen) of re-inflecting the rows of `swap_df`."""
+        items_seen = 0
+        diagnostics = {
                 "head_unk": [],
                 "nsubj_unk": [],
                 "both_unk": [],
@@ -743,13 +705,11 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
                 "ambiguous_readings": [],
                 "multi_now_valid": [],
                 "ambiguous_subjects": [],
-                "extra_pairs": [],
             }
 
-    if len(swap_df) == 0:
-        # an empty language still gets its (empty) buckets and diagnostics entry below
-        append_log("create_pairs", f"no rows to process\t{save_to}\t{swap_feat}\tkeep={len(df[keep])}\tswap={len(df[df[swap_feat]=='yes'])}")
-    else:
+        if len(swap_df) == 0:
+            return {name: pd.DataFrame() for name in diagnostics}, 0
+
         columns = list(swap_df.columns)
         # columns holding each swap kind's features, plain (head_Number) and bracketed (head_Number[obj])
         kind_feat_cols = {
@@ -863,11 +823,9 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
                                 og_feats,
                                 row_ufeat,
                                 feature_vals,
-                                feature_distribution,
                                 inflector,
                                 context_features,
                                 take_features_from=kind,
-                                max_num_of_pairs=max_num_of_pairs,
                                 swap_bundle=swap_feats.get(swap_form, {}),
                                 slot_aliases=slot_aliases,
                                 resolved_key=layered_key,
@@ -894,13 +852,39 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
                     items_seen += 1
                     diagnostics["no_candidates"].append((pos, added_cols(base_item)))
 
-    coverage = f"{len(diagnostics['correct_swaps'])/max(items_seen,1)*100:.1f}"
-    print(f"items_seen={items_seen} correct_swaps={len(diagnostics['correct_swaps'])} coverage={coverage}%")
+        return {item_type: bucket_frame(swap_df, items) for item_type, items in diagnostics.items()}, items_seen
 
-    diagnostic_dfs = {item_type: bucket_frame(swap_df, items) for item_type, items in diagnostics.items()}
+    if n_keep == 0:
+        # an empty language still gets its (empty) buckets and diagnostics entry below
+        append_log("create_pairs", f"no rows to process\t{save_to}\t{swap_feat}\tkeep={len(df[keep])}\tswap={len(df[df[swap_feat]=='yes'])}")
+    diagnostic_dfs, items_seen = collect(swap_df)
+
+    retry_meta = {}
+    if second_chance is not None:
+        retry, lax, info = second_chance_decision(df, swap_feat, label_distribution, leaf_threshold, second_chance)
+        print(f"{save_to}: second chance: {info['reason']}")
+        if retry:
+            rescued = df[leaf_keep(df, lax) & is_yes & ~keep]
+            rescued_dfs, rescued_seen = collect(rescued)
+            diagnostic_dfs = {name: append_frames(tag_second_chance(frame, False, lax),
+                                                  tag_second_chance(rescued_dfs[name], True, lax))
+                              for name, frame in diagnostic_dfs.items()}
+            items_seen += rescued_seen
+            n_keep += len(rescued)
+            n_keep_second_chance = len(rescued)
+            leaf_threshold = lax
+            retry_meta = {"second_pass": True, "second_chance_info": info}
+            # adopted even with zero correct_swaps: the lax pass's numbers are the ones to record
+            if not len(diagnostic_dfs["correct_swaps"]):
+                print(f"{save_to}: retry attempted, yielded no pairs")
+
+    coverage = f"{len(diagnostic_dfs['correct_swaps'])/max(items_seen,1)*100:.1f}"
+    print(f"items_seen={items_seen} correct_swaps={len(diagnostic_dfs['correct_swaps'])} coverage={coverage}%")
+
     diagnostic_dfs["invalid_surface"] = pd.DataFrame()
     if len(diagnostic_dfs["correct_swaps"]):
-        kept, diagnostic_dfs["invalid_surface"] = with_surface_strings(add_sentence_strings(diagnostic_dfs["correct_swaps"]))
+        strings = add_sentence_strings(diagnostic_dfs["correct_swaps"])
+        kept, diagnostic_dfs["invalid_surface"] = with_surface_strings(strings)
         diagnostic_dfs["correct_swaps"] = (
             add_attractors_if_stored(kept, f"{child_deprel}_attractor_slots", child_deprel) if len(kept) else kept)
     # unk rows are never modified: keep their dtypes, skip the records round trip
@@ -912,42 +896,40 @@ def create_pairs(df, swap_feat, inflector, target: PredictionTarget = nsubj_targ
     feat_match = re.match(r".*_([A-Z][a-z]+)_.*", swap_feat)
     swap_feature = feat_match.group(1) if feat_match else None
 
+    num_forms_of_interest, num_covered_um, num_covered_um_ud = coverage_stats(
+        full_df, ["head_form", f"{child_deprel}_form"], inflector
+    )
+    meta = {
+        "pairs_version": PAIRS_VERSION,
+        "leaf_min_acc": leaf_threshold,
+        "num_ud_candidates_raw": n_raw,
+        "num_ud_candidates_keep": n_keep,
+        "num_rows_keep": n_keep,
+        "num_rows_keep_second_chance": n_keep_second_chance,
+        "num_ud_candidates_keep_second_chance": n_keep_second_chance,
+        "items_seen": items_seen,
+        "num_lemma": num_lemma,
+        "num_form": num_form,
+        "num_forms_of_interest": num_forms_of_interest,
+        "num_covered_um": num_covered_um,
+        "num_covered_um_ud": num_covered_um_ud,
+    }
+    if unk_counts is not None:
+        meta.update(unk_counts)
+    if label_distribution is not None:
+        meta["label_distribution"] = label_distribution
+    meta.update(retry_meta)
+
+    meta["examples"] = bucket_examples_html(
+        diagnostic_dfs, list(diagnostic_dfs), max_examples=max_examples,
+        child_deprel=child_deprel, default_kind=swap_target[0],
+        swap_feature=swap_feature, head_label=head_label,
+    )
     if save_to is not None:
         os.makedirs(save_to, exist_ok=True)
         for item_type, item_df in diagnostic_dfs.items():
             item_df.to_parquet(os.path.join(save_to, f"{item_type}.parquet"))
-        num_forms_of_interest, num_covered_um, num_covered_um_ud = coverage_stats(
-            full_df, ["head_form", f"{child_deprel}_form"], inflector
-        )
-        meta = {
-            "pairs_version": PAIRS_VERSION,
-            "leaf_min_acc": leaf_threshold,
-            "num_ud_candidates_raw": n_raw,
-            "num_ud_candidates_keep": n_keep,
-            "num_rows_keep": n_keep,
-            "num_rows_keep_second_chance": n_keep_second_chance,
-            "num_ud_candidates_keep_second_chance": n_keep_second_chance,
-            "items_seen": items_seen,
-            "num_lemma": num_lemma,
-            "num_form": num_form,
-            "num_forms_of_interest": num_forms_of_interest,
-            "num_covered_um": num_covered_um,
-            "num_covered_um_ud": num_covered_um_ud,
-        }
-        if unk_counts is not None:
-            meta.update(unk_counts)
-        if label_distribution is not None:
-            meta["label_distribution"] = label_distribution
-        if extra_meta:
-            meta.update(extra_meta)
-
-        meta["examples"] = bucket_examples_html(
-            diagnostic_dfs, list(diagnostic_dfs), max_examples=max_examples,
-            child_deprel=child_deprel, default_kind=swap_target[0],
-            swap_feature=swap_feature, head_label=head_label,
-        )
         with open(os.path.join(save_to, "meta.json"), "w") as f:
             json.dump(meta, f)
 
-    return diagnostic_dfs
-
+    return diagnostic_dfs, meta

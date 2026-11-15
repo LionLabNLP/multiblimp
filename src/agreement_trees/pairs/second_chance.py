@@ -1,6 +1,6 @@
 """Rule-based check for whether a language gets a second, laxer pass.
 
-The first pass keeps only Yes rows in leaves with smoothed accuracy > leaf_threshold.
+The first pass keeps only Yes rows in leaves with smoothed accuracy >= leaf_threshold.
 Low-resource treebanks with messy annotation can fail that bar even though the tree found
 real structure. The retry uses one flat floor (lax_threshold) for every leaf, never stricter
 than the strict floor, and happens whenever it would keep at least one more Yes row.
@@ -8,7 +8,6 @@ Settings: fit.second_chance in resources/agreement_config.json
 (agreement_trees.cli.second_chance_config).
 """
 
-import math
 from dataclasses import dataclass
 
 from agreement_trees.fit.decision_tree import UNK_LABELS
@@ -52,14 +51,12 @@ def second_chance_decision(dt_df, predictor_var, label_distribution,
         info["n_keep"] = n_yes
         return no("no tree fit")
     acc, dec = dt_df["leaf_top1_acc"], dt_df["leaf_decision"]
-    kept = (acc > strict_threshold) & dec & is_yes
+    kept = (acc >= strict_threshold) & dec & is_yes
     n_keep = int(kept.sum())
     info["n_keep"] = n_keep
 
-    # Callers keep rows with accuracy > threshold, so step just below the
-    # floor to make it inclusive (>=).
-    lax = min(math.nextafter(cfg.lax_threshold, 0.0), strict_threshold)
-    lax_keep = (acc > lax) & dec & is_yes
+    lax = min(cfg.lax_threshold, strict_threshold)
+    lax_keep = (acc >= lax) & dec & is_yes
     n_rescued = int((lax_keep & ~kept).sum())
     info["n_rescued"] = n_rescued
     if n_rescued == 0:

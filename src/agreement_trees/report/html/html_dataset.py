@@ -77,7 +77,7 @@ def _coverage_union(data: dict, items: list[dict], lang_idx: dict, npa_lang_idx:
     }
 
 
-def _category_totals(data: dict, group: str, items: list[dict], lang_idx: dict, npa_lang_idx: dict) -> dict:
+def _category_totals(data: dict, items: list[dict], lang_idx: dict, npa_lang_idx: dict) -> dict:
     cond_ids = [it["id"] for it in items if not it["isNpaSub"]]
     npa_sub_ids = [it["id"] for it in items if it["isNpaSub"]]
     # Samples-weighted mean of each item's own already-weighted accuracy --
@@ -165,7 +165,7 @@ def _coverage_ladder_html(cov: dict, chart_id: str) -> str:
 def _category_tab_html(data: dict, group: str, lang_idx: dict, npa_lang_idx: dict) -> str:
     slug = GROUP_SLUGS[group]
     items = _category_items(data, group)
-    totals = _category_totals(data, group, items, lang_idx, npa_lang_idx)
+    totals = _category_totals(data, items, lang_idx, npa_lang_idx)
 
     # Sparkbar width (log scale for noun phrases) is each item's pairs relative to the category's biggest
     # picker item -- a tiny small-multiples comparison (Number vs. Gender vs.
@@ -1187,6 +1187,8 @@ def render_dataset_page(data: dict) -> str:
                                 {_sortable_th("n_conditions", "# Conditions", num=True)}
                                 {_sortable_th("instances", "Instances", num=True)}
                                 {_sortable_th("annotated", "Annotated", num=True)}
+                                {_sortable_th("unattested_share", "Unattested form", num=True)}
+                                {_sortable_th("spacing_artifact_share", "Spacing artifact", num=True)}
                             </tr>
                         </thead>
                         <tbody id="language-tbody"></tbody>
@@ -1747,6 +1749,8 @@ def render_dataset_page(data: dict) -> str:
                         <td class="num">${{l.n_conditions}}</td>
                         <td class="num">${{(l.instances || 0).toLocaleString()}}</td>
                         <td class="num">${{(l.annotated || 0).toLocaleString()}}</td>
+                        <td class="num" title="${{(l.unattested || 0).toLocaleString()}} of ${{l.pairs.toLocaleString()}} pairs">${{l.unattested_share === null || l.unattested_share === undefined ? '&mdash;' : l.unattested_share.toFixed(1) + '%'}}</td>
+                        <td class="num" title="${{(l.spacing_artifact || 0).toLocaleString()}} of ${{l.pairs.toLocaleString()}} pairs">${{l.spacing_artifact_share === null || l.spacing_artifact_share === undefined ? '&mdash;' : l.spacing_artifact_share.toFixed(1) + '%'}}</td>
                     </tr>`).join('');
                 countNote.textContent = `${{rows.length}} of ${{DATA.languages.length}} languages`;
                 updateSortIndicators('language-table', sortKey, sortDir);

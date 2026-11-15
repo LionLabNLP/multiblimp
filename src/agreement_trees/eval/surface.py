@@ -14,6 +14,9 @@ whose sentence contains a multiword token, or whose swapped word may now form on
            in the language's treebanks (not counting span components), else keep the uncontracted words;
        ii) none exists: keep the uncontracted words (whether or not that sequence occurs in the treebanks).
 A contraction only counts for a swapped word if the contracted span has that word's UPOS at that position.
+spacing_artifact: True where the wrong sentence writes the span's components as separate words (the uncontracted
+statuses) although one of them is bound (MwtStats.is_bound): the spelling is then not the language's (Amharic
+መጡ ኧ, Turkish yapmış tı). German in des joins free words and is no artifact.
 The statistics are those of the language's non-excluded treebanks (agreement_trees.eval.mwt_cache).
 """
 import collections
@@ -26,7 +29,7 @@ from agreement_trees.eval.benchmark import SURFACE_COLUMNS, SURFACE_FILE, pair_f
 from agreement_trees.eval.conllu_spans import Unit, language_of, norm, recase, render
 from agreement_trees.eval.mwt_cache import load_stats
 from agreement_trees.pairs.sentence_text import add_sentence_strings
-from multiblimp.languages import HIERO_SIGN
+from multiblimp.languages import FLATTEN_SPAN_LANGS
 
 # a plain word that now fuses with its neighbour (a') is merged only where the contraction is the norm: seen at least
 # MERGE_MIN_CONTRACTED times, with the plain sequence at most MERGE_MAX_PLAIN_SHARE of that (de le -> du, but not the
@@ -65,12 +68,13 @@ def hyphen_substitute(surface: str, comps, k: int, new_form: str):
     return surface[:start] + recase(surface[start:end], new_form) + surface[end:]
 
 
-def validate_language(stats, rows, pos_guard: bool = True, strict_merge: bool = True, enclitic: bool = True):
+def validate_language(stats, rows):
     """Surface strings for the rows of one language. rows: dicts with i (row id), key ((treebank file, sentence line)),
     tokens, no_space_after, swap_idx (1-based), swap_form, swap_pos. Returns ({i: (sen_str, wrong_sen_str, status)},
-    Counter of statuses); rows whose sentence is untouched (no multiword token, no merge) are left out."""
+    Counter of statuses, ids of the rows with a spacing artifact); rows whose sentence is
+    untouched (no multiword token, no merge) are left out of the first."""
     contracted, span_positions, patterns = stats.contracted, stats.positions, stats.patterns
-    final, pending, tally = {}, {}, collections.Counter()
+    final, pending, tally, artifact = {}, {}, collections.Counter(), set()
 
     for r in rows:
         i, swap_idx, swap_form = r["i"], int(r["swap_idx"]), r["swap_form"]
@@ -89,7 +93,7 @@ def validate_language(stats, rows, pos_guard: bool = True, strict_merge: bool = 
         u = units[k]
         if u.mwt:
             comps = list(u.comps)
-            kept = hyphen_substitute(u.form, comps, swap_idx - u.lo, swap_form) if enclitic else None
+            kept = hyphen_substitute(u.form, comps, swap_idx - u.lo, swap_form)
             if kept is not None:
                 final[i] = (sen, (render(units[:k]) + kept + (" " if u.space else "") + render(units[k + 1:])).strip(),
                             "enclitic_kept")
@@ -109,7 +113,7 @@ def validate_language(stats, rows, pos_guard: bool = True, strict_merge: bool = 
             key = tuple(norm(w.form) if s + c != k else norm(swap_form) for c, w in enumerate(units[s:s + n]))
             if key not in contracted:
                 continue
-            if pos_guard and not any(len(p) == n and p[j] == upos for p in patterns.get(key, ())):
+            if not any(len(p) == n and p[j] == upos for p in patterns.get(key, ())):
                 continue
             total = sum(contracted[key].values())
             if best is None or (total, n) > (best[0], best[1]):
@@ -128,7 +132,7 @@ def validate_language(stats, rows, pos_guard: bool = True, strict_merge: bool = 
             _, sen, plain_wrong, before, after, first, last, key = item
             total = sum(contracted[key].values())
             norm_contraction = total >= MERGE_MIN_CONTRACTED and counts[key] <= MERGE_MAX_PLAIN_SHARE * total
-            if total > counts[key] and (norm_contraction or not strict_merge):
+            if total > counts[key] and norm_contraction:
                 surface = recase(first.form, contracted[key].most_common(1)[0][0])
                 final[i] = (sen, (before + surface + (" " if last.space else "") + after).strip(), "merged")
             else:
@@ -146,18 +150,20 @@ def validate_language(stats, rows, pos_guard: bool = True, strict_merge: bool = 
             chosen, status = plain, "uncontracted_attested"
         else:
             chosen, status = plain, "uncontracted_unattested"
+        if status.startswith("uncontracted") and any(stats.is_bound(norm(c)) for c in comps):
+            artifact.add(i)
         final[i] = (sen, (before + chosen + (" " if u.space else "") + after).strip(), status)
 
     for _, _, status in final.values():
         tally[status] += 1
-    return final, tally
+    return final, tally, artifact
 
 
-def validate_frame(frame: pd.DataFrame, pos_guard: bool = True, stats_for=load_stats, strict_merge: bool = True,
-                   enclitic: bool = True):
+def validate_frame(frame: pd.DataFrame):
     """(DataFrame indexed like `frame` with sen_final, wrong_final and status -- NaN for rows whose sentence is
-    untouched --, Counter of statuses) for a pairs frame with the add_sentence_strings columns (swap_kind, swap_idx)
-    plus conllu_file, conllu_sent_line, sen, no_space_after, swap_<kind> and <kind>_pos. Rows may span languages
+    untouched -- and spacing_artifact, Counter of statuses) for a pairs frame with the add_sentence_strings columns
+    (swap_kind, swap_idx) plus conllu_file, conllu_sent_line, sen, no_space_after, swap_<kind> and <kind>_pos.
+    Rows may span languages
     (a Turkish cache holds Turkish_German sentences): each is validated against its own language's statistics."""
     kinds = frame["swap_kind"]
     forms = pd.Series(None, index=frame.index, dtype=object)
@@ -171,8 +177,10 @@ def validate_frame(frame: pd.DataFrame, pos_guard: bool = True, stats_for=load_s
     files = frame["conllu_file"].astype(str).tolist()
     lines = frame["conllu_sent_line"].tolist()
     by_lang = collections.defaultdict(list)
-    for i, (idx, form, swap_idx) in enumerate(zip(frame.index, forms.tolist(), frame["swap_idx"].tolist())):
-        if not isinstance(form, str) or pd.isna(swap_idx) or pd.isna(lines[i]) or HIERO_SIGN.search(form):
+    for i, (form, swap_idx) in enumerate(zip(forms.tolist(), frame["swap_idx"].tolist())):
+        if not isinstance(form, str) or pd.isna(swap_idx) or pd.isna(lines[i]):
+            continue
+        if language_of(files[i]) in FLATTEN_SPAN_LANGS:   # its tokens are already the written words
             continue
         by_lang[language_of(files[i])].append({
             "i": i, "key": (files[i], int(lines[i])),
@@ -180,24 +188,28 @@ def validate_frame(frame: pd.DataFrame, pos_guard: bool = True, stats_for=load_s
             "swap_idx": swap_idx, "swap_form": form, "swap_pos": poses.iloc[i]})
 
     out = pd.DataFrame({"sen_final": None, "wrong_final": None, "status": None}, index=frame.index, dtype=object)
+    out["spacing_artifact"] = False
     tally = collections.Counter()
     for lang, rows in by_lang.items():
-        result, counts = validate_language(stats_for(lang), rows, pos_guard, strict_merge, enclitic)
+        result, counts, artifact = validate_language(load_stats(lang), rows)
         tally.update(counts)
         for i, (sen, wrong, status) in result.items():
             out.iloc[i, 0], out.iloc[i, 1], out.iloc[i, 2] = sen, wrong, status
+        for i in artifact:
+            out.iloc[i, 3] = True
     return out, tally
 
 
-def with_surface_strings(frame: pd.DataFrame, pos_guard: bool = True):
+def with_surface_strings(frame: pd.DataFrame):
     """(kept, invalid): `frame` (a correct_swaps frame after add_sentence_strings, changed in place) with the written forms
     in sen_str and wrong_sen_str and a surface_status column. `invalid` holds the pairs whose two written sentences are
     identical (a contraction that spells the original and the swapped form alike, Sicilian pi lu / pi i = pî), which cannot be
     scored; they are not in `kept`. A frame without the sentence-location columns (an old cache) is returned as it is."""
     if not len(frame) or not {"conllu_file", "conllu_sent_line", "swap_kind", "sen"} <= set(frame.columns):
         return frame, frame.iloc[0:0]
-    result, _ = validate_frame(frame, pos_guard)
+    result, _ = validate_frame(frame)
     status = result["status"]
+    frame["spacing_artifact"] = result["spacing_artifact"].astype(bool)
     changed = status.notna()
     frame.loc[changed, "sen_str"] = result.loc[changed, "sen_final"]
     frame.loc[changed, "wrong_sen_str"] = result.loc[changed, "wrong_final"]
@@ -220,12 +232,12 @@ def read_pair_frame(path) -> pd.DataFrame:
     return add_sentence_strings(pd.read_parquet(path, columns=cols))
 
 
-def run_validation(pairs_dir, ud_dir=None, langs=None, conds=None, report=None):
+def run_validation(pairs_dir, langs=None, conds=None, report=None):
     """validate_frame over every correct_swaps under pairs_dir (the backfill for pair directories built before pair
     creation wrote the written forms): writes <language dir>/surface_strings.parquet (pair_key, sen_str, wrong_sen_str,
     surface_status for the rows it changed, dropped rows marked) and, if given, a per-directory report CSV."""
     rows_report = []
-    for path, lang, cond, deprel in pair_files(pairs_dir, langs, conds):
+    for path, lang, cond, _ in pair_files(pairs_dir, langs, conds):
         if not pq.ParquetFile(path).metadata.num_rows:
             continue
         frame = read_pair_frame(path)

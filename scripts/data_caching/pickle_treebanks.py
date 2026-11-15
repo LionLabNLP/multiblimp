@@ -14,7 +14,6 @@ from multiblimp.script_log import script_logger
 from multiblimp.treebank import Treebank
 from multiblimp.validation import validation_stamp
 from multiblimp.languages import (
-    add_langs,
     get_ud_langs,
     remove_diacritics_langs,
     gblang2udlang,
@@ -26,8 +25,7 @@ STAMPS_FILE = "validation_stamps.json"
 
 def language_stamp(lang):
     """Validation stamp (see multiblimp.validation.validation_stamp) of the treebank folders the language's pickle is built from."""
-    match_on = f"UD_{lang}-*" if lang not in add_langs else add_langs[lang]
-    folders = [os.path.basename(p) for p in glob(os.path.join(RESOURCE_DIR, UD_PATH, match_on))]
+    folders = [os.path.basename(p) for p in glob(os.path.join(RESOURCE_DIR, UD_PATH, f"UD_{lang}-*"))]
     return validation_stamp(folders)
 
 
