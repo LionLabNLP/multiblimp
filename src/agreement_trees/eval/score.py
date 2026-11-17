@@ -41,7 +41,7 @@ def score_sentences(lm, sentences: list[str]) -> dict[str, float]:
     if too_long:
         print(f"WARNING: {too_long} sentences reach the model's context length ({lm.max_length} tokens) and are truncated")
     requests = [Instance(request_type="loglikelihood", doc={}, arguments=("", sen), idx=0) for sen in unique]
-    return dict(zip(unique, (logprob for logprob, _ in lm.loglikelihood(requests))))
+    return dict(zip(unique, (logprob for logprob, _ in lm.loglikelihood(requests, disable_tqdm=True))))
 
 
 def score_pairs(lm, pairs: pd.DataFrame) -> pd.DataFrame:
