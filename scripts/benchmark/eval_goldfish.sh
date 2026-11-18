@@ -97,7 +97,7 @@ goldfish-models/por_latn_1000mb Portuguese
 goldfish-models/pan_guru_1000mb Punjabi
 goldfish-models/ron_latn_1000mb Romanian
 goldfish-models/rus_cyrl_1000mb Russian
-goldfish-models/san_latn_5mb Sanskrit
+goldfish-models/san_deva_100mb Sanskrit
 goldfish-models/srd_latn_10mb Sardinian
 goldfish-models/gla_latn_100mb Scottish_Gaelic
 goldfish-models/srp_latn_1000mb Serbian
@@ -130,11 +130,29 @@ goldfish-models/sah_cyrl_100mb Yakut
 goldfish-models/yid_hebr_100mb Yiddish
 goldfish-models/yor_latn_100mb Yoruba
 goldfish-models/zza_latn_10mb Zazaki
+# FALLBACKS: no Goldfish model exists for these languages; each uses the model of the closest language/variety
+goldfish-models/hye_armn_1000mb Western_Armenian
+goldfish-models/hye_armn_1000mb Classical_Armenian
+goldfish-models/hye_armn_1000mb Middle_Armenian
+goldfish-models/kpv_cyrl_5mb Komi_Permyak
+goldfish-models/sme_latn_10mb Skolt_Sami
+goldfish-models/apc_arab_5mb South_Levantine_Arabic
+goldfish-models/ckb_arab_100mb Southern_Kurdish
+goldfish-models/grn_latn_10mb Mbya_Guarani
+goldfish-models/syr_syrc_10mb Assyrian
+goldfish-models/fra_latn_1000mb Old_French
+goldfish-models/fra_latn_1000mb Middle_French
+goldfish-models/bul_cyrl_1000mb Old_Church_Slavonic
+goldfish-models/rus_cyrl_1000mb Old_East_Slavic
+goldfish-models/tur_latn_1000mb Ottoman_Turkish
+goldfish-models/heb_hebr_1000mb Ancient_Hebrew
+goldfish-models/ell_grek_1000mb Cappadocian
+goldfish-models/bul_cyrl_1000mb Pomak
 "
 
 SKIPPED=()
 while read -r model lang; do
-  [[ -z $model ]] && continue
+  [[ -z $model || $model == \#* ]] && continue
   if [[ ! -f output/benchmark/$lang.parquet ]]; then
     SKIPPED+=("$lang")
     continue

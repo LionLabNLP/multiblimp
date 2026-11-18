@@ -268,7 +268,7 @@ def build_benchmark(pairs_dir, out_dir, langs=None, conds=None, n_items=N_ITEMS,
             print(f"WARNING {lang}: {unclassed} of {available} pairs have no attractor counts "
                   f"(an extraction cache from before the attractor slots: re-extract it)", flush=True)
         if available <= n_items:
-            chosen = {c.name: np.arange(len(c)) for c in conditions}
+            chosen = {c.name: np.flatnonzero(~c.features["spacing_artifact"].to_numpy(dtype=bool)) for c in conditions}
             limits = {"lemma_cap_count": None, "sentence_limit": None}
         else:
             chosen, limits = select_pairs(conditions, n_items, lemma_cap, np.random.default_rng(language_seed(lang, seed)))

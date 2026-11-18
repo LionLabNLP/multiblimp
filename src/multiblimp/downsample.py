@@ -24,7 +24,7 @@ UNCERTAIN_SURFACE = ("uncontracted_unattested",)   # written form a guess never 
 
 def wordform_unattested(df: pd.DataFrame) -> pd.Series:
     """Per pair, whether its written form is a guess never seen in the treebanks (surface_status in UNCERTAIN_SURFACE).
-    A tag for information only; sampling draws the pairs with a spacing artifact last."""
+    A tag for information only; sampling excludes only the pairs with a spacing artifact."""
     if "surface_status" not in df:
         return pd.Series(False, index=df.index)
     return df["surface_status"].isin(UNCERTAIN_SURFACE)
@@ -40,7 +40,7 @@ class Condition:
     values: np.ndarray = None   # (pairs, alternatives) codes of the swap values a pair counts for, padded with 0
     shares: np.ndarray = None   # their weights per pair: 1 split over the alternatives (0 for padding)
     ambiguous: np.ndarray = None
-    uncertain: np.ndarray = None   # pairs with a spacing artifact (components of a span written as separate words), drawn last
+    uncertain: np.ndarray = None   # pairs with a spacing artifact (components of a span written as separate words), never drawn
     attractor_shares: np.ndarray = None   # (pairs, ATTRACTOR_CLASSES) weights: 1 split over the classes a pair belongs to
     attractor_unclassed: np.ndarray = None   # pairs in no class: their attractor counts are missing (a stale extraction cache)
 
@@ -169,15 +169,14 @@ def select_pairs(conditions: list, n_items: int, lemma_cap: float, rng: np.rando
     dependents stay even as far as the data allows.
     The attractor classes are binary and a pair can have several; it counts fractionally for each of its classes, like
     an ambiguous swap value (a pair in no class, because its counts are missing, gets the average attractor penalty of the others). Pairs with a spacing artifact (the swapped sentence spells the components of a span as separate words although one is
-    bound, see agreement_trees.eval.surface) are drawn only when no condition has another eligible pair. A lemma may appear in at most `lemma_cap` of the sample and a sentence once; if the quota cannot be
-    filled, the uncertain pairs are allowed first, then the lemma cap rises by one step at a time, and only then
-    sentences may repeat."""
+    bound, see agreement_trees.eval.surface) are never drawn. A lemma may appear in at most `lemma_cap` of the sample and a sentence once; if the quota cannot be
+    filled, the lemma cap rises by one step at a time, and only then may sentences repeat. A language without enough
+    pairs left ends below the quota."""
     n_lemmas, n_sentences = encode(conditions)
     n_values = [_encode_values(c) for c in conditions]
     most_per_sentence = int(sum(np.bincount(c.codes["sentence"], minlength=n_sentences) for c in conditions).max())
     step = max(1, int(np.ceil(lemma_cap * n_items)))
     cap, sentence_limit = step, 1
-    allow_uncertain = False
     lemma_count = np.zeros(n_lemmas, dtype=np.int64)
     sentence_count = np.zeros(n_sentences, dtype=np.int64)
     taken = [np.zeros(len(c), dtype=bool) for c in conditions]
@@ -193,9 +192,7 @@ def select_pairs(conditions: list, n_items: int, lemma_cap: float, rng: np.rando
     while total < n_items:
         open_conditions = np.flatnonzero(~exhausted)
         if not len(open_conditions):
-            if not allow_uncertain:
-                allow_uncertain = True
-            elif cap < n_items:
+            if cap < n_items:
                 cap += step
             else:
                 sentence_limit += 1
@@ -207,9 +204,7 @@ def select_pairs(conditions: list, n_items: int, lemma_cap: float, rng: np.rando
         c = int(rng.choice(open_conditions[selected[open_conditions] == fewest]))
         cond, codes = conditions[c], conditions[c].codes
         la, lb, sent = codes["lemma_a"], codes["lemma_b"], codes["sentence"]
-        eligible = ~taken[c] & (sentence_count[sent] < sentence_limit)
-        if not allow_uncertain:
-            eligible &= ~cond.uncertain
+        eligible = ~taken[c] & (sentence_count[sent] < sentence_limit) & ~cond.uncertain
         if cap < n_items:
             eligible &= ((lemma_count[la] < cap) | (la == 0)) & ((lemma_count[lb] < cap) | (lb == 0))
         rows = np.flatnonzero(eligible)
@@ -247,8 +242,7 @@ def select_pairs(conditions: list, n_items: int, lemma_cap: float, rng: np.rando
         total += 1
 
     chosen = {cond.name: np.flatnonzero(taken[i]) for i, cond in enumerate(conditions)}
-    uncertain = sum(int(cond.uncertain[taken[i]].sum()) for i, cond in enumerate(conditions))
-    return chosen, {"lemma_cap_count": int(cap), "sentence_limit": int(sentence_limit), "spacing_artifacts": uncertain}
+    return chosen, {"lemma_cap_count": int(cap), "sentence_limit": int(sentence_limit)}
 
 
 def language_seed(lang: str, seed: int) -> int:
