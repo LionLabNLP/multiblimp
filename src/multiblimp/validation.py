@@ -1,10 +1,10 @@
 """Run the official UD validator (UniversalDependencies/tools, udtools) over a UD treebank
-folder and keep its incidents in one JSON sidecar per treebank
+folder and keep its incidents in one JSON per treebank
 (resources/ud/validation/<UD_Lang-Treebank>.json). Measure-only: nothing here changes the
-treebank data; the sidecars are read by scripts/data_caching/validate_treebanks.py and,
+treebank data; the JSONs are read by scripts/data_caching/validate_treebanks.py and,
 later, by whatever filters on them.
 
-Sidecar layout:
+JSON layout:
   treebank, lang_code, level_requested, level_run, tools_commit, ud_release, seconds
   files       {basename: {size, sentences, tokens}}
   incidents   [[testid, level, "E"|"W", file, lineno, sent_id, node_id, sentline], ...]
@@ -97,7 +97,7 @@ def _load_validator_classes():
 
 def validate_treebank(folder: str, level: int = 5, redo: bool = False) -> dict:
     """Validate UD_<Lang>-<Treebank> as a whole (cross-file checks need all its files in one
-    run), write its sidecar, and return a small summary. Skipped when the sidecar is current."""
+    run), write results to JSON, return a small summary. Skipped when JSON is current."""
     if not redo and is_up_to_date(folder, level):
         return {"folder": folder, "skipped": True}
 
@@ -174,7 +174,7 @@ _validators = {}
 
 def sentence_messages(block_lines: list[str], code: str, level: int) -> list[tuple]:
     """(testid, node_id, message, line) for each incident the validator reports on one
-    sentence block validated on its own; line is 1-based within the block. The sidecars keep
+    sentence block validated on its own; line is 1-based within the block. The JSONs keep
     messages only for a few examples per test; this recovers the message of a specific
     incident. Checks that need other sentences (duplicate ids, document-level state) do
     not fire here."""

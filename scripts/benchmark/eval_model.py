@@ -37,6 +37,7 @@ if __name__ == "__main__":
     parser.add_argument("--dtype", default="float32", help="bfloat16 weights flip about 2%% of the verdicts against float32 (Qwen3-0.6B); with --softmax_dtype bfloat16 it also gives ties")
     parser.add_argument("--softmax_dtype", default="float32", help="dtype of the log-softmax over the vocabulary")
     parser.add_argument("--device", default="cuda", help="cuda, mps or cpu")
+    parser.add_argument("--parallelize", action="store_true", help="split the model over all visible GPUs (e.g. ./eval.sh <model> 0,1 --parallelize); slower than one GPU, only for models too big for one")
     parser.add_argument("--hf_token", default="hf_token.txt", help="File containing an HF token")
     args = parser.parse_args()
 
@@ -52,7 +53,7 @@ if __name__ == "__main__":
 
     scored, acc, out_dir = evaluate(args.model, pairs, args.results_dir, args.dtype, args.device,
                                     args.batch_size, args.max_batch_size, rescore=args.rescore, softmax_dtype=args.softmax_dtype,
-                                    benchmark_ids=benchmark_ids)
+                                    benchmark_ids=benchmark_ids, parallelize=args.parallelize)
     print(acc.to_string(index=False))
     macro = acc[(acc["lang"] == "ALL") & (acc["phenomenon"] == "ALL")]["accuracy"].iloc[0]
     print(f"Macro accuracy (mean over languages, as the (ALL, ALL) row): {macro:.3f}")

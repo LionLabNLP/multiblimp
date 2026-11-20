@@ -19,7 +19,7 @@ sys.path.append(os.path.join(_repo_root, "src"))
 
 from agreement_trees.eval.benchmark import build_benchmark
 from multiblimp.config import OUTPUT_BENCHMARK_DIR, OUTPUT_MINIMAL_PAIRS_DIR
-from multiblimp.downsample import LEMMA_CAP, MIN_PAIRS, N_ITEMS
+from multiblimp.downsample import LEMMA_CAP, MAX_TOKENS, MIN_PAIRS, N_ITEMS
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -30,7 +30,9 @@ if __name__ == "__main__":
     parser.add_argument("--n_items", type=int, default=N_ITEMS, help="pairs per language, across its conditions")
     parser.add_argument("--lemma_cap", type=float, default=LEMMA_CAP, help="largest share of a language's sample one lemma may take")
     parser.add_argument("--min_pairs", type=int, default=MIN_PAIRS, help="leave out languages with fewer pairs in total")
+    parser.add_argument("--max_tokens", type=int, default=MAX_TOKENS, help="pairs whose sentence has more tokens are never drawn")
     parser.add_argument("--seed", type=int, default=0)
     args = parser.parse_args()
 
-    build_benchmark(args.pairs_dir, args.out_dir, args.langs, args.conds, args.n_items, args.lemma_cap, args.seed, args.min_pairs)
+    build_benchmark(args.pairs_dir, args.out_dir, args.langs, args.conds, args.n_items, args.lemma_cap, args.seed, args.min_pairs,
+                    args.max_tokens)

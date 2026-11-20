@@ -180,7 +180,7 @@ def render_benchmark_page(stats: dict, manifest: dict) -> str:
     cells = [{**cell, **{k: v for k, v in infos[cell["cond"]].items() if k != "sort_key"}, "order": rank[cell["cond"]]}
              for cell in stats["cells"]]
     data = {
-        "n_items": stats["n_items"], "lemma_cap": stats["lemma_cap"], "seed": stats["seed"], "built": stats["built"],
+        "n_items": stats["n_items"], "lemma_cap": stats["lemma_cap"], "max_tokens": stats.get("max_tokens"), "seed": stats["seed"], "built": stats["built"],
         "method": manifest.get("method", ""), "languages": stats["languages"], "cells": cells,
         "min_pairs": manifest.get("min_pairs"), "source": manifest.get("source"), "left_out": manifest.get("languages_left_out", {}),
         "cleaning": {**manifest.get("cleaning", {}), "cross_condition": manifest.get("cross_condition_repeats_removed")}, "overview_href": OVERVIEW_HREF, "trees_href": TREES_HREF,
@@ -443,6 +443,7 @@ $('methodList').innerHTML = [
   `The conditions share the sample equally: the condition with the fewest pairs so far goes next, so a small condition simply runs out and the others take over its share.`,
   'Within a condition each pair is drawn with a weight that falls with every time its value is already in the sample (original → swap value, role order, attractor classes, part of speech of both tokens, distance, sentence length, decision-tree leaf, treebank, both lemmas), so the sample flattens on all markers at once.',
   `A lemma may appear in at most ${(100 * DATA.lemma_cap).toFixed(0)}% of a language's sample (${capCount} of ${DATA.n_items}) and a sentence at most once; if the quota cannot be filled the lemma limit rises ${(100 * DATA.lemma_cap).toFixed(0)}% at a time` + (relaxed ? ` (${relaxed} languages needed it)` : '') + ', and only then may sentences repeat.',
+  ...(DATA.max_tokens ? [`Pairs whose sentence has more than ${DATA.max_tokens} tokens are never drawn.`] : []),
   ...(DATA.min_pairs && Object.keys(DATA.left_out).length ? [`Languages with fewer than ${DATA.min_pairs} pairs in total are left out (${Object.keys(DATA.left_out).length}: ${Object.entries(DATA.left_out).map(([l, n]) => l.replace(/_/g, ' ') + ' ' + n).join(', ')}).`] : []),
   'Every column of the source tables is kept, including <code>second_chance</code> (fits accepted at the laxer second-chance accuracy), and each pair gets a stable <code>pair_id</code> and a <code>sen_hash</code> of its sentence.',
 ].map(t => `<li>${t}</li>`).join('');

@@ -31,6 +31,9 @@ excluded_treebanks = {
     "Bonan": {
         "GDUD": "invalid script",  # 2.19
     },
+    "Cappadocian": {
+        "AMGiC": "invalid script",  # 2.19
+    },
     "Chechen": {
         "MottDT": "invalid script",  # 2.19
     },

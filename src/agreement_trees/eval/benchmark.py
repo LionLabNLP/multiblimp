@@ -13,7 +13,7 @@ import pyarrow.parquet as pq
 
 from multiblimp.benchmark_exclusions import benchmark_exclusions
 from multiblimp.downsample import (
-    ATTRACTOR_CLASSES, CATEGORICAL, LEMMA_CAP, MIN_PAIRS, N_ITEMS, Condition, balance_columns, balance_features,
+    ATTRACTOR_CLASSES, CATEGORICAL, LEMMA_CAP, MAX_TOKENS, MIN_PAIRS, N_ITEMS, Condition, balance_columns, balance_features,
     condition_roles, language_seed, select_pairs, wordform_unattested,
 )
 
@@ -222,7 +222,7 @@ def _distribution(features: pd.DataFrame) -> dict:
 
 
 def build_benchmark(pairs_dir, out_dir, langs=None, conds=None, n_items=N_ITEMS, lemma_cap=LEMMA_CAP, seed=0,
-                    min_pairs=MIN_PAIRS):
+                    min_pairs=MIN_PAIRS, max_tokens=MAX_TOKENS):
     """Sample up to n_items pairs per language across all its conditions (multiblimp.downsample) from the
     correct_swaps under pairs_dir into out_dir as two files per language (write_language): <Language>.parquet with the
     sentences, the phenomenon (the condition, e.g. svNa) and the balance markers, and features/<Language>.parquet with all
@@ -268,10 +268,12 @@ def build_benchmark(pairs_dir, out_dir, langs=None, conds=None, n_items=N_ITEMS,
             print(f"WARNING {lang}: {unclassed} of {available} pairs have no attractor counts "
                   f"(an extraction cache from before the attractor slots: re-extract it)", flush=True)
         if available <= n_items:
-            chosen = {c.name: np.flatnonzero(~c.features["spacing_artifact"].to_numpy(dtype=bool)) for c in conditions}
+            chosen = {c.name: np.flatnonzero(~(c.features["spacing_artifact"].to_numpy(dtype=bool)
+                                               | (c.features["n_tokens"].to_numpy() > max_tokens))) for c in conditions}
             limits = {"lemma_cap_count": None, "sentence_limit": None}
         else:
-            chosen, limits = select_pairs(conditions, n_items, lemma_cap, np.random.default_rng(language_seed(lang, seed)))
+            chosen, limits = select_pairs(conditions, n_items, lemma_cap, np.random.default_rng(language_seed(lang, seed)),
+                                          max_tokens)
         total = sum(len(v) for v in chosen.values())
         if total < min_pairs:
             too_small[lang] = total
@@ -319,6 +321,7 @@ def build_benchmark(pairs_dir, out_dir, langs=None, conds=None, n_items=N_ITEMS,
             "wordform_unattested_available": sum(int(c.features["wordform_unattested"].sum()) for c in conditions),
             "spacing_artifact": int(chosen_all["spacing_artifact"].sum()),
             "spacing_artifact_available": sum(int(c.features["spacing_artifact"].sum()) for c in conditions),
+            "too_long_available": sum(int((c.features["n_tokens"] > max_tokens).sum()) for c in conditions),
         }
         unattested, unattested_available = languages[lang]["wordform_unattested"], languages[lang]["wordform_unattested_available"]
         artifacts, artifacts_available = languages[lang]["spacing_artifact"], languages[lang]["spacing_artifact_available"]
@@ -334,6 +337,7 @@ def build_benchmark(pairs_dir, out_dir, langs=None, conds=None, n_items=N_ITEMS,
         "source": os.path.abspath(pairs_dir),
         "n_items": n_items,
         "lemma_cap": lemma_cap,
+        "max_tokens": max_tokens,
         "seed": seed,
         "method": "per language: conditions served round-robin; within a condition a greedy draw with weight "
                   "prod(1 / (1 + times the value is already sampled)) over " + ", ".join((*CATEGORICAL, "attractor classes", "lemmas")) +
@@ -351,6 +355,6 @@ def build_benchmark(pairs_dir, out_dir, langs=None, conds=None, n_items=N_ITEMS,
     with open(os.path.join(out_dir, "manifest.json"), "w") as f:
         json.dump(manifest, f, indent=1)
     with open(os.path.join(out_dir, "stats.json"), "w") as f:
-        json.dump({"built": manifest["built"], "n_items": n_items, "lemma_cap": lemma_cap, "seed": seed,
+        json.dump({"built": manifest["built"], "n_items": n_items, "lemma_cap": lemma_cap, "max_tokens": max_tokens, "seed": seed,
                    "languages": languages, "cells": cells}, f)
     return manifest

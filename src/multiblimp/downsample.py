@@ -10,6 +10,7 @@ import pandas as pd
 
 N_ITEMS = 2000
 LEMMA_CAP = 0.01
+MAX_TOKENS = 100   # a pair whose sentence has more tokens is never drawn
 MIN_PAIRS = 10   # a language with fewer pairs in total is left out of the benchmark
 DISTANCE_BINS = (1, 2, 4, 8)   # upper bounds of the bins 1, 2, 3-4, 5-8; larger distances share the last bin
 LENGTH_BINS = (40, 80, 140, 240)   # upper bounds, in characters of the written sentence, of the bins up to 40, 41-80, 81-140, 141-240; longer ones share the last bin
@@ -40,7 +41,7 @@ class Condition:
     values: np.ndarray = None   # (pairs, alternatives) codes of the swap values a pair counts for, padded with 0
     shares: np.ndarray = None   # their weights per pair: 1 split over the alternatives (0 for padding)
     ambiguous: np.ndarray = None
-    uncertain: np.ndarray = None   # pairs with a spacing artifact (components of a span written as separate words), never drawn
+    blocked: np.ndarray = None   # pairs never drawn: a spacing artifact (components of a span written as separate words) or a sentence over the token limit
     attractor_shares: np.ndarray = None   # (pairs, ATTRACTOR_CLASSES) weights: 1 split over the classes a pair belongs to
     attractor_unclassed: np.ndarray = None   # pairs in no class: their attractor counts are missing (a stale extraction cache)
 
@@ -65,7 +66,7 @@ def value_alternatives(feature_vals: str) -> list:
 def balance_columns(roles: tuple) -> list:
     """The source columns balance_features reads (those a table lacks are skipped)."""
     wanted = ["feature_vals", "leaf_id", "treebank", "sen_str", "sent_id", "tree_idx", "second_chance", "swap_kind",
-              *ATTRACTOR_COUNTS, "spacing_artifact", *PASS_THROUGH]
+              *ATTRACTOR_COUNTS, "spacing_artifact", "sen", *PASS_THROUGH]
     for role in roles:
         wanted += [f"{role}_idx", f"{role}_lemma", f"{role}_pos"]
     return wanted
@@ -92,6 +93,7 @@ def balance_features(df: pd.DataFrame, roles: tuple, name: str) -> pd.DataFrame:
     out["pos_b"] = column(f"{role_b}_pos", role_b).astype(str)
     out["leaf_id"] = column("leaf_id", -1).fillna(-1).astype(int).astype(str)
     out["treebank"] = column("treebank", "?").astype(str)
+    out["n_tokens"] = df["sen"].map(len).to_numpy() if "sen" in df else 0
     # attractor classes, binary and not exclusive: a pair belongs to every class it has an attractor of, and to none when
     # nothing carrying the feature sits between the two tokens. Missing counts (an extraction cache from before the
     # attractor slots) leave a pair in no class.
@@ -141,7 +143,7 @@ def _encode_values(cond: Condition):
     return len(vocabulary)
 
 
-def encode(conditions: list):
+def encode(conditions: list, max_tokens: int = MAX_TOKENS):
     """Integer-code the balance features; lemmas and sentences share one code space across the conditions."""
     lemmas, sentences = {"": 0}, {}
     for cond in conditions:
@@ -150,14 +152,14 @@ def encode(conditions: list):
         cond.codes["lemma_a"] = _codes(f["lemma_a"], lemmas)
         cond.codes["lemma_b"] = _codes(f["lemma_b"], lemmas)
         cond.codes["sentence"] = _codes(f["sentence"], sentences)
-        cond.uncertain = f["spacing_artifact"].to_numpy(dtype=bool)
+        cond.blocked = f["spacing_artifact"].to_numpy(dtype=bool) | (f["n_tokens"].to_numpy() > max_tokens)
         classes = np.column_stack([f[f"attractor_{name}"].to_numpy(dtype=float) for name in ATTRACTOR_CLASSES])
         cond.attractor_shares = classes / np.maximum(classes.sum(axis=1, keepdims=True), 1)
         cond.attractor_unclassed = classes.sum(axis=1) == 0
     return len(lemmas), len(sentences)
 
 
-def select_pairs(conditions: list, n_items: int, lemma_cap: float, rng: np.random.Generator):
+def select_pairs(conditions: list, n_items: int, lemma_cap: float, rng: np.random.Generator, max_tokens: int = MAX_TOKENS):
     """{condition name: sorted row positions}, plus how far the limits had to be relaxed.
 
     Conditions are served round-robin (the one with the fewest pairs so far goes next, so the shares stay equal
@@ -169,10 +171,10 @@ def select_pairs(conditions: list, n_items: int, lemma_cap: float, rng: np.rando
     dependents stay even as far as the data allows.
     The attractor classes are binary and a pair can have several; it counts fractionally for each of its classes, like
     an ambiguous swap value (a pair in no class, because its counts are missing, gets the average attractor penalty of the others). Pairs with a spacing artifact (the swapped sentence spells the components of a span as separate words although one is
-    bound, see agreement_trees.eval.surface) are never drawn. A lemma may appear in at most `lemma_cap` of the sample and a sentence once; if the quota cannot be
+    bound, see agreement_trees.eval.surface) and pairs whose sentence has more than `max_tokens` tokens are never drawn. A lemma may appear in at most `lemma_cap` of the sample and a sentence once; if the quota cannot be
     filled, the lemma cap rises by one step at a time, and only then may sentences repeat. A language without enough
     pairs left ends below the quota."""
-    n_lemmas, n_sentences = encode(conditions)
+    n_lemmas, n_sentences = encode(conditions, max_tokens)
     n_values = [_encode_values(c) for c in conditions]
     most_per_sentence = int(sum(np.bincount(c.codes["sentence"], minlength=n_sentences) for c in conditions).max())
     step = max(1, int(np.ceil(lemma_cap * n_items)))
@@ -204,7 +206,7 @@ def select_pairs(conditions: list, n_items: int, lemma_cap: float, rng: np.rando
         c = int(rng.choice(open_conditions[selected[open_conditions] == fewest]))
         cond, codes = conditions[c], conditions[c].codes
         la, lb, sent = codes["lemma_a"], codes["lemma_b"], codes["sentence"]
-        eligible = ~taken[c] & (sentence_count[sent] < sentence_limit) & ~cond.uncertain
+        eligible = ~taken[c] & (sentence_count[sent] < sentence_limit) & ~cond.blocked
         if cap < n_items:
             eligible &= ((lemma_count[la] < cap) | (la == 0)) & ((lemma_count[lb] < cap) | (lb == 0))
         rows = np.flatnonzero(eligible)

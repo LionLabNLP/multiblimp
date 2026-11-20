@@ -20,17 +20,24 @@ def load_tokenizer(model: str):
         return PreTrainedTokenizerFast.from_pretrained(model)
 
 
-def load_pretrained(model: str, dtype: str, device: str):
+def load_pretrained(model: str, dtype: str, device: str, parallelize: bool = False):
     """The model name for HFLM, or a loaded model when its config has no AutoModelForCausalLM class (multimodal
-    checkpoints such as Apertus 1.5), which is loaded as a multimodal LM instead."""
+    checkpoints such as Apertus 1.5), which is loaded as a multimodal LM instead. parallelize: split the layers
+    over all visible GPUs instead of putting the model on `device`."""
     from transformers import AutoConfig, AutoModelForCausalLM
 
-    if type(AutoConfig.from_pretrained(model)) in AutoModelForCausalLM._model_mapping:
+    config = AutoConfig.from_pretrained(model)
+    if type(config) in AutoModelForCausalLM._model_mapping:
         return model
     import torch
     from transformers import AutoModelForMultimodalLM
 
-    return AutoModelForMultimodalLM.from_pretrained(model, dtype=getattr(torch, dtype), device_map={"": device}).eval()
+    # follow the text model's tying setting: HFLM calls tie_weights(), which otherwise uses a missing top-level key's default (True)
+    text_config = config.get_text_config(decoder=True)
+    if text_config is not config and hasattr(text_config, "tie_word_embeddings"):
+        config.tie_word_embeddings = text_config.tie_word_embeddings
+    return AutoModelForMultimodalLM.from_pretrained(model, config=config, dtype=getattr(torch, dtype),
+                                                    device_map="auto" if parallelize else {"": device}).eval()
 
 
 def score_sentences(lm, sentences: list[str]) -> dict[str, float]:
@@ -92,7 +99,8 @@ def _read_scores(path, empty: pd.DataFrame) -> pd.DataFrame:
 
 
 def evaluate(model: str, pairs: pd.DataFrame, results_dir, dtype="float32", device="cuda", batch_size="auto:8",
-             max_batch_size=1024, lm=None, rescore=False, softmax_dtype="float32", benchmark_ids=None):
+             max_batch_size=1024, lm=None, rescore=False, softmax_dtype="float32", benchmark_ids=None,
+             parallelize=False):
     """Score the pairs not yet in <results_dir>/<model>__<dtype>[__softmax_<dtype>]/scores.parquet with an lm-eval HFLM
     and write the scores and accuracy.csv there. accuracy.csv covers every stored score of a benchmark pair, not only
     the pairs given here (lang x phenomenon cells, a (lang, ALL) macro row per language, an (ALL, ALL) macro row); it
@@ -103,6 +111,7 @@ def evaluate(model: str, pairs: pd.DataFrame, results_dir, dtype="float32", devi
     completes they replace the old scores and the staging file is removed.
     benchmark_ids: the pair_ids of the whole current benchmark; stored scores of other pairs are dropped from
     scores.parquet (None keeps them).
+    parallelize: split one model over all visible GPUs (for models too big for one).
     Returns (stored scores of the benchmark pairs, accuracy table, output dir)."""
     suffix = "" if softmax_dtype == "float32" else f"__softmax_{softmax_dtype}"
     out_dir = os.path.join(results_dir, f"{model.replace('/', '__')}__{dtype}{suffix}")
@@ -130,8 +139,9 @@ def evaluate(model: str, pairs: pd.DataFrame, results_dir, dtype="float32", devi
         if lm is None:
             from lm_eval.models.huggingface import HFLM
 
-            lm = HFLM(pretrained=load_pretrained(model, dtype, device), tokenizer=load_tokenizer(model), batch_size=batch_size,
-                      max_batch_size=max_batch_size, dtype=dtype, device=device, softmax_dtype=softmax_dtype)
+            lm = HFLM(pretrained=load_pretrained(model, dtype, device, parallelize), tokenizer=load_tokenizer(model),
+                      batch_size=batch_size, max_batch_size=max_batch_size, dtype=dtype, device=device,
+                      softmax_dtype=softmax_dtype, parallelize=parallelize)
         target = staged[~staged["pair_id"].isin(todo["pair_id"])] if rescore else old[~old["pair_id"].isin(todo["pair_id"])]
         for lang, chunk in todo.groupby("lang", sort=True):
             target = pd.concat([target, score_pairs(lm, chunk)], ignore_index=True)
